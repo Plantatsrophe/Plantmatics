@@ -15,6 +15,8 @@
 #   - Slenker et al. (2022) Appl. Plant Sci. 10:e11495 (MorphoTools2 |r| < 0.75)
 # ==============================================================================
 
+if (grDevices::dev.cur() == 1L) grDevices::pdf(NULL)
+
 compute_polygon_area_perim_pure <- function(coo) {
   if (is.null(coo) || !is.matrix(coo) || ncol(coo) < 2L || nrow(coo) < 3L) {
     return(list(area = NA_real_, perim = NA_real_, circularity = NA_real_, solidity = NA_real_))
@@ -545,7 +547,8 @@ screen_regime_stratified_mcd_outliers <- function(
   is_dissected_vec = NULL,
   k_mcd = 5L,
   p_cutoff = 0.001,
-  seed = 42L
+  seed = 42L,
+  immune_mask = NULL
 ) {
   pc_scores <- as.matrix(pc_scores)
   n <- nrow(pc_scores)
@@ -654,6 +657,9 @@ screen_regime_stratified_mcd_outliers <- function(
     if (any(out_r) && sum(!out_r) >= 5L) {
       mcd_out[reg_idx[out_r]] <- TRUE
     }
+  }
+  if (!is.null(immune_mask) && length(immune_mask) == nrow(pc_scores)) {
+    mcd_out[which(!is.na(immune_mask) & as.logical(immune_mask))] <- FALSE
   }
   if (sum(!mcd_out) < 5L) mcd_out[] <- FALSE
   mcd_out
@@ -1271,23 +1277,42 @@ filter_biologically_variable_dissection_scalars <- function(df, cand_scalars, ac
   keep <- character(0)
   for (sc in cand_scalars) {
     raw_nm <- sub("_std$", "", sc)
+    only_std <- grepl("_std$", sc) && !(raw_nm %in% names(df))
     raw_v <- if (raw_nm %in% names(df)) suppressWarnings(as.numeric(df[[raw_nm]][act])) else suppressWarnings(as.numeric(df[[sc]][act]))
     raw_v <- raw_v[is.finite(raw_v)]
     if (length(raw_v) < 5L) next
     if ((raw_nm %in% cauline_het_scalars) && (length(raw_v) < ceiling(0.50 * length(act)))) next
     sd_v <- stats::sd(raw_v)
     q_span <- as.numeric(diff(stats::quantile(raw_v, probs = c(0.10, 0.90), names = FALSE)))
-    ok <- if (raw_nm %in% c("solidity", "q25_solidity", "cauline_solidity_med")) {
+    ok <- if (only_std) {
+      (is.finite(sd_v) && sd_v >= 0.25) && (is.finite(q_span) && q_span >= 0.50)
+    } else if (raw_nm %in% c("solidity", "q25_solidity", "cauline_solidity_med")) {
       (is.finite(sd_v) && sd_v >= 0.045) || any(raw_v < 0.75) || (is.finite(q_span) && q_span >= 0.10)
     } else if (raw_nm %in% c("dissection_index", "cauline_dissection_index_med")) {
       (is.finite(sd_v) && sd_v >= 0.12) || any(raw_v > 1.35)
     } else if (raw_nm %in% c("within_rosette_efa_dispersion", "heteroblasty_efa_distance", "heteroblasty_ect_distance")) {
       (is.finite(sd_v) && sd_v >= 0.015) && (sum(raw_v > 0) >= 5L)
     } else if (raw_nm %in% c("basal_vs_cauline_length_ratio", "basal_vs_cauline_solidity_delta", "Cauline_PC1",
-                             "ECT_PC1", "ECT_PC2", "Cauline_ECT_PC1", "ect_lobe_complexity", "cauline_ect_lobe_complexity")) {
+                             "ECT_PC1", "ECT_PC2", "ECT_PC3", "Cauline_ECT_PC1", "ect_lobe_complexity", "cauline_ect_lobe_complexity")) {
       is.finite(sd_v) && sd_v >= 0.015
+    } else if (raw_nm == "basal_cordate_index") {
+      (is.finite(sd_v) && sd_v >= 0.025) || (is.finite(q_span) && q_span >= 0.06)
+    } else if (raw_nm == "terminal_lobe_area_frac") {
+      (is.finite(sd_v) && sd_v >= 0.04) && (sum(raw_v < 0.95) >= 5L)
+    } else if (raw_nm == "margin_serration_index") {
+      (is.finite(sd_v) && sd_v >= 0.008) || (is.finite(q_span) && q_span >= 0.02)
+    } else if (raw_nm %in% c("margin_tooth_acuteness", "radiate_head_fraction")) {
+      (is.finite(sd_v) && sd_v >= 0.08) && (is.finite(q_span) && q_span >= 0.10)
+    } else if (raw_nm %in% c("base_angle_deg", "apex_angle_deg")) {
+      is.finite(sd_v) && sd_v >= 4.0
+    } else if (raw_nm == "lamina_curvature") {
+      is.finite(sd_v) && sd_v >= 0.35
+    } else if (raw_nm == "blade_cie_l_norm" && max(abs(raw_v), na.rm = TRUE) <= 2.0) {
+      is.finite(sd_v) && sd_v >= 0.03
+    } else if (grepl("(cie_|blade_cie_)", raw_nm)) {
+      is.finite(sd_v) && sd_v >= 1.25
     } else {
-      is.finite(sd_v) && sd_v > 1e-6
+      (is.finite(sd_v) && sd_v >= 0.02) && (is.finite(q_span) && q_span >= 0.04)
     }
     if (isTRUE(ok)) keep <- c(keep, sc)
   }
@@ -1311,7 +1336,20 @@ prune_collinear_dissection_scalars <- function(
     seq_len(nrow(df))
   }
 
-  # Rank candidate scalars empirically by univariate ANOVA F on active reference anchors (MorphoTools2 protocol)
+  tier3_traits <- c(
+    "ECT_PC1", "ECT_PC2", "ECT_PC3", "basal_cordate_index",
+    "q25_solidity", "solidity", "dissection_index", "terminal_lobe_area_frac",
+    "AR_inv", "radiate_head_fraction", "petiole_to_blade_ratio"
+  )
+  tier2_traits <- c(
+    "margin_serration_index", "margin_tooth_acuteness",
+    "blade_cie_l_q85_sheet_delta", "basal_zone_cie_l_delta",
+    "abaxial_cie_l_sheet_delta", "base_angle_deg", "apex_angle_deg",
+    "lamina_curvature", "log1p_capitulum_count", "scape_to_basal_leaf_ratio"
+  )
+
+  # Rank candidate scalars empirically by univariate ANOVA F on active reference anchors (MorphoTools2 protocol),
+  # falling back in unsupervised/single-taxon runs to deterministic biological tier + unstandardized relative dispersion.
   f_scores <- vapply(cand_scalars, function(sc) {
     v <- suppressWarnings(as.numeric(df[[sc]][act]))
     fin <- is.finite(v)
@@ -1323,7 +1361,26 @@ prune_collinear_dissection_scalars <- function(
         if (is.finite(fv)) return(as.numeric(fv))
       }
     }
-    stats::var(v[fin])
+    raw_nm <- sub("_std$", "", sc)
+    tier_priority <- if (raw_nm %in% tier3_traits) {
+      3.0
+    } else if (raw_nm %in% tier2_traits) {
+      2.0
+    } else {
+      1.0
+    }
+    rel_disp <- NA_real_
+    if (raw_nm %in% names(df) && raw_nm != sc) {
+      raw_v <- suppressWarnings(as.numeric(df[[raw_nm]][act]))
+      raw_v <- raw_v[is.finite(raw_v)]
+      if (length(raw_v) >= 5L) {
+        rel_disp <- min(50.0, stats::IQR(raw_v, na.rm = TRUE) / max(stats::median(abs(raw_v), na.rm = TRUE), 0.10))
+      }
+    }
+    if (!is.finite(rel_disp)) {
+      rel_disp <- min(50.0, stats::var(v[fin]))
+    }
+    (tier_priority * 100.0) + rel_disp
   }, numeric(1))
 
   valid_cands <- cand_scalars[f_scores >= 0.0]

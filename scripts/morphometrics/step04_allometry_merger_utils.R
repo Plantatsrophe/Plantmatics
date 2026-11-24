@@ -6,18 +6,11 @@ if (grDevices::dev.cur() == 1L) grDevices::pdf(NULL)
 
 load_step04_morphometrics_config <- function(cfg_path = "config/config.yaml") {
   out <- list(correct_allometry = "auto", allometry_r2_threshold = 0.10, num_pcs = 5L, max_k = 8L, random_seed = 42L)
-  eff_cfg <- if (!is.null(cfg_path) && length(cfg_path) >= 1L && !is.na(cfg_path[1L]) && nzchar(as.character(cfg_path[1L]))) {
-    as.character(cfg_path[1L])
-  } else {
-    e1 <- Sys.getenv("PLANTMATICS_CONFIG_PATH", unset = ""); e2 <- Sys.getenv("PACKERA_CONFIG_PATH", unset = "")
-    if (nzchar(e1)) e1 else if (nzchar(e2)) e2 else "config/config.yaml"
-  }
+  e1 <- Sys.getenv("PLANTMATICS_CONFIG_PATH", unset = ""); e2 <- Sys.getenv("PACKERA_CONFIG_PATH", unset = "")
+  eff_cfg <- if (!is.null(cfg_path) && length(cfg_path) >= 1L && !is.na(cfg_path[1L]) && nzchar(as.character(cfg_path[1L]))) as.character(cfg_path[1L]) else if (nzchar(e1)) e1 else if (nzchar(e2)) e2 else "config/config.yaml"
   if (!nzchar(eff_cfg) || !file.exists(eff_cfg)) return(out)
   m_map <- NULL
-  if (requireNamespace("yaml", quietly = TRUE)) {
-    raw_y <- tryCatch(yaml::read_yaml(eff_cfg), error = function(e) NULL)
-    if (is.list(raw_y) && is.list(raw_y$morphometrics)) m_map <- raw_y$morphometrics
-  }
+  if (requireNamespace("yaml", quietly = TRUE)) { raw_y <- tryCatch(yaml::read_yaml(eff_cfg), error = function(e) NULL); if (is.list(raw_y) && is.list(raw_y$morphometrics)) m_map <- raw_y$morphometrics }
   if (is.null(m_map)) {
     lines <- tryCatch(readLines(eff_cfg, warn = FALSE, encoding = "UTF-8"), error = function(e) character(0))
     m_map <- list(); in_m <- FALSE; m_ind <- NA_integer_; sub_ind <- NA_integer_
@@ -26,11 +19,8 @@ load_step04_morphometrics_config <- function(cfg_path = "config/config.yaml") {
       cln <- sub("[[:space:]]+#.*$", "", ln); if (!grepl("^[[:space:]]*[A-Za-z0-9_]+:", cln)) next
       ind <- nchar(sub("^([[:space:]]*).*$", "\\1", cln))
       if (ind == 0L) { if (trimws(sub(":.*$", "", cln)) == "morphometrics") { in_m <- TRUE; next }; if (in_m) break else next }
-      if (!in_m) next
-      if (is.na(m_ind)) m_ind <- ind
-      if (!is.na(sub_ind) && ind > sub_ind) next else sub_ind <- NA_integer_
-      key <- trimws(sub(":.*$", "", cln)); rest <- trimws(sub("^[^:]+:", "", cln))
-      if (!nzchar(rest)) { sub_ind <- ind; next }
+      if (!in_m) next; if (is.na(m_ind)) m_ind <- ind; if (!is.na(sub_ind) && ind > sub_ind) next else sub_ind <- NA_integer_
+      key <- trimws(sub(":.*$", "", cln)); rest <- trimws(sub("^[^:]+:", "", cln)); if (!nzchar(rest)) { sub_ind <- ind; next }
       if (ind == m_ind) { if (grepl("^[\"'].*[\"']$", rest)) rest <- substr(rest, 2L, nchar(rest) - 1L); m_map[[key]] <- rest }
     }
   }
@@ -38,15 +28,11 @@ load_step04_morphometrics_config <- function(cfg_path = "config/config.yaml") {
     ca <- m_map$correct_allometry[1L]
     out$correct_allometry <- if (is.logical(ca)) (if (isTRUE(ca)) "true" else "false") else { s <- tolower(trimws(as.character(ca))); if (nzchar(s)) s else out$correct_allometry }
   }
-  r2_v <- suppressWarnings(as.numeric(m_map$allometry_r2_threshold[1L]))
-  if (length(r2_v) == 1L && is.finite(r2_v) && r2_v >= 0.0 && r2_v <= 1.0) out$allometry_r2_threshold <- as.numeric(r2_v)
-  np_v <- suppressWarnings(as.integer(round(as.numeric(m_map$num_pcs[1L]))))
-  if (length(np_v) == 1L && is.finite(np_v) && np_v >= 2L) out$num_pcs <- np_v
-  mk_v <- suppressWarnings(as.integer(round(as.numeric(m_map$max_k[1L]))))
-  if (length(mk_v) == 1L && is.finite(mk_v) && mk_v >= 2L) out$max_k <- mk_v
+  r2_v <- suppressWarnings(as.numeric(m_map$allometry_r2_threshold[1L])); if (length(r2_v) == 1L && is.finite(r2_v) && r2_v >= 0.0 && r2_v <= 1.0) out$allometry_r2_threshold <- as.numeric(r2_v)
+  np_v <- suppressWarnings(as.integer(round(as.numeric(m_map$num_pcs[1L])))); if (length(np_v) == 1L && is.finite(np_v) && np_v >= 2L) out$num_pcs <- np_v
+  mk_v <- suppressWarnings(as.integer(round(as.numeric(m_map$max_k[1L])))); if (length(mk_v) == 1L && is.finite(mk_v) && mk_v >= 2L) out$max_k <- mk_v
   rs_raw <- if (!is.null(m_map$random_seed)) m_map$random_seed else m_map$seed
-  rs_v <- suppressWarnings(as.integer(round(as.numeric(rs_raw[1L]))))
-  if (length(rs_v) == 1L && is.finite(rs_v)) out$random_seed <- rs_v
+  rs_v <- suppressWarnings(as.integer(round(as.numeric(rs_raw[1L])))); if (length(rs_v) == 1L && is.finite(rs_v)) out$random_seed <- rs_v
   out
 }
 
@@ -56,14 +42,9 @@ is_step04_calibrated_mm <- function(df) {
   if (!has_cal && !has_ss) return(rep(TRUE, n))
   cal_ok <- if (has_cal) {
     raw_c <- df$is_calibrated_mm
-    if (is.character(raw_c) || is.factor(raw_c)) {
-      lc <- tolower(trimws(as.character(raw_c))); out_c <- rep(FALSE, n); out_c[lc %in% c("true", "t", "1", "1.0", "yes")] <- TRUE; out_c
-    } else !is.na(raw_c) & as.logical(raw_c)
+    if (is.character(raw_c) || is.factor(raw_c)) tolower(trimws(as.character(raw_c))) %in% c("true", "t", "1", "1.0", "yes") else (!is.na(raw_c) & as.logical(raw_c))
   } else rep(TRUE, n)
-  if (has_ss) {
-    ss <- tolower(trimws(as.character(df$scale_source))); ss[is.na(ss)] <- ""
-    cal_ok <- cal_ok & !(ss %in% c("mp_estimated", "predicted_from_megapixels", "uncalibrated", "tick_lattice_unboxed"))
-  }
+  if (has_ss) { ss <- tolower(trimws(as.character(df$scale_source))); ss[is.na(ss)] <- ""; cal_ok <- cal_ok & !(ss %in% c("mp_estimated", "predicted_from_megapixels", "uncalibrated", "tick_lattice_unboxed")) }
   as.logical(cal_ok)
 }
 
@@ -94,25 +75,20 @@ is_step04_calibrated_mm <- function(df) {
   if (!is.null(explicit_n_params) && length(explicit_n_params) == length(K_int) && all(is.finite(explicit_n_params))) return(as.numeric(explicit_n_params))
   row_models <- rep(sub("(_RidgelineMerged|_ICLBootCollapsed|_SeqBootStepped)+$", "", as.character(default_model)[1L]), length(K_int))
   if (!is.null(bic_mat) && is.matrix(bic_mat) && !is.null(colnames(bic_mat))) {
-    for (idx in seq_along(K_int)) {
-      r_nm <- as.character(K_int[idx])
-      if (r_nm %in% rownames(bic_mat)) { rv <- suppressWarnings(as.numeric(bic_mat[r_nm, ])); if (any(is.finite(rv))) row_models[idx] <- colnames(bic_mat)[which.max(ifelse(is.finite(rv), rv, -Inf))] }
-    }
+    for (idx in seq_along(K_int)) if (as.character(K_int[idx]) %in% rownames(bic_mat)) { rv <- suppressWarnings(as.numeric(bic_mat[as.character(K_int[idx]), ])); if (any(is.finite(rv))) row_models[idx] <- colnames(bic_mat)[which.max(ifelse(is.finite(rv), rv, -Inf))] }
   }
   has_mclust <- requireNamespace("mclust", quietly = TRUE)
   vapply(seq_along(K_int), function(idx) {
     G <- K_int[idx]; mn <- toupper(trimws(row_models[idx]))
     if (has_mclust) { np_m <- tryCatch(as.numeric(mclust::nMclustParams(modelName = mn, d = p, G = G)), error = function(e) NA_real_); if (is.finite(np_m) && np_m >= 1.0) return(np_m) }
     cov_p <- switch(mn, "E"=1.0, "V"=as.numeric(G), "EII"=1.0, "VII"=as.numeric(G), "EEI"=as.numeric(p), "VEI"=as.numeric(G+p-1L),
-                    "EVI"=as.numeric(1L+G*(p-1L)), "VVI"=as.numeric(G*p), "EEE"=as.numeric(p*(p+1L)/2.0), "VVV"=as.numeric(G*p*(p+1L)/2.0),
-                    "FULL_COVARIANCE_EM"=as.numeric(G*p*(p+1L)/2.0), as.numeric(G*p))
+                    "EVI"=as.numeric(1L+G*(p-1L)), "VVI"=as.numeric(G*p), "EEE"=as.numeric(p*(p+1L)/2.0), "VVV"=as.numeric(G*p*(p+1L)/2.0), "FULL_COVARIANCE_EM"=as.numeric(G*p*(p+1L)/2.0), as.numeric(G*p))
     (G - 1.0) + G * p + cov_p
   }, numeric(1))
 }
 
 fit_gmm_em_pure <- function(X, max_k = 8, tol = 1e-5, max_iter = 150, X_eval = NULL, seed = 42L) {
-  had_seed <- exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)
-  old_seed <- if (had_seed) get(".Random.seed", envir = .GlobalEnv, inherits = FALSE) else NULL
+  had_seed <- exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE); old_seed <- if (had_seed) get(".Random.seed", envir = .GlobalEnv, inherits = FALSE) else NULL
   on.exit({ if (had_seed) assign(".Random.seed", old_seed, envir = .GlobalEnv) else if (exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)) rm(".Random.seed", envir = .GlobalEnv) }, add = TRUE)
   if (is.null(X_eval)) X_eval <- X
   N <- nrow(X); p <- ncol(X); best_bic <- -Inf; best_model <- NULL; base_seed <- as.integer(if (!is.null(seed) && is.finite(seed)) seed else 42L)
@@ -126,10 +102,7 @@ fit_gmm_em_pure <- function(X, max_k = 8, tol = 1e-5, max_iter = 150, X_eval = N
     loglik_old <- -Inf; resp <- matrix(0, nrow = N, ncol = k)
     for (iter in seq_len(max_iter)) {
       log_dens <- matrix(0, nrow = N, ncol = k)
-      for (c in seq_len(k)) {
-        dx <- t(t(X) - mu[c, ]); si <- tryCatch(solve(sigma[[c]]), error = function(e) diag(1 / diag(sigma[[c]])))
-        log_dens[, c] <- log(max(pi_k[c], 1e-12)) - 0.5 * (p * log(2 * pi) + log(max(det(sigma[[c]]), 1e-12)) + rowSums((dx %*% si) * dx))
-      }
+      for (c in seq_len(k)) { dx <- t(t(X) - mu[c, ]); si <- tryCatch(solve(sigma[[c]]), error = function(e) diag(1 / diag(sigma[[c]]))); log_dens[, c] <- log(max(pi_k[c], 1e-12)) - 0.5 * (p * log(2 * pi) + log(max(det(sigma[[c]]), 1e-12)) + rowSums((dx %*% si) * dx)) }
       max_l <- apply(log_dens, 1L, max); lse <- max_l + log(rowSums(exp(log_dens - max_l))); resp <- exp(log_dens - lse); loglik <- sum(lse)
       if (abs(loglik - loglik_old) < tol) break
       loglik_old <- loglik; N_k <- colSums(resp); pi_k <- N_k / N
@@ -169,16 +142,21 @@ fit_gmm_em_pure <- function(X, max_k = 8, tol = 1e-5, max_iter = 150, X_eval = N
 
 merge_manifest_petiole_traits_by_individual <- function(agg_df, man_cand) {
   if (is.null(agg_df) || nrow(agg_df) == 0L || is.null(man_cand) || !nzchar(man_cand) || !file.exists(man_cand)) return(agg_df)
-  mm_cols <- c("petiole_length_mm", "blade_length_mm")
-  phot_cols <- c("blade_cie_l_norm", "blade_cie_l_sd", "blade_cie_l_sheet_delta", "blade_cie_a_delta", "blade_cie_b_delta", "blade_cie_a_browning_delta", "blade_cie_b_yellowing_delta")
-  target_pcols <- c(mm_cols, "petiole_to_blade_ratio", phot_cols)
+  mm_cols <- c("petiole_length_mm", "blade_length_mm", "lamina_trace_length_mm")
+  arch_med_cols <- c("base_angle_deg", "apex_angle_deg", "lamina_curvature", "basal_cordate_index", "margin_serration_index", "margin_tooth_acuteness", "terminal_lobe_area_frac")
+  phot_cols <- c("blade_cie_l_norm", "blade_cie_l_sd", "blade_cie_l_q85_sheet_delta", "blade_cie_l_sheet_delta", "basal_zone_cie_l_delta", "blade_cie_a_delta", "blade_cie_b_delta", "blade_cie_a_browning_delta", "blade_cie_b_yellowing_delta")
+  target_pcols <- c(mm_cols, "petiole_to_blade_ratio", arch_med_cols, phot_cols, "abaxial_cie_l_sheet_delta", "abaxial_leaf_fraction")
   need_cols <- target_pcols[vapply(target_pcols, function(cl) !(cl %in% names(agg_df)) || any(is.na(agg_df[[cl]])), logical(1))]
   if (length(need_cols) == 0L) return(agg_df)
   man_df <- tryCatch(utils::read.csv(man_cand, stringsAsFactors = FALSE), error = function(e) NULL)
   if (is.null(man_df) || nrow(man_df) == 0L || !("catalogNumber" %in% names(man_df))) return(agg_df)
-  p_cols <- intersect(target_pcols, names(man_df)); if (length(p_cols) == 0L) return(agg_df)
+  has_abax_flag <- "is_abaxial_pressed_leaf" %in% names(man_df)
+  p_cols <- intersect(setdiff(target_pcols, c("abaxial_cie_l_sheet_delta", "abaxial_leaf_fraction")), names(man_df))
+  if ("abaxial_cie_l_sheet_delta" %in% names(man_df) || (has_abax_flag && ("blade_cie_l_sheet_delta" %in% names(man_df)))) p_cols <- c(p_cols, "abaxial_cie_l_sheet_delta")
+  if ("abaxial_leaf_fraction" %in% names(man_df) || has_abax_flag) p_cols <- c(p_cols, "abaxial_leaf_fraction")
+  p_cols <- intersect(unique(p_cols), need_cols); if (length(p_cols) == 0L) return(agg_df)
   cal_m <- is_step04_calibrated_mm(man_df)
-  for (mc in intersect(mm_cols, p_cols)) { mv <- suppressWarnings(as.numeric(man_df[[mc]])); mv[!cal_m] <- NA_real_; man_df[[mc]] <- mv }
+  for (mc in intersect(mm_cols, names(man_df))) { mv <- suppressWarnings(as.numeric(man_df[[mc]])); mv[!cal_m] <- NA_real_; man_df[[mc]] <- mv }
   if ("leaf_zone" %in% names(man_df)) {
     lz_low <- tolower(trimws(as.character(man_df$leaf_zone))); lz_low[is.na(lz_low) | !nzchar(lz_low)] <- "basal"
     is_basal_primary <- lz_low != "cauline"
@@ -188,19 +166,39 @@ merge_manifest_petiole_traits_by_individual <- function(agg_df, man_cand) {
       has_basal_grp <- tapply(is_basal_primary, grp_k, any); man_df <- man_df[which(is_basal_primary | !has_basal_grp[grp_k]), , drop = FALSE]
     }
   }
+  abax_mask <- if (has_abax_flag) {
+    ra <- man_df$is_abaxial_pressed_leaf
+    if (is.logical(ra)) !is.na(ra) & ra else if (is.numeric(ra)) !is.na(ra) & (ra != 0) else tolower(trimws(as.character(ra))) %in% c("true", "t", "1", "1.0", "yes")
+  } else rep(FALSE, nrow(man_df))
   q75_fn <- function(x) { v <- suppressWarnings(as.numeric(x)); v <- v[is.finite(v)]; if (length(v) > 0L) round(stats::quantile(v, probs = 0.75, na.rm = TRUE, names = FALSE), 4) else NA_real_ }
   med_fn <- function(x) { v <- suppressWarnings(as.numeric(x)); v <- v[is.finite(v)]; if (length(v) > 0L) round(stats::median(v), 4) else NA_real_ }
-  jk <- .resolve_ind_join_keys(agg_df, man_df); q75_cols <- setdiff(p_cols, phot_cols); med_cols <- intersect(p_cols, phot_cols)
-  agg_by_fn <- function(by_list) {
-    parts <- list()
-    if (length(q75_cols) > 0L) parts[[length(parts) + 1L]] <- stats::aggregate(man_df[, q75_cols, drop = FALSE], by = by_list, FUN = q75_fn)
-    if (length(med_cols) > 0L) parts[[length(parts) + 1L]] <- stats::aggregate(man_df[, med_cols, drop = FALSE], by = by_list, FUN = med_fn)
-    if (length(parts) == 1L) parts[[1L]] else merge(parts[[1L]], parts[[2L]], by = names(by_list), all = TRUE, sort = FALSE)
+  jk <- .resolve_ind_join_keys(agg_df, man_df); q75_cols <- intersect(c(mm_cols, "petiole_to_blade_ratio"), p_cols)
+  arch_use <- intersect(arch_med_cols, p_cols); phot_use <- intersect(phot_cols, p_cols)
+  agg_by_key <- function(k_vec, include_pid = FALSE) {
+    sp_l <- split(seq_len(nrow(man_df)), k_vec); f_idx <- vapply(sp_l, `[`, integer(1), 1L)
+    out <- data.frame(catalogNumber = as.character(man_df$catalogNumber[f_idx]), stringsAsFactors = FALSE)
+    if (include_pid) out$plant_individual_id <- jk$spid[f_idx]
+    for (cl in q75_cols) { vc <- man_df[[cl]]; out[[cl]] <- vapply(sp_l, function(ii) q75_fn(vc[ii]), numeric(1)) }
+    for (cl in arch_use) { vc <- man_df[[cl]]; out[[cl]] <- vapply(sp_l, function(ii) med_fn(vc[ii]), numeric(1)) }
+    for (cl in phot_use) { vc <- man_df[[cl]]; out[[cl]] <- vapply(sp_l, function(ii) { sa <- ii[!abax_mask[ii]]; med_fn(vc[if (length(sa) > 0L) sa else ii]) }, numeric(1)) }
+    if ("abaxial_cie_l_sheet_delta" %in% p_cols) {
+      va <- if ("abaxial_cie_l_sheet_delta" %in% names(man_df)) man_df$abaxial_cie_l_sheet_delta else NULL
+      vb <- if ("blade_cie_l_sheet_delta" %in% names(man_df)) man_df$blade_cie_l_sheet_delta else NULL
+      out$abaxial_cie_l_sheet_delta <- vapply(sp_l, function(ii) {
+        u_ab <- if (has_abax_flag) ii[abax_mask[ii]] else ii; if (length(u_ab) == 0L) return(NA_real_)
+        r1 <- if (!is.null(va)) med_fn(va[u_ab]) else NA_real_; if (is.finite(r1)) r1 else if (!is.null(vb) && has_abax_flag) med_fn(vb[u_ab]) else NA_real_
+      }, numeric(1))
+    }
+    if ("abaxial_leaf_fraction" %in% p_cols) {
+      vf_ab <- if ("abaxial_leaf_fraction" %in% names(man_df)) man_df$abaxial_leaf_fraction else NULL
+      out$abaxial_leaf_fraction <- vapply(sp_l, function(ii) { r1 <- if (!is.null(vf_ab)) med_fn(vf_ab[ii]) else NA_real_; if (is.finite(r1)) r1 else if (has_abax_flag) round(mean(abax_mask[ii]), 4) else NA_real_ }, numeric(1))
+    }
+    out
   }
-  agg_cat <- agg_by_fn(list(catalogNumber = as.character(man_df$catalogNumber)))
-  agg_pid <- if (jk$has_pid) agg_by_fn(list(catalogNumber = as.character(man_df$catalogNumber), plant_individual_id = jk$spid)) else NULL
+  agg_cat <- agg_by_key(as.character(man_df$catalogNumber), include_pid = FALSE)
+  agg_pid <- if (jk$has_pid) agg_by_key(paste0(as.character(man_df$catalogNumber), "__", jk$spid), include_pid = TRUE) else NULL
   idx_pid <- if (!is.null(agg_pid)) match(paste0(agg_df$catalogNumber, "__", jk$apid), paste0(agg_pid$catalogNumber, "__", agg_pid$plant_individual_id)) else rep(NA_integer_, nrow(agg_df))
-  .backfill_cols_by_individual(agg_df, agg_pid, agg_cat, intersect(need_cols, p_cols), jk$single_cat, idx_pid, match(as.character(agg_df$catalogNumber), agg_cat$catalogNumber), as_num = TRUE)
+  .backfill_cols_by_individual(agg_df, agg_pid, agg_cat, p_cols, jk$single_cat, idx_pid, match(as.character(agg_df$catalogNumber), agg_cat$catalogNumber), as_num = TRUE)
 }
 
 merge_reproductive_traits_by_individual <- function(agg_df, repro_path) {
@@ -208,6 +206,10 @@ merge_reproductive_traits_by_individual <- function(agg_df, repro_path) {
   repro_df <- tryCatch(utils::read.csv(repro_path, stringsAsFactors = FALSE), error = function(e) NULL)
   if (is.null(repro_df) || nrow(repro_df) == 0L || !("catalogNumber" %in% names(repro_df))) return(agg_df)
   if ("plant_height_mm" %in% names(repro_df) && !("plant_height_cm" %in% names(repro_df))) repro_df$plant_height_cm <- round(suppressWarnings(as.numeric(repro_df$plant_height_mm)) / 10.0, 2)
+  if (any(c("is_calibrated_mm", "scale_source") %in% names(repro_df))) {
+    cal_r <- is_step04_calibrated_mm(repro_df)
+    for (rmc in intersect(c("involucre_height_mm", "involucre_width_mm", "plant_height_mm", "plant_height_cm"), names(repro_df))) { rv <- suppressWarnings(as.numeric(repro_df[[rmc]])); rv[!cal_r] <- NA_real_; repro_df[[rmc]] <- rv }
+  }
   if (!("capitula_count" %in% names(repro_df)) && ("capitulum_count" %in% names(repro_df))) repro_df$capitula_count <- repro_df$capitulum_count
   if (any(c("capitula_count", "corymb_head_count_est") %in% names(repro_df))) {
     cc_v <- if ("capitula_count" %in% names(repro_df)) suppressWarnings(as.numeric(repro_df$capitula_count)) else rep(NA_real_, nrow(repro_df))
@@ -216,7 +218,7 @@ merge_reproductive_traits_by_individual <- function(agg_df, repro_path) {
     l1_eff <- ifelse(is.finite(cc_eff) & cc_eff >= 1, round(log1p(cc_eff), 5), NA_real_)
     if (!("log1p_capitulum_count" %in% names(repro_df))) repro_df$log1p_capitulum_count <- l1_eff else { cur_l1 <- suppressWarnings(as.numeric(repro_df$log1p_capitulum_count)); cur_l1[is.finite(cc_eff)] <- l1_eff[is.finite(cc_eff)]; repro_df$log1p_capitulum_count <- cur_l1 }
   }
-  cand_r <- c("AR_inv", "capitula_count", "corymb_head_count_est", "anthesis_head_count", "fruiting_head_count", "Flower_MANY", "Seed_Fruit_MANY",
+  cand_r <- c("AR_inv", "radiate_head_fraction", "capitula_count", "corymb_head_count_est", "anthesis_head_count", "fruiting_head_count", "Flower_MANY", "Seed_Fruit_MANY",
               "log1p_capitulum_count", "involucre_height_px", "involucre_width_px", "involucre_height_mm", "involucre_width_mm",
               "plant_height_mm", "plant_height_cm", "scape_to_basal_leaf_ratio", "is_bent_stem", "petiole_to_blade_ratio")
   r_val_cols <- intersect(names(repro_df), cand_r)
@@ -243,7 +245,8 @@ merge_reproductive_traits_by_individual <- function(agg_df, repro_path) {
 }
 
 .update_step04_allometry_scalars <- function(morpho_df, sub_df, gold_df, valid_idx, ref_mean_cs) {
-  sc_cands <- intersect(c("ECT_PC1", "ECT_PC2", "ECT_PC3", "ect_lobe_complexity", "solidity", "q25_solidity", "dissection_index", "aspect_ratio", "petiole_to_blade_ratio", "scape_to_basal_leaf_ratio"), names(morpho_df))
+  sc_cands <- intersect(c("ECT_PC1", "ECT_PC2", "ECT_PC3", "ect_lobe_complexity", "solidity", "q25_solidity", "dissection_index", "aspect_ratio", "petiole_to_blade_ratio", "scape_to_basal_leaf_ratio",
+                          "basal_cordate_index", "terminal_lobe_area_frac", "margin_serration_index", "margin_tooth_acuteness", "base_angle_deg", "apex_angle_deg", "lamina_curvature"), names(morpho_df))
   for (sc_nm in sc_cands) {
     yv_g <- suppressWarnings(as.numeric(gold_df[[sc_nm]])); ok_g <- is.finite(yv_g) & is.finite(gold_df$log_centsize)
     if (sum(ok_g) < 10L || stats::sd(yv_g[ok_g]) <= 1e-6) next
@@ -269,17 +272,14 @@ audit_institutional_batch_effects <- function(morpho_df, output_csv = "outputs/r
   test_feats <- unique(c(intersect(c("PC1", "PC2"), names(morpho_df)), dyn_sel))
   test_feats <- test_feats[vapply(test_feats, function(fc) is.numeric(morpho_df[[fc]]) && sum(is.finite(morpho_df[[fc]])) >= 10L, logical(1))]
   valid_df <- morpho_df[!is.na(morpho_df$institutionCode) & nzchar(trimws(morpho_df$institutionCode)), , drop = FALSE]
-  clean_b <- (!("authority_weight" %in% names(valid_df)) | (!is.na(valid_df$authority_weight) & valid_df$authority_weight > 0)) &
-    (!("is_passive" %in% names(valid_df)) | is.na(valid_df$is_passive) | !as.logical(valid_df$is_passive)) &
-    (!("morph_tier_source" %in% names(valid_df)) | is.na(valid_df$morph_tier_source) | !(valid_df$morph_tier_source %in% c("Cauline_Only_Fallback", "Transitional_Passive")))
+  clean_b <- (!("authority_weight" %in% names(valid_df)) | (!is.na(valid_df$authority_weight) & valid_df$authority_weight > 0)) & (!("is_passive" %in% names(valid_df)) | is.na(valid_df$is_passive) | !as.logical(valid_df$is_passive)) & (!("morph_tier_source" %in% names(valid_df)) | is.na(valid_df$morph_tier_source) | !(valid_df$morph_tier_source %in% c("Cauline_Only_Fallback", "Transitional_Passive")))
   if (sum(clean_b, na.rm = TRUE) >= 10L && length(unique(valid_df$institutionCode[clean_b])) >= 2L) valid_df <- valid_df[clean_b, , drop = FALSE]
   if (nrow(valid_df) < 10L || length(test_feats) == 0L) return(NULL)
   inst_counts <- table(valid_df$institutionCode); rep_insts <- names(inst_counts[inst_counts >= min_obs])
   audit_subset <- if (length(rep_insts) >= 2L) valid_df[valid_df$institutionCode %in% rep_insts, , drop = FALSE] else valid_df
   audit_subset$institutionCode <- droplevels(factor(audit_subset$institutionCode))
   if (!("species_standardized" %in% names(audit_subset))) audit_subset$species_standardized <- if ("scientificName" %in% names(audit_subset)) audit_subset$scientificName else "Unassigned_Packera"
-  audit_subset$species_standardized <- droplevels(factor(audit_subset$species_standardized))
-  if (nlevels(audit_subset$institutionCode) < 2L) return(NULL)
+  audit_subset$species_standardized <- droplevels(factor(audit_subset$species_standardized)); if (nlevels(audit_subset$institutionCode) < 2L) return(NULL)
   fits <- list(); rows_out <- list(); raw_ps <- numeric(0); pre_eb_map <- attr(morpho_df, "pre_eb_batch_partial_eta_sq")
   for (feat in test_feats) {
     sub_f <- audit_subset[is.finite(audit_subset[[feat]]), , drop = FALSE]
@@ -289,35 +289,23 @@ audit_institutional_batch_effects <- function(morpho_df, output_csv = "outputs/r
     w_bf[!is.finite(w_bf) | w_bf <= 0] <- 1.0
     rg_raw <- if ("regional_group" %in% names(sub_f)) trimws(as.character(sub_f$regional_group)) else rep("", nrow(sub_f))
     rg_ok <- !is.na(rg_raw) & nzchar(rg_raw) & !(rg_raw %in% c("Unassigned", "Unknown", "NA")); rg_clean <- unique(rg_raw[rg_ok])
-    sub_f$.rg_clean <- factor(ifelse(rg_ok, rg_raw, "Unassigned")); has_sp <- nlevels(sub_f$species_standardized) >= 2L
-    cand_pairs <- list()
-    if (length(rg_clean) >= 2L) {
-      rhs_r <- if (has_sp) "species_standardized + .rg_clean" else ".rg_clean"
-      cand_pairs[[1L]] <- list(red = stats::as.formula(paste(feat, "~", rhs_r)), full = stats::as.formula(paste(feat, "~", rhs_r, "+ institutionCode")), min_df = 3L)
-    }
+    sub_f$.rg_clean <- factor(ifelse(rg_ok, rg_raw, "Unassigned")); has_sp <- nlevels(sub_f$species_standardized) >= 2L; cand_pairs <- list()
+    if (length(rg_clean) >= 2L) { rhs_r <- if (has_sp) "species_standardized + .rg_clean" else ".rg_clean"; cand_pairs[[1L]] <- list(red = stats::as.formula(paste(feat, "~", rhs_r)), full = stats::as.formula(paste(feat, "~", rhs_r, "+ institutionCode")), min_df = 3L) }
     if (has_sp) cand_pairs[[length(cand_pairs) + 1L]] <- list(red = stats::as.formula(paste(feat, "~ species_standardized")), full = stats::as.formula(paste(feat, "~ species_standardized + institutionCode")), min_df = 2L)
     cand_pairs[[length(cand_pairs) + 1L]] <- list(red = stats::as.formula(paste(feat, "~ 1")), full = stats::as.formula(paste(feat, "~ institutionCode")), min_df = 1L)
-    sel_pair <- NULL
-    for (cp in cand_pairs) if (qr(stats::model.matrix(cp$full, data = sub_f))$rank > qr(stats::model.matrix(cp$red, data = sub_f))$rank && (nrow(sub_f) - qr(stats::model.matrix(cp$full, data = sub_f))$rank) >= cp$min_df) { sel_pair <- cp; break }
+    sel_pair <- NULL; for (cp in cand_pairs) if (qr(stats::model.matrix(cp$full, data = sub_f))$rank > qr(stats::model.matrix(cp$red, data = sub_f))$rank && (nrow(sub_f) - qr(stats::model.matrix(cp$full, data = sub_f))$rank) >= cp$min_df) { sel_pair <- cp; break }
     if (is.null(sel_pair)) next
-    fit_red <- stats::lm(sel_pair$red, data = sub_f, weights = w_bf); fit_full <- stats::lm(sel_pair$full, data = sub_f, weights = w_bf)
-    aov_cmp <- stats::anova(fit_red, fit_full); s_f <- summary(fit_full)
+    fit_red <- stats::lm(sel_pair$red, data = sub_f, weights = w_bf); fit_full <- stats::lm(sel_pair$full, data = sub_f, weights = w_bf); aov_cmp <- stats::anova(fit_red, fit_full); s_f <- summary(fit_full)
     df_i <- as.integer(aov_cmp$Df[2L]); df_r <- as.integer(aov_cmp$Res.Df[2L]); ss_i <- max(0.0, as.numeric(aov_cmp[["Sum of Sq"]][2L])); ss_r <- max(0.0, as.numeric(aov_cmp$RSS[2L]))
     if (is.na(df_i) || df_i <= 0L || is.na(df_r) || df_r <= 0L) next
     f_val <- as.numeric(aov_cmp$F[2L]); pv_f <- as.numeric(aov_cmp[["Pr(>F)"]][2L]); if (!is.finite(f_val)) f_val <- 0.0; if (!is.finite(pv_f)) pv_f <- 1.0
     r2_f <- ss_i / max(ss_i + ss_r, 1e-12); raw_ft <- sub("_std$", "", feat)
     pre_eta_f <- if (!is.null(pre_eb_map) && feat %in% names(pre_eb_map) && is.finite(pre_eb_map[[feat]])) as.numeric(pre_eb_map[[feat]]) else if (!is.null(pre_eb_map) && raw_ft %in% names(pre_eb_map) && is.finite(pre_eb_map[[raw_ft]])) as.numeric(pre_eb_map[[raw_ft]]) else r2_f
     fits[[feat]] <- fit_full; raw_ps <- c(raw_ps, pv_f)
-    rows_out[[length(rows_out) + 1L]] <- data.frame(
-      Response = c(feat, feat), Term = c("institutionCode", "Residuals"), Df = c(df_i, df_r), Sum_Sq = round(c(ss_i, ss_r), 4),
-      Mean_Sq = round(c(ss_i / df_i, ss_r / df_r), 4), F_value = c(round(f_val, 4), NA), p_value = c(signif(pv_f, 4), NA), P_value = c(signif(pv_f, 4), NA),
-      p_value_bh = c(NA_real_, NA_real_), R_squared = round(c(r2_f, NA), 4), Adj_R_squared = round(c(s_f$adj.r.squared, NA), 4),
-      partial_eta_sq = round(c(r2_f, NA), 4), pre_eb_partial_eta_sq = round(c(pre_eta_f, NA), 4),
-      Batch_Effect_Status = c(ifelse(r2_f < 0.05, "Pass (<0.05)", "Exceeds 0.05"), NA), stringsAsFactors = FALSE)
+    rows_out[[length(rows_out) + 1L]] <- data.frame(Response = c(feat, feat), Term = c("institutionCode", "Residuals"), Df = c(df_i, df_r), Sum_Sq = round(c(ss_i, ss_r), 4), Mean_Sq = round(c(ss_i / df_i, ss_r / df_r), 4), F_value = c(round(f_val, 4), NA), p_value = c(signif(pv_f, 4), NA), P_value = c(signif(pv_f, 4), NA), p_value_bh = c(NA_real_, NA_real_), R_squared = round(c(r2_f, NA), 4), Adj_R_squared = round(c(s_f$adj.r.squared, NA), 4), partial_eta_sq = round(c(r2_f, NA), 4), pre_eb_partial_eta_sq = round(c(pre_eta_f, NA), 4), Batch_Effect_Status = c(ifelse(r2_f < 0.05, "Pass (<0.05)", "Exceeds 0.05"), NA), stringsAsFactors = FALSE)
   }
   if (length(rows_out) == 0L) return(NULL)
-  anova_df <- do.call(rbind, rows_out); inst_rows <- which(anova_df$Term == "institutionCode"); q_bh <- stats::p.adjust(raw_ps, method = "BH")
-  anova_df$p_value_bh[inst_rows] <- signif(q_bh, 4)
+  anova_df <- do.call(rbind, rows_out); inst_rows <- which(anova_df$Term == "institutionCode"); q_bh <- stats::p.adjust(raw_ps, method = "BH"); anova_df$p_value_bh[inst_rows] <- signif(q_bh, 4)
   anova_df$Batch_Effect_Status[inst_rows] <- ifelse(anova_df$partial_eta_sq[inst_rows] >= 0.05 & q_bh < 0.05, "Exceeds 0.05 (q_BH < 0.05)", ifelse(anova_df$partial_eta_sq[inst_rows] < 0.05, "Pass (<0.05)", "Pass (q_BH >= 0.05)"))
   if (!is.null(output_csv) && nzchar(output_csv)) { dir.create(dirname(output_csv), recursive = TRUE, showWarnings = FALSE); tmp_ba <- paste0(output_csv, ".", Sys.getpid(), ".tmp"); write.csv(anova_df, file = tmp_ba, row.names = FALSE); file.rename(tmp_ba, output_csv) }
   invisible(list(lm_pc1 = fits[["PC1"]], lm_pc2 = fits[["PC2"]], models = fits, anova_table = anova_df))
@@ -338,29 +326,26 @@ audit_institutional_batch_effects <- function(morpho_df, output_csv = "outputs/r
   lc_ap <- ifelse(is.finite(a_px) & a_px > 0 & is.finite(ppm) & ppm > 0, log10(sqrt(a_px) / ppm), NA_real_)
   lc_fb <- ifelse(is.finite(lcu), lcu, ifelse(is.finite(lc_cs), lc_cs, lc_ap))
   fb_idx <- which((ss == "tick_lattice_unboxed") & is.finite(ppm) & ppm >= 4.0 & ppm <= 45.0 & is.finite(lc_fb) & sym_ok)
-  if (length(fb_idx) >= 10L) {
-    message("[Allometry Fallback] N_verified_ruler < 10; running diagnostic RRPP allometry on tick_lattice_unboxed scale tier.")
-    return(list(valid_idx = fb_idx, scale_tier = "tick_lattice_unboxed", log_centsize_vec = lc_fb, plot_df = NULL))
-  }
+  if (length(fb_idx) >= 10L) { message("[Allometry Fallback] N_verified_ruler < 10; running diagnostic RRPP allometry on tick_lattice_unboxed scale tier."); return(list(valid_idx = fb_idx, scale_tier = "tick_lattice_unboxed", log_centsize_vec = lc_fb, plot_df = NULL)) }
   plot_df <- morpho_df; lc_disp <- ifelse(cal_prim & is.finite(lc_prim), lc_prim, ifelse(is.finite(lc_fb), lc_fb, ifelse(is.finite(a_px) & a_px > 0, log10(sqrt(pmax(a_px, 1.0))), 0.0)))
   lc_disp[!is.finite(lc_disp)] <- if (any(is.finite(lc_disp))) stats::median(lc_disp[is.finite(lc_disp)]) else 0.0; plot_df$log_centsize <- lc_disp
-  if (!((("PC1_raw" %in% names(plot_df)) && any(is.finite(suppressWarnings(as.numeric(plot_df$PC1_raw))))) || (("PC1" %in% names(plot_df)) && any(is.finite(suppressWarnings(as.numeric(plot_df$PC1))))))) {
-    sol_v <- num_c("solidity"); plot_df$PC1 <- ifelse(is.finite(sol_v), sol_v, 0.0)
-  }
+  if (!((("PC1_raw" %in% names(plot_df)) && any(is.finite(suppressWarnings(as.numeric(plot_df$PC1_raw))))) || (("PC1" %in% names(plot_df)) && any(is.finite(suppressWarnings(as.numeric(plot_df$PC1))))))) { sol_v <- num_c("solidity"); plot_df$PC1 <- ifelse(is.finite(sol_v), sol_v, 0.0) }
   list(valid_idx = integer(0), scale_tier = "uncalibrated_insufficient", log_centsize_vec = lc_prim, plot_df = plot_df)
 }
 
 .emit_insufficient_allometry_audit <- function(plot_df, output_report, output_plot, write_csv_fn, plot_fn) {
   anova_df <- data.frame(Term = "Insufficient_Calibrated_Specimens", Df = 0L, SumOfSqs = NA_real_, R2 = NA_real_, F = NA_real_, p_value = NA_real_, Slopes_Homogeneous = NA, Scale_Tier = "uncalibrated_insufficient", stringsAsFactors = FALSE)
   if (!is.null(output_report) && nzchar(output_report)) write_csv_fn(anova_df, output_report)
-  if (!is.null(output_plot) && nzchar(output_plot)) plot_fn(plot_df, 0.0, 1.0, 0.0, output_plot, p_int = 1.0)
+  if (!is.null(output_plot) && nzchar(output_plot) && is.function(plot_fn)) plot_fn(plot_df, 0.0, 1.0, 0.0, output_plot, p_int = 1.0)
   anova_df
 }
 
 .finalize_gmm_bic_table <- function(bic_table, raw_k, best_k, best_name, n_core_g, n_eff_ratio, p_g, bic_raw_mat, did_merge, did_icl_collapse) {
   n_core_g <- max(2.0, n_core_g); n_eff_g <- max(2.0, n_core_g * min(1.0, max(0.10, n_eff_ratio)))
   k_par_vec <- .compute_exact_mclust_params(bic_table$K, p_g, bic_mat = bic_raw_mat, default_model = best_name, explicit_n_params = if ("n_params" %in% names(bic_table)) bic_table$n_params else NULL)
-  bic_neff <- bic_table$BIC + k_par_vec * (log(n_core_g) - log(n_eff_g)); bic_table$Delta_BIC_prev <- c(0, diff(bic_table$BIC))
+  r_eff <- n_eff_g / n_core_g
+  bic_neff <- r_eff * (bic_table$BIC + k_par_vec * log(n_core_g)) - k_par_vec * log(n_eff_g)
+  bic_table$Delta_BIC_prev <- c(0, diff(bic_table$BIC))
   bic_table$Two_Delta_BIC <- round(bic_table$BIC - bic_table$BIC[1], 2); bic_table$BayesFactor_vs_Null <- round(bic_neff - bic_neff[1], 2)
   did_seq_step <- grepl("_SeqBootStepped", best_name, fixed = TRUE)
   bic_table$Evidence <- vapply(seq_len(nrow(bic_table)), function(idx_b) {

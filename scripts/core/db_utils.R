@@ -16,6 +16,8 @@
 #       with seamless CSV fallback merging.
 # ==============================================================================
 
+if (grDevices::dev.cur() == 1L) grDevices::pdf(NULL)
+
 PLANTMATICS_SCHEMA_USER_VERSION <- 20261127L
 PACKERA_SCHEMA_USER_VERSION <- PLANTMATICS_SCHEMA_USER_VERSION
 
@@ -2725,7 +2727,13 @@ persist_step03_to_sqlite <- function(
         p_nm <- target_pcs[pj]
         if (!(p_nm %in% names(df))) df[[p_nm]] <- rep(NA_real_, n_df)
         df[[p_nm]][otu_has_efa] <- pc_restored_mat[, pj]
-        restored_mask[[p_nm]] <- matched_rows & otu_has_efa
+        df[[p_nm]][matched_rows & !otu_has_efa] <- NA_real_
+        restored_mask[[p_nm]] <- matched_rows
+      }
+    } else if (any(matched_rows & !otu_has_efa)) {
+      for (p_nm in intersect(target_pcs, names(df))) {
+        df[[p_nm]][matched_rows & !otu_has_efa] <- NA_real_
+        restored_mask[[p_nm]] <- matched_rows & !otu_has_efa
       }
     }
   } else if (!is.null(leaf_pc_med)) {
@@ -2817,6 +2825,14 @@ fetch_step04_morphometrics_from_db <- function(
 
   for (cn_pi in c("petiole_length_mm", "blade_length_mm", "petiole_to_blade_ratio", "scale_source", "is_calibrated_mm", "blade_cie_l_sheet_delta", "blade_cie_a_browning_delta", "blade_cie_b_yellowing_delta")) {
     add_coalesce_col(cn_pi, c("om", "pi", "vrp", "v"))
+  }
+  for (cn_arch in c(
+    "lamina_trace_length_mm", "basal_cordate_index", "base_angle_deg", "apex_angle_deg",
+    "lamina_curvature", "margin_serration_index", "margin_tooth_acuteness",
+    "terminal_lobe_area_frac", "blade_cie_l_q85_sheet_delta", "basal_zone_cie_l_delta",
+    "abaxial_leaf_fraction", "abaxial_cie_l_sheet_delta"
+  )) {
+    add_coalesce_col(cn_arch, c("om", "pi"))
   }
   add_coalesce_col("AR_inv", c("om", "vrp"))
   for (cn_vrp in c("capitula_count", "involucre_height_px", "involucre_width_px", "involucre_height_mm", "involucre_width_mm", "corymb_head_count_est", "radiate_head_fraction", "anthesis_head_count", "fruiting_head_count")) {
@@ -3010,7 +3026,7 @@ persist_step04_to_sqlite <- function(
         c(
           "run_id", "catalogNumber", "plant_individual_id", "species_standardized",
           "determiner_tier", "type_status", "is_type_specimen",
-          "is_promoted_bronze", "authority_weight"
+          "is_promoted_bronze", "authority_weight", "spatial_balance_weight"
         ),
         names(coh_sub)
       )

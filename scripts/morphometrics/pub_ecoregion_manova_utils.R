@@ -16,8 +16,10 @@
 #   - load_epa_level3_spatial_r()
 #   - infer_epa_level3_ecoregion()
 #   - run_supervised_ecoregion_cda()
-#   - render_fig04c_supervised_ecoregion_cda() -> fig04c_supervised_ecoregion_cda.{pdf,png}
+#   - render_fig04c_supervised_ecoregion_cda() -> fig04c_supervised_ecoregion_cda.png
 # ==============================================================================
+if (grDevices::dev.cur() == 1L) grDevices::pdf(NULL)
+
 .epa_l3_r_cache <- new.env(parent = emptyenv())
 
 .LEGACY_HEURISTIC_REGIONS <- c(
@@ -399,11 +401,17 @@ run_supervised_ecoregion_cda <- function(
     }
   }
 
-  pc_req <- intersect(paste0("PC", seq_len(5)), feature_cols)
-  req_cols <- if (length(pc_req) > 0L) pc_req else feature_cols
-  has_pcs <- stats::complete.cases(df[, req_cols, drop = FALSE])
+  pc_req <- grep("^PC[0-9]+$", feature_cols, value = TRUE)
+  pc_req <- pc_req[vapply(pc_req, function(cn) any(is.finite(suppressWarnings(as.numeric(df[[cn]])))), logical(1L))]
+  ect_req <- grep("^ECT_PC[0-9]+(_std)?$", feature_cols, value = TRUE)
+  ect_req <- ect_req[vapply(ect_req, function(cn) any(is.finite(suppressWarnings(as.numeric(df[[cn]])))), logical(1L))]
+  req_cols <- if (length(pc_req) > 0L) pc_req else if (length(ect_req) > 0L) ect_req else feature_cols
+  has_pcs <- if (length(req_cols) > 0L) stats::complete.cases(df[, req_cols, drop = FALSE]) else rep(FALSE, n)
   auth_w <- if ("authority_weight" %in% names(df)) suppressWarnings(as.numeric(df$authority_weight)) else rep(1.0, n)
-  auth_w[is.na(auth_w)] <- 0.0
+  auth_w[is.na(auth_w) | !is.finite(auth_w)] <- 0.0
+  is_pas_row <- if ("is_passive" %in% names(df)) { p_v <- as.logical(df$is_passive); !is.na(p_v) & p_v } else rep(FALSE, n)
+  is_cln_row <- if ("is_confident_label_noise" %in% names(df)) { c_v <- as.logical(df$is_confident_label_noise); !is.na(c_v) & c_v } else rep(FALSE, n)
+  auth_w[is_pas_row | is_cln_row] <- 0.0
   is_t1 <- if ("morph_tier_source" %in% names(df)) (!is.na(df$morph_tier_source) & df$morph_tier_source == "Basal_Rosette") else rep(TRUE, n)
 
   # Strictly prefer unquarantined Basal_Rosette Gold/Silver anchors (>= 3 per EPA Level III Ecoregion), with unquarantined fallback only when Gold/Silver < 2 groups
@@ -411,13 +419,13 @@ run_supervised_ecoregion_cda <- function(
   tab_cand <- table(rg[cand_mask])
   active_ecos <- sort(names(tab_cand[tab_cand >= min_anchors_per_ecoregion]))
   if (length(active_ecos) < 2L) {
-    cand_t1 <- !is.na(rg) & has_pcs & is_t1 & not_quar
+    cand_t1 <- !is.na(rg) & has_pcs & is_t1 & !is_cln_row & not_quar
     tab_t1 <- table(rg[cand_t1])
     if (sum(tab_t1 >= min_anchors_per_ecoregion) >= 2L) {
       cand_mask <- cand_t1
       active_ecos <- sort(names(tab_t1[tab_t1 >= min_anchors_per_ecoregion]))
     } else {
-      cand_all <- !is.na(rg) & has_pcs & not_quar
+      cand_all <- !is.na(rg) & has_pcs & !is_cln_row & not_quar
       tab_all <- table(rg[cand_all])
       if (sum(tab_all >= min_anchors_per_ecoregion) >= 2L) {
         cand_mask <- cand_all
@@ -575,7 +583,15 @@ run_supervised_ecoregion_cda <- function(
       Z_raw <- Z_full_e
       if (ncol(Z_raw) == 1L) {
         v1 <- as.numeric(Z_raw[, 1])
-        src2 <- if ("PC2" %in% colnames(X_full)) X_full[, "PC2"] else if (ncol(X_full) >= 2L) X_full[, 2] else X_full[, 1]
+        src2 <- if ("PC2" %in% colnames(X_full) && isTRUE(stats::sd(X_full[, "PC2"], na.rm = TRUE) > 1e-7)) {
+          X_full[, "PC2"]
+        } else if ("ECT_PC2" %in% colnames(X_full) && isTRUE(stats::sd(X_full[, "ECT_PC2"], na.rm = TRUE) > 1e-7)) {
+          X_full[, "ECT_PC2"]
+        } else if (ncol(X_full) >= 2L) {
+          X_full[, 2]
+        } else {
+          X_full[, 1]
+        }
         v2 <- as.numeric(src2) - mean(src2, na.rm = TRUE)
         b1 <- v1 - mean(v1, na.rm = TRUE)
         v2 <- v2 - (sum(v2 * b1, na.rm = TRUE) / max(sum(b1^2, na.rm = TRUE), 1e-12)) * b1
@@ -706,6 +722,7 @@ run_supervised_ecoregion_cda <- function(
   } else {
     c(
       paste0("PC", seq_len(5)),
+      paste0("ECT_PC", seq_len(3)),
       "AR_inv_std",
       "petiole_to_blade_ratio_std",
       "scape_to_basal_leaf_ratio_std",
@@ -714,7 +731,7 @@ run_supervised_ecoregion_cda <- function(
     )
   }
   avail <- intersect(unique(cand), names(df))
-  if (length(avail) == 0L) avail <- intersect(paste0("PC", seq_len(5)), names(df))
+  if (length(avail) == 0L) avail <- intersect(c(paste0("PC", seq_len(5)), paste0("ECT_PC", seq_len(3))), names(df))
   avail
 }
 
@@ -975,6 +992,9 @@ run_multivariate_manova_audit <- function(
   } else {
     auth_w <- rep(1.0, n)
   }
+  is_pas_row <- if ("is_passive" %in% names(df)) { p_v <- as.logical(df$is_passive); !is.na(p_v) & p_v } else rep(FALSE, n)
+  is_cln_row <- if ("is_confident_label_noise" %in% names(df)) { c_v <- as.logical(df$is_confident_label_noise); !is.na(c_v) & c_v } else rep(FALSE, n)
+  auth_w[is_pas_row | is_cln_row] <- 0.0
   has_positive_anchors <- any(auth_w > 0)
 
   is_t1 <- if ("morph_tier_source" %in% names(df)) {
@@ -984,9 +1004,10 @@ run_multivariate_manova_audit <- function(
     rep(TRUE, n)
   }
 
-  pc_req <- intersect(paste0("PC", seq_len(5)), avail_cols)
-  req_cols <- if (length(pc_req) > 0L) pc_req else avail_cols
-  has_pcs <- stats::complete.cases(df[, req_cols, drop = FALSE])
+  pc_req <- grep("^PC[0-9]+$", avail_cols, value = TRUE)
+  ect_req <- grep("^ECT_PC[0-9]+(_std)?$", avail_cols, value = TRUE)
+  req_cols <- if (length(pc_req) > 0L) pc_req else if (length(ect_req) > 0L) ect_req else avail_cols
+  has_pcs <- if (length(req_cols) > 0L) stats::complete.cases(df[, req_cols, drop = FALSE]) else rep(FALSE, n)
 
   # 1. species_standardized (>= 2 species)
   sp_raw <- if ("species_standardized" %in% names(df)) {
@@ -1075,11 +1096,11 @@ run_multivariate_manova_audit <- function(
       }
       w_use <- auth_w
     } else {
-      cand_mask <- !is.na(g_raw) & has_pcs & is_t1 & geo_ok_spec
+      cand_mask <- !is.na(g_raw) & has_pcs & is_t1 & !is_pas_row & !is_cln_row & geo_ok_spec
       tab_c <- table(g_raw[cand_mask])
       act_lvls <- sort_group_levels(names(tab_c[tab_c >= min_n]))
       if (length(act_lvls) < 2L) {
-        cand_alt <- !is.na(g_raw) & has_pcs & geo_ok_spec
+        cand_alt <- !is.na(g_raw) & has_pcs & !is_pas_row & !is_cln_row & geo_ok_spec
         tab_alt <- table(g_raw[cand_alt])
         if (sum(tab_alt >= min_n) >= 2L) {
           cand_mask <- cand_alt

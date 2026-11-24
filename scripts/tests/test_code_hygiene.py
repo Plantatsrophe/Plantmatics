@@ -104,6 +104,9 @@ FORBIDDEN_OBSOLETE_SAM2_AND_PRUNED_HELPER_TOKENS = (
     # Retired Step 03 dead & duplicated helper tokens
     "summarize_otu_dissection_metrics", "strip_deprecated_step03_cli_args",
     "compute_polygon_solidity",
+    # Retired Step 04 dead & duplicated helper tokens
+    "generate_allometry_diagnostic_plot", "run_gmm_k1_vs_k2_bootstrap_lrt",
+    "generate_cda_biplot_png", ".project_shared_topology_rows_step04",
     # LeafMachine2 tokens
     *FORBIDDEN_LEGACY_LM2_TOKENS,
 )
@@ -253,9 +256,11 @@ class TestCodeHygiene(unittest.TestCase):
             PROJECT_ROOT / "scripts" / "tests" / "test_step03_taxonomic_clarity.py": 380,
             PROJECT_ROOT / "scripts" / "morphometrics" / "04_gmm_morphotools.R": 500,
             PROJECT_ROOT / "scripts" / "morphometrics" / "step04_allometry_merger_utils.R": 380,
+            PROJECT_ROOT / "scripts" / "morphometrics" / "step04_trait_projection_utils.R": 360,
             PROJECT_ROOT / "scripts" / "morphometrics" / "pub_synthesis_plates.R": 120,
             PROJECT_ROOT / "scripts" / "figures" / "step04_figures.R": 500,
             PROJECT_ROOT / "scripts" / "tests" / "test_step04_audit_hygiene.py": 380,
+            PROJECT_ROOT / "scripts" / "tests" / "test_step04_taxonomic_clarity.py": 380,
             PROJECT_ROOT / "scripts" / "analysis" / "step05_config_geo_utils.R": 320,
             PROJECT_ROOT / "scripts" / "figures" / "step05_figures.R": 500,
             PROJECT_ROOT / "scripts" / "figures" / "step05_sdm_figures.R": 320,

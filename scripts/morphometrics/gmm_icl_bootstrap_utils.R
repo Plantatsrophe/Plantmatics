@@ -144,32 +144,38 @@ run_gmm_pair_bootstrap_lrt <- function(X_core, g_null = 1L, g_alt = 2L, modelNam
   list(lrt_stat = round(obs_lrt, 3), p_value = round(boot_p, 4), n_boot_valid = as.integer(n_valid), null_model = as.character(fit_null$modelName), alt_model = as.character(fit_alt$modelName))
 }
 
-run_gmm_k1_vs_k2_bootstrap_lrt <- function(X_core, modelNames = NULL, B = 199L, seed = 42L) {
-  run_gmm_pair_bootstrap_lrt(X_core, g_null = 1L, g_alt = 2L, modelNames = modelNames, B = B, seed = seed)
-}
-
 .refit_gmm_stepped <- function(X_core, X_pcs, k_sup, modelNames, seed) {
   seed_state <- .save_random_seed(); on.exit(.restore_random_seed(seed_state), add = TRUE)
   seed_i <- as.integer(if (!is.null(seed) && is.finite(seed)) seed else 42L)
+  n_ev <- nrow(X_pcs); k_int <- max(1L, as.integer(k_sup))
   if (.ensure_mclust_attached()) {
-    set.seed(seed_i); fit_s <- tryCatch(mclust::Mclust(X_core, G = k_sup, modelNames = modelNames, verbose = FALSE), error = function(e) NULL)
-    if (is.null(fit_s) && !is.null(modelNames)) { set.seed(seed_i); fit_s <- tryCatch(mclust::Mclust(X_core, G = k_sup, modelNames = NULL, verbose = FALSE), error = function(e) NULL) }
-    if (!is.null(fit_s)) { pr_s <- stats::predict(fit_s, newdata = X_pcs); return(list(cls = as.integer(pr_s$classification), unc = if (!is.null(pr_s$uncertainty)) as.numeric(pr_s$uncertainty) else 1.0 - apply(as.matrix(pr_s$z), 1L, max))) }
+    set.seed(seed_i); fit_s <- tryCatch(mclust::Mclust(X_core, G = k_int, modelNames = modelNames, verbose = FALSE), error = function(e) NULL)
+    if (is.null(fit_s) && !is.null(modelNames)) { set.seed(seed_i); fit_s <- tryCatch(mclust::Mclust(X_core, G = k_int, modelNames = NULL, verbose = FALSE), error = function(e) NULL) }
+    if (!is.null(fit_s)) {
+      pr_s <- stats::predict(fit_s, newdata = X_pcs); z_s <- matrix(as.numeric(pr_s$z), nrow = n_ev, ncol = k_int)
+      return(list(cls = as.integer(pr_s$classification), unc = if (!is.null(pr_s$uncertainty)) as.numeric(pr_s$uncertainty) else 1.0 - apply(z_s, 1L, max), z = z_s))
+    }
   }
   if (exists("fit_gmm_em_pure", mode = "function")) {
-    pe_s <- tryCatch(fit_gmm_em_pure(X_core, max_k = k_sup, X_eval = X_pcs, seed = seed_i), error = function(e) NULL)
-    if (!is.null(pe_s) && !is.null(pe_s$best) && length(pe_s$best$classification) == nrow(X_pcs)) return(list(cls = as.integer(pe_s$best$classification), unc = as.numeric(pe_s$best$uncertainty)))
+    pe_s <- tryCatch(fit_gmm_em_pure(X_core, max_k = k_int, X_eval = X_pcs, seed = seed_i), error = function(e) NULL)
+    if (!is.null(pe_s) && !is.null(pe_s$best) && identical(as.integer(pe_s$best$k), k_int) && !is.null(pe_s$best$z) && nrow(pe_s$best$z) == n_ev && ncol(pe_s$best$z) == k_int) {
+      return(list(cls = as.integer(pe_s$best$classification), unc = as.numeric(pe_s$best$uncertainty), z = as.matrix(pe_s$best$z)))
+    }
   }
-  set.seed(seed_i); km <- tryCatch(stats::kmeans(X_core, centers = k_sup, nstart = 5L), error = function(e) NULL)
+  set.seed(seed_i); km <- tryCatch(stats::kmeans(X_core, centers = k_int, nstart = 5L), error = function(e) NULL)
   if (!is.null(km) && !is.null(km$centers)) {
-    d2 <- vapply(seq_len(k_sup), function(j) rowSums(sweep(X_pcs, 2L, km$centers[j, ], "-")^2), numeric(nrow(X_pcs)))
-    return(list(cls = apply(d2, 1L, which.min), unc = rep(0.0, nrow(X_pcs))))
+    d2 <- matrix(vapply(seq_len(k_int), function(j) rowSums(sweep(X_pcs, 2L, km$centers[j, ], "-")^2), numeric(n_ev)), nrow = n_ev, ncol = k_int)
+    w <- exp(-0.5 * sweep(d2, 1L, apply(d2, 1L, min), "-")); rs <- rowSums(w); rs[!is.finite(rs) | rs <= 0.0] <- 1.0
+    z_km <- w / rs
+    return(list(cls = apply(d2, 1L, which.min), unc = 1.0 - apply(z_km, 1L, max), z = z_km))
   }
-  list(cls = rep(1L, nrow(X_pcs)), unc = rep(0.0, nrow(X_pcs)))
+  z_fb <- matrix(0.0, nrow = n_ev, ncol = k_int); z_fb[, 1L] <- 1.0
+  list(cls = rep(1L, n_ev), unc = rep(0.0, n_ev), z = z_fb)
 }
 
 apply_gmm_icl_bootstrap_gate <- function(X_core, X_pcs, bic_table, best_k, best_name, cls_sub, unc_sub,
-                                         modelNames = NULL, pure_res = NULL, is_intra_gmm = FALSE, seed = 42L) {
+                                         modelNames = NULL, pure_res = NULL, is_intra_gmm = FALSE, seed = 42L,
+                                         z_eval_mat = NULL) {
   icl_prof <- compute_gmm_icl_profile(X_core, bic_table, modelNames = modelNames, pure_res = pure_res, seed = seed)
   bic_table$ICL <- icl_prof$ICL; bic_table$Delta_ICL_vs_Null <- icl_prof$Delta_ICL_vs_Null
   bic_table$Boot_LRT_Stat_K1_vs_K2 <- NA_real_; bic_table$Boot_LRT_P_K1_vs_K2 <- NA_real_
@@ -184,10 +190,12 @@ apply_gmm_icl_bootstrap_gate <- function(X_core, X_pcs, bic_table, best_k, best_
   }
   fails_gate <- function(delta_icl, bp) if (isTRUE(is_intra_gmm)) !(is.finite(delta_icl) && delta_icl > 0.0 && is.finite(bp) && bp < 0.05) else is.finite(delta_icl) && delta_icl <= 0.0 && is.finite(bp) && bp >= 0.05
   if (best_k >= 2L) {
-    delta_icl_best <- as.numeric(bic_table$Delta_ICL_vs_Null[match(best_k, bic_table$K)])
-    if (fails_gate(delta_icl_best, boot_p)) {
-      message(sprintf("[Model Selection Gate] Collapsed GMM K=%d -> K=1 (Delta_ICL=%.2f, Boot_LRT_p=%.4f).", as.integer(best_k), delta_icl_best, as.numeric(boot_p)))
-      best_k <- 1L; cls_sub <- rep(1L, nrow(X_pcs)); unc_sub <- rep(0.0, nrow(X_pcs)); best_name <- paste0(best_name, "_ICLBootCollapsed"); did_icl_collapse <- TRUE
+    delta_icl_k2 <- if (!is.na(idx_2)) as.numeric(bic_table$Delta_ICL_vs_Null[idx_2]) else NA_real_
+    if (fails_gate(delta_icl_k2, boot_p)) {
+      message(sprintf("[Model Selection Gate] Collapsed GMM K=%d -> K=1 (Delta_ICL_K2=%.2f, Boot_LRT_p=%.4f).", as.integer(best_k), delta_icl_k2, as.numeric(boot_p)))
+      best_k <- 1L; cls_sub <- rep(1L, nrow(X_pcs)); unc_sub <- rep(0.0, nrow(X_pcs))
+      z_eval_mat <- matrix(1.0, nrow = nrow(X_pcs), ncol = 1L)
+      best_name <- paste0(best_name, "_ICLBootCollapsed"); did_icl_collapse <- TRUE
     }
   }
   if (!did_icl_collapse && best_k > 2L) {
@@ -203,8 +211,8 @@ apply_gmm_icl_bootstrap_gate <- function(X_core, X_pcs, bic_table, best_k, best_
     if (k_sup < k_orig) {
       message(sprintf("[Model Selection Gate] Sequential bootstrap LRT stepped GMM K=%d -> K=%d.", k_orig, k_sup))
       best_k <- as.integer(k_sup); best_name <- paste0(best_name, "_SeqBootStepped")
-      rf <- .refit_gmm_stepped(X_core, X_pcs, k_sup, modelNames, seed); cls_sub <- rf$cls; unc_sub <- rf$unc
+      rf <- .refit_gmm_stepped(X_core, X_pcs, k_sup, modelNames, seed); cls_sub <- rf$cls; unc_sub <- rf$unc; z_eval_mat <- rf$z
     }
   }
-  list(bic_table = bic_table, best_k = best_k, best_name = best_name, cls_sub = cls_sub, unc_sub = unc_sub, did_icl_collapse = did_icl_collapse)
+  list(bic_table = bic_table, best_k = best_k, best_name = best_name, cls_sub = cls_sub, unc_sub = unc_sub, did_icl_collapse = did_icl_collapse, z_eval_mat = z_eval_mat)
 }

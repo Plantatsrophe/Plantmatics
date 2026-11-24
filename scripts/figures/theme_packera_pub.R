@@ -151,15 +151,15 @@ resolve_taxon_or_rank_vector <- function(df, group_col = NULL) {
     if (any(has_inf)) {
       for (i in which(has_inf)) {
         b_i <- base_v[i]
-        if (!grepl("^Packera\\s+", b_i) || grepl("\\b(subsp\\.|var\\.|f\\.)\\s+", b_i, ignore.case = TRUE)) next
+        if (!grepl("^Packera[[:space:]]+", b_i) || grepl("(^|[[:space:]])(subsp\\.|var\\.|f\\.)[[:space:]]+", b_i, ignore.case = TRUE)) next
         iv <- inf_v[i]
-        if (grepl("^(subsp\\.?|ssp\\.?|var\\.?|f\\.?|forma)\\s+", iv, ignore.case = TRUE)) {
-          iv_clean <- sub("^(subsp|ssp)\\.?\\s+", "subsp. ", iv, ignore.case = TRUE)
-          iv_clean <- sub("^var\\.?\\s+", "var. ", iv_clean, ignore.case = TRUE)
-          iv_clean <- sub("^(f|forma)\\.?\\s+", "f. ", iv_clean, ignore.case = TRUE)
+        if (grepl("^(subsp\\.?|ssp\\.?|var\\.?|f\\.?|forma)[[:space:]]+", iv, ignore.case = TRUE)) {
+          iv_clean <- sub("^(subsp|ssp)\\.?[[:space:]]+", "subsp. ", iv, ignore.case = TRUE)
+          iv_clean <- sub("^var\\.?[[:space:]]+", "var. ", iv_clean, ignore.case = TRUE)
+          iv_clean <- sub("^(f|forma)\\.?[[:space:]]+", "f. ", iv_clean, ignore.case = TRUE)
           base_v[i] <- paste(b_i, iv_clean)
         } else if (grepl("^[a-z][a-z-]+$", tolower(iv))) {
-          ep <- strsplit(b_i, "\\s+")[[1L]]
+          ep <- strsplit(b_i, "[[:space:]]+")[[1L]]
           if (length(ep) >= 2L && tolower(iv) != tolower(ep[2L])) {
             base_v[i] <- paste0(b_i, " var. ", tolower(iv))
           }
@@ -176,7 +176,7 @@ abbreviate_icn_taxon <- function(label_vec, abbreviate_genus = FALSE) {
     s_clean <- trimws(s)
     if (!isTRUE(abbreviate_genus)) return(s_clean)
     if (grepl("^(Morphotype|Ecotype|Complex|Cluster|Deme)_", s_clean)) return(gsub("_", " ", s_clean))
-    toks <- strsplit(s_clean, "\\s+")[[1L]]
+    toks <- strsplit(s_clean, "[[:space:]]+")[[1L]]
     if (length(toks) >= 2L && grepl("^[A-Z][a-z]+$", toks[1L])) {
       toks[1L] <- paste0(substr(toks[1L], 1L, 1L), ".")
       return(paste(toks, collapse = " "))
@@ -189,12 +189,12 @@ format_icn_label_expr <- function(tx, abbreviate_genus = FALSE, count_n = NULL) 
   s <- abbreviate_icn_taxon(tx, abbreviate_genus = abbreviate_genus)
   suffix_n <- if (!is.null(count_n) && is.finite(count_n)) sprintf(" (n=%d)", as.integer(count_n)) else ""
   if (grepl("^(Morphotype|Ecotype|Complex|Cluster|Deme|Unknown|Unassigned)", s, ignore.case = TRUE) ||
-      !grepl("^[A-Z][a-z.]*\\s+", s)) {
+      !grepl("^[A-Z][a-z.]*[[:space:]]+", s)) {
     lbl_plain <- paste0(gsub("_", " ", s), suffix_n)
     return(bquote(.(lbl_plain)))
   }
 
-  toks <- strsplit(s, "\\s+")[[1L]]
+  toks <- strsplit(s, "[[:space:]]+")[[1L]]
   expr_parts <- character(0)
   for (i in seq_along(toks)) {
     tk <- toks[i]
@@ -236,7 +236,7 @@ resolve_plot_group_labels <- function(df, cda_res = NULL, gmm_res = NULL, group_
       gv_clean <- trimws(gv)
       gv_clean[is.na(gv_clean) | !nzchar(gv_clean)] <- "Unknown"
       non_unk <- gv_clean[gv_clean != "Unknown"]
-      if (length(non_unk) > 0L && all(grepl("^Packera\\s+", non_unk)) && "infraspecific_taxon" %in% names(df)) {
+      if (length(non_unk) > 0L && all(grepl("^Packera[[:space:]]+", non_unk)) && "infraspecific_taxon" %in% names(df)) {
         tmp_df <- df
         tmp_df$.__tmp_base_sp <- gv_clean
         return(resolve_taxon_or_rank_vector(tmp_df, group_col = ".__tmp_base_sp"))
@@ -332,7 +332,7 @@ add_centroid_repel_labels_gg <- function(p, cent_df, x_col, y_col, label_col, co
   ok <- is.finite(xv) & is.finite(yv) & !is.na(lv) & nzchar(trimws(lv))
   if (!any(ok)) return(p)
   rep_df <- data.frame(rx = xv[ok], ry = yv[ok], rlbl = lv[ok], rcol = cv[ok], stringsAsFactors = FALSE)
-  is_latin <- all(grepl("^[A-Z][a-z.]*\\s+[a-z]", rep_df$rlbl))
+  is_latin <- all(grepl("^[A-Z][a-z.]*[[:space:]]+[a-z]", rep_df$rlbl))
   face_use <- if (is_latin) "italic" else "plain"
   sz_num <- as.numeric(size)[1L]
   if (isTRUE(allow_ggrepel) && requireNamespace("ggrepel", quietly = TRUE)) {
@@ -524,8 +524,23 @@ PACKERA_MORPH_TRAIT_LABEL_DICT <- c(
   "blade_cie_l_sd"                 = "Lamina Brightness Dispersion (SD L*)",
   "petiole_to_blade_ratio"         = "Petiole-to-Blade Length Ratio",
   "scape_to_basal_leaf_ratio"      = "Scape-to-Basal Leaf Ratio",
-  "AR_inv"                         = "Inverse Leaf Aspect Ratio (W / L)",
+  "AR_inv"                         = "Involucre Aspect Ratio (H / W)",
   "aspect_ratio"                   = "Leaf Aspect Ratio (L / W)",
+  "basal_cordate_index"            = "Basal Cordate Sinus Index",
+  "terminal_lobe_area_frac"        = "Terminal Lobe Area Fraction",
+  "margin_serration_index"         = "Margin Serration Index",
+  "margin_tooth_acuteness"         = "Margin Tooth Acuteness",
+  "base_angle_deg"                 = "Lamina Base Angle (deg)",
+  "apex_angle_deg"                 = "Lamina Apex Angle (deg)",
+  "lamina_curvature"               = "Lamina Midrib Curvature",
+  "lamina_trace_length_mm"         = "Lamina Midrib Length (mm)",
+  "radiate_head_fraction"          = "Radiate Capitulum Fraction",
+  "blade_cie_l_q85_sheet_delta"    = "Lamina Brightness Delta (Q85 CIE L*)",
+  "blade_cie_l_sheet_delta"        = "Lamina Brightness Delta (CIE L*)",
+  "basal_zone_cie_l_delta"         = "Basal-Zone Brightness Delta (CIE L*)",
+  "abaxial_cie_l_sheet_delta"      = "Abaxial Brightness Delta (CIE L*)",
+  "blade_cie_a_browning_delta"     = "Lamina Browning Delta (CIE a*)",
+  "blade_cie_b_yellowing_delta"    = "Lamina Yellowing Delta (CIE b*)",
   "log1p_capitulum_count"          = "Capitulum Count (log1p)",
   "basal_vs_cauline_length_ratio"  = "Basal-to-Cauline Blade Length Ratio",
   "basal_vs_cauline_solidity_delta"= "Basal-to-Cauline Solidity Shift",
