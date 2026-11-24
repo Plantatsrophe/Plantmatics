@@ -492,11 +492,14 @@ Plantmatics/
     │   ├── step02_capitulum_biomarkers_*.py         # Two <410-line early and late optical biomarker submodules covering pappus plumes alongside corolla and ligule traits
     │   ├── step02_leaf_traits_utils.py              # Read-only enclosed-void QC (<360 lines), Packera base/margin/terminal-lobe traits, and abaxial rosette flagging
     │   ├── step02_photometry_corymb_utils.py        # Wool-preserving 7-key millimeter-calibrated CIELAB photometry (<360 lines) paired with corymb head counting
-    │   ├── rescore_step02_qc_and_zones.py           # Read-only CPU leaf_zone, void-aware QC, bbox-backed photometry, Packera leaf trait, and margin ruler rescorer
-    │   └── step02_figures.py                        # Step 02 300-DPI PNG plates (fig02a, fig02b), bbox RGB cutouts, and analytical 32x360 ECT overlays
+    │   ├── step02_pipe_*.py                         # Nine <450-line Step 02 pipeline helpers covering checkpoint state and Stage 1/2 inference alongside clustering and leaf readout plus wave dispatch
+    │   ├── rescore_step02_qc_and_zones.py           # Read-only CPU rescorer facade (<260 lines) backed by three <410-line step02_rescore_*.py submodules
+    │   ├── step02_rescore_*.py                      # Three <410-line CPU rescorer modules for picklable QC/ruler workers paired with photometry recomputation and Tier A SQLite/CSV sync
+    │   ├── step02_figures.py                        # Step 02 300-DPI PNG figure facade (<270 lines) backed by five <450-line step02_fig_*.py submodules
+    │   └── step02_fig_*.py                          # Five <450-line 300-DPI PNG modules rendering Plate 02A and Plate 02B alongside ECT exemplars and whole-sheet overlays
     ├── pipeline/
     │   ├── 01_voucher_harvester.py                  # Step 01 pipeline module alias
-    │   ├── 02_segment_and_extract.py                # Step 02 read-only LM3 adapter and 3-stage asynchronous wave engine
+    │   ├── 02_segment_and_extract.py                # Step 02 read-only LM3 adapter facade (<470 lines) delegating across nine step02_pipe_*.py stage and wave modules
     │   ├── resolve_eastern_na_packera.py            # Hierarchical Eastern NA monograph runner and 25-column synthesis compiler
     │   └── resolve_focal_species_complex.py         # 4-stage focal species-complex runner and cross-stage report compiler
     ├── morphometrics/
@@ -572,7 +575,7 @@ Plantmatics/
     │   ├── step07_genomic_propagation.R             # Step 07 4-tier centroid-quarantined genomic propagation paired with Tier_0 calibration (<400 lines)
     │   ├── genomic_triage_utils.R                   # Step 07 genomic joiner, Stage 0 field QC triage, F1 hybrid/gdi helpers, and Phase 2 report (<500 lines)
     │   └── taxon_complex_discovery_utils.R          # Step 07 LOO phenology kappa and Leiden/Ward.D2 species-complex delimitation (<480 lines)
-    └── tests/                                       # Automated QA suite (56 test_*.py modules covering Step 01 to Step 07 hygiene, taxonomic clarity, plus split Step 01 and Step 06 suites alongside _hygiene_specs.py, run_audit.py, and _r_session.py harnesses)
+    └── tests/                                       # Automated QA suite (64 test_*.py modules covering Step 01 to Step 07 hygiene and taxonomic clarity alongside split Step 01/02/06 suites plus _hygiene_specs.py and run_audit.py harnesses)
 ```
 
 ## Verification, Reproducibility, and Troubleshooting

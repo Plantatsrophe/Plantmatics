@@ -115,10 +115,14 @@ class TestCodeHygiene(unittest.TestCase):
                 self.assertLess(line_count, ceiling, f"{mod_path.relative_to(PROJECT_ROOT)} exceeds {ceiling}-line ceiling ({line_count} lines)")
 
     def test_step01_and_step06_split_posix_and_mmrr_hygiene(self):
-        """Assert Step 01 and Step 06 test monolith removals, pure POSIX regexes in Step 06 R files, and zero abs(lat) IBE forgery."""
+        """Assert Step 01, Step 02, and Step 06 test monolith removals, pure POSIX regexes in Step 06 R files, and zero abs(lat) IBE forgery."""
         self.assertFalse(
             (PROJECT_ROOT / "scripts" / "tests" / "test_voucher_harvester.py").exists(),
             "Legacy 3,930-line scripts/tests/test_voucher_harvester.py must remain deleted",
+        )
+        self.assertFalse(
+            (PROJECT_ROOT / "scripts" / "tests" / "test_segment_and_extract.py").exists(),
+            "Legacy 2,961-line scripts/tests/test_segment_and_extract.py must remain deleted",
         )
         self.assertFalse(
             (PROJECT_ROOT / "scripts" / "tests" / "test_genomic_integration.py").exists(),
