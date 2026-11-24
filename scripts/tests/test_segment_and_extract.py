@@ -1308,8 +1308,9 @@ class TestDissectedLeafSegmentationEnhancements(unittest.TestCase):
                boxes alongside Leaf_WHOLE (cls_id == 0) by default, and asymmetric nested-box
                deduplication keeps the enclosing parent full-leaf bounding box when a higher-confidence
                smaller terminal-lobe box is nested inside it.
-             - Stage 2 _build_native_lm3_crop_masks retains secondary pinna Leaf (cls == 0) components
-               (>= 64 px) when bridged to the primary lamina by the Petiole/rachis mask (cls == 1).
+             - Stage 2 _reduce_crop_predictions_native_lm3 and _unpack_reduced_lm3_crop_preds retain
+               unbridged interior pinna Leaf (cls == 0) components (>= 64 px, not touching crop edge)
+               alongside separate Petiole (cls == 1) masks while disentangling crop-edge neighbor leaves.
           3. Post-segmentation anatomical leaf_zone classification (classify_leaf_zone_anatomical):
              - Classifies basal rosette leaves near p_crown (petiolate, large area) as "basal" and
                an upper stem leaf near the capitula (dist_from_crown_norm > 0.55, sessile, smaller area)
@@ -1430,28 +1431,36 @@ class TestDissectedLeafSegmentationEnhancements(unittest.TestCase):
             self.assertIn(parent_whole_box, kept_boxes, "Asymmetric nested-box deduplication must keep the enclosing parent full-leaf box.")
             self.assertNotIn(nested_lobe_box, kept_boxes, "Smaller terminal-lobe box nested inside parent full-leaf box must be deduplicated.")
 
-        # 2b. Stage 2 _build_native_lm3_crop_masks extracts top-scoring LM3 Leaf (cls == 0) and Petiole (cls == 1)
-        #     masks without synthesizing OpenCV rachis bridges across separate instance masks.
+        # 2b. Stage 2 _reduce_crop_predictions_native_lm3 and _unpack_reduced_lm3_crop_preds preserve
+        #     unbridged interior pinna islands (not touching crop edge) on a focal cls == 0 Leaf
+        #     while keeping edge-touching neighbor fragments disentangled and Petiole (cls == 1) separate.
         crop_shape = (300, 240)
-        terminal_lobe = np.zeros(crop_shape, dtype=np.uint8)
-        cv2.ellipse(terminal_lobe, (120, 80), (45, 50), 0, 0, 360, 255, -1)
-        lateral_pinna = np.zeros(crop_shape, dtype=np.uint8)
-        cv2.ellipse(lateral_pinna, (85, 185), (28, 16), 0, 0, 360, 255, -1)
+        focal_dissected = np.zeros(crop_shape, dtype=np.uint8)
+        cv2.ellipse(focal_dissected, (120, 75), (42, 42), 0, 0, 360, 255, -1)
+        cv2.ellipse(focal_dissected, (68, 220), (24, 16), 0, 0, 360, 255, -1)
+        edge_fragment = np.zeros(crop_shape, dtype=np.uint8)
+        cv2.ellipse(edge_fragment, (232, 160), (20, 36), 0, 0, 360, 255, -1)
+        combined_cls0 = np.maximum(focal_dissected, edge_fragment)
         rachis_petiole = np.zeros(crop_shape, dtype=np.uint8)
-        cv2.rectangle(rachis_petiole, (105, 115), (125, 250), 255, -1)
+        cv2.rectangle(rachis_petiole, (114, 125), (126, 265), 255, -1)
         crop_preds_pinna = [
-            ((25, 70, 135, 170), terminal_lobe, 0.93, 0),
-            ((165, 55, 205, 115), lateral_pinna, 0.86, 0),
-            ((115, 95, 250, 125), rachis_petiole, 0.90, 1),
+            ((20, 40, 250, 240), combined_cls0, 0.93, 0),
+            ((125, 114, 265, 126), rachis_petiole, 0.90, 1),
         ]
-        best_m_pinna, _, pet_m_pinna, _ = step02._build_native_lm3_crop_masks(
-            crop_preds_pinna,
+        red_pinna = lm3_eng._reduce_crop_predictions_native_lm3(
+            crop_preds_pinna, crop_shape, min_area_px=64
+        )
+        best_m_pinna, sc_pinna, pet_m_pinna, _ = step02._unpack_reduced_lm3_crop_preds(
+            red_pinna,
             crop_shape=crop_shape,
-            is_high_dpi=True,
         )
         self.assertIsNotNone(best_m_pinna)
         self.assertIsNotNone(pet_m_pinna)
-        np.testing.assert_array_equal(best_m_pinna > 0, terminal_lobe > 0)
+        self.assertAlmostEqual(sc_pinna, 0.93, places=2)
+        self.assertGreater(int(best_m_pinna[75, 120]), 0, "Primary terminal lobe must be retained.")
+        self.assertGreater(int(best_m_pinna[220, 68]), 0, "Distant interior basal pinna must be retained unbridged.")
+        self.assertEqual(int(best_m_pinna[150, 90]), 0, "Gap between terminal lobe and basal pinna must stay unbridged.")
+        self.assertEqual(int(best_m_pinna[160, 235]), 0, "Crop-edge neighbor fragment must be disentangled.")
 
         # 3. Post-segmentation anatomical leaf_zone classification (classify_leaf_zone_anatomical)
         classify_fn = getattr(ocm, "classify_leaf_zone_anatomical", None) or getattr(
@@ -1533,7 +1542,7 @@ class TestDissectedLeafSegmentationEnhancements(unittest.TestCase):
         """
         Verify:
           1. Two touching/overlapping cls == 0 (Leaf) instance predictions in the same crop
-             without a Petiole (cls == 1) bridge are NOT fused together by _build_native_lm3_crop_masks.
+             without a Petiole (cls == 1) bridge are NOT fused together by _unpack_reduced_lm3_crop_preds.
           2. specimen_paper_cleaned_mask does NOT bridge an adjacent stem or neighbor leaf component
              into leaf_primary.
           3. Asymmetric merged leaf/stem masks violating LeafMachine3's midvein Voronoi symmetry
@@ -1573,10 +1582,9 @@ class TestDissectedLeafSegmentationEnhancements(unittest.TestCase):
             "Primary cls_id == 0 mask in _reduce_crop_predictions_native_lm3 must not fuse the touching neighbor leaf.",
         )
 
-        best_m_ov, best_sc_ov, _, _ = step02._build_native_lm3_crop_masks(
+        best_m_ov, best_sc_ov, _, _ = step02._unpack_reduced_lm3_crop_preds(
             reduced_ov,
             crop_shape=crop_shape,
-            is_high_dpi=True,
             specimen_paper_cleaned_mask=spec_cleaned,
         )
         self.assertIsNotNone(best_m_ov)
@@ -2423,7 +2431,11 @@ class TestDissectedLeafSegmentationEnhancements(unittest.TestCase):
         self.assertNotIn("grDevices::pdf(", combined_no_null)
 
     def test_eroded_blade_cie_l_tomentum_and_paper_strap_masking(self) -> None:
-        """Verify compute_eroded_blade_cie_l_metrics separates floccose white tomentum from glabrous blades and masks white paper mounting straps, petioles, and holes."""
+        """Verify compute_calibrated_blade_photometry separates floccose white tomentum from glabrous blades and masks white paper mounting straps, petioles, and holes."""
+        from scripts.vision.step02_photometry_corymb_utils import (
+            compute_calibrated_blade_photometry,
+        )
+
         rng = np.random.default_rng(42)
         sheet_bgr = np.full((240, 320, 3), (228, 236, 242), dtype=np.uint8)
         mask = np.zeros((120, 120), dtype=np.uint8)
@@ -2439,6 +2451,15 @@ class TestDissectedLeafSegmentationEnhancements(unittest.TestCase):
         sheet_glab_strap = sheet_glab.copy()
         sheet_glab_strap[114:124, 40:160] = (232, 238, 243)
 
+        pet_m = np.zeros((120, 120), dtype=np.uint8)
+        pet_m[90:108, 52:68] = 255
+        hole_m = np.zeros((120, 120), dtype=np.uint8)
+        cv2.circle(hole_m, (60, 42), 8, 255, -1)
+        sheet_glab_excl = sheet_glab.copy()
+        sub_ex = sheet_glab_excl[60:180, 40:160].copy()
+        sub_ex[(pet_m > 0) | (hole_m > 0)] = (238, 240, 244)
+        sheet_glab_excl[60:180, 40:160] = sub_ex
+
         sheet_tom = sheet_bgr.copy()
         sub_t = sheet_tom[60:180, 40:160].copy()
         wool_grid = rng.normal(0.0, 26.0, size=(30, 30)).astype(np.float32)
@@ -2451,19 +2472,29 @@ class TestDissectedLeafSegmentationEnhancements(unittest.TestCase):
         paper_l = step02.estimate_sheet_paper_cie_l_ref(sheet_glab)
         self.assertGreater(paper_l, 85.0)
 
-        m_glab = step02.compute_eroded_blade_cie_l_metrics(
-            sheet_glab, mask, mask_origin=(40, 60), paper_l_ref=paper_l
+        m_glab = compute_calibrated_blade_photometry(
+            sheet_glab, mask, mask_origin=(40, 60), paper_l_ref=paper_l, pixels_per_mm=10.0
         )
-        m_strap = step02.compute_eroded_blade_cie_l_metrics(
-            sheet_glab_strap, mask, mask_origin=(40, 60), paper_l_ref=paper_l
+        m_strap = compute_calibrated_blade_photometry(
+            sheet_glab_strap, mask, mask_origin=(40, 60), paper_l_ref=paper_l, pixels_per_mm=10.0
         )
-        m_tom = step02.compute_eroded_blade_cie_l_metrics(
-            sheet_tom, mask, mask_origin=(40, 60), paper_l_ref=paper_l
+        m_excl = compute_calibrated_blade_photometry(
+            sheet_glab_excl,
+            mask,
+            mask_origin=(40, 60),
+            paper_l_ref=paper_l,
+            petiole_mask=pet_m,
+            hole_mask=hole_m,
+            pixels_per_mm=10.0,
+        )
+        m_tom = compute_calibrated_blade_photometry(
+            sheet_tom, mask, mask_origin=(40, 60), paper_l_ref=paper_l, pixels_per_mm=10.0
         )
 
         self.assertGreater(m_tom["blade_cie_l_norm"], m_glab["blade_cie_l_norm"] + 0.25)
         self.assertGreater(m_tom["blade_cie_l_sd"], m_glab["blade_cie_l_sd"] * 2.5)
         self.assertAlmostEqual(m_glab["blade_cie_l_norm"], m_strap["blade_cie_l_norm"], delta=0.02)
+        self.assertAlmostEqual(m_glab["blade_cie_l_norm"], m_excl["blade_cie_l_norm"], delta=0.02)
 
 
     def test_bolting_scape_specimen_mask_and_splayed_leaf_consolidation(self) -> None:
@@ -2500,27 +2531,26 @@ class TestDissectedLeafSegmentationEnhancements(unittest.TestCase):
         self.assertEqual([inst.plant_individual_id for inst in out_two], [0, 0, 1, 1])
 
 
-    def test_unfilled_dissected_masks_paper_pockets_and_sinus_bridge_opening(self) -> None:
+    def test_unfilled_dissected_masks_paper_pockets_and_void_qc(self) -> None:
         """
         Verify:
-          1. `_reduce_crop_predictions_native_lm3` and `_build_native_lm3_crop_masks` preserve unfilled
-             `cls == 0` (`Leaf`) masks when touching dissected lobes enclose a white-paper pocket missed by `cls == 2` (`Hole`).
-          2. `_subtract_interior_mounting_paper_pockets` carves out interior mounting-paper pockets via
-             `specimen_paper_cleaned_mask` and bimodal CIE L*a*b* without severing cross-blade linen mounting straps.
-          3. `open_hairline_sinus_bridges_and_measure_voids` opens hairline (`<= 3.5 px`) lobe-tip bridges so
-             single-loop contours enter the sinus, while retaining broad (`> 3.5 px`) overlap loops with
-             void-aware `compute_lm3_shape_metrics` solidity and `ENCLOSED_INTERLOBE_VOID` flagging.
+          1. `_reduce_crop_predictions_native_lm3` and `_unpack_reduced_lm3_crop_preds` preserve unfilled
+             `cls == 0` (`Leaf`) interior `0`-pixel sinus voids and intersect interior mounting-paper
+             pockets with `specimen_paper_cleaned_mask`.
+          2. Read-only `measure_enclosed_interlobe_void_frac` leaves input masks 100% pixel-identical,
+             quantifies enclosed interlobe void fraction (`> 0.020`), excludes known `hole_mask` overlaps,
+             and drives void-aware `compute_lm3_shape_metrics` solidity plus `ENCLOSED_INTERLOBE_VOID` QC.
         """
-        from scripts.vision.leaf_geometry_utils import (
-            compute_lm3_shape_metrics,
-            open_hairline_sinus_bridges_and_measure_voids,
-        )
+        from scripts.vision.leaf_geometry_utils import compute_lm3_shape_metrics
         from scripts.vision.lm3_inference_engines import (
             _reduce_crop_predictions_native_lm3,
             evaluate_leaf_damage_and_fold_qc,
         )
+        from scripts.vision.step02_leaf_traits_utils import (
+            measure_enclosed_interlobe_void_frac,
+        )
 
-        # 1. Dissected leaf mask with enclosed sinus pocket (no cls==2 Hole prediction)
+        # 1A. Dissected leaf mask with enclosed sinus pocket (no cls==2 Hole prediction)
         raw_ring = np.zeros((120, 120), dtype=np.uint8)
         cv2.circle(raw_ring, (60, 60), 42, 1, -1)
         cv2.circle(raw_ring, (60, 60), 16, 0, -1)
@@ -2533,57 +2563,46 @@ class TestDissectedLeafSegmentationEnhancements(unittest.TestCase):
         self.assertAlmostEqual(red_sc, 0.93, places=2)
         self.assertEqual(int(red_lam[60, 60]), 0, "Unfilled cls==0 Leaf mask must preserve interior sinus zero-pocket.")
 
-        built_lam, built_sc, built_pet, built_hole = step02._build_native_lm3_crop_masks(crop_det_tuple, (120, 120))
+        built_lam, built_sc, built_pet, built_hole = step02._unpack_reduced_lm3_crop_preds(red_dets, (120, 120))
         self.assertIsNotNone(built_lam)
         self.assertAlmostEqual(built_sc, 0.93, places=2)
         self.assertIsNone(built_pet)
         self.assertIsNone(built_hole)
-        self.assertEqual(int(built_lam[60, 60]), 0, "_build_native_lm3_crop_masks must not flood-fill outer Leaf polygons.")
+        self.assertEqual(int(built_lam[60, 60]), 0, "_unpack_reduced_lm3_crop_preds must not flood-fill outer Leaf polygons.")
 
-        # 2. Bimodal CIE L*a*b* + specimen_mask interior paper-pocket subtraction (sparing linen straps)
-        crop_bgr = np.full((140, 140, 3), (232, 238, 242), dtype=np.uint8)
-        solid_blob = np.zeros((140, 140), dtype=bool)
+        # 1B. Interior mounting-paper pocket intersected via specimen_paper_cleaned_mask
         yy, xx = np.ogrid[:140, :140]
-        solid_blob[((yy - 70) ** 2) / (52.0 ** 2) + ((xx - 70) ** 2) / (38.0 ** 2) <= 1.0] = True
-        crop_bgr[solid_blob] = (48, 92, 58)
+        solid_bool = (((yy - 70) ** 2) / (52.0 ** 2) + ((xx - 70) ** 2) / (38.0 ** 2)) <= 1.0
+        solid_u8 = solid_bool.astype(np.uint8) * 255
         pocket_reg = ((yy - 52) ** 2 + (xx - 70) ** 2) <= (9.0 ** 2)
-        crop_bgr[pocket_reg] = (234, 239, 243)
-        strap_reg = solid_blob & (yy >= 88) & (yy <= 92)
-        crop_bgr[strap_reg] = (233, 238, 242)
-
-        spec_clean = solid_blob.astype(np.uint8) * 255
+        spec_clean = solid_u8.copy()
         spec_clean[pocket_reg] = 0
 
-        cleaned_bool = step02._subtract_interior_mounting_paper_pockets(
-            solid_blob,
+        red_solid = _reduce_crop_predictions_native_lm3([((18, 32, 122, 108), solid_u8, 0.92, 0)], (140, 140))
+        unpacked_lam, _, _, _ = step02._unpack_reduced_lm3_crop_preds(
+            red_solid,
+            (140, 140),
             specimen_paper_cleaned_mask=spec_clean,
-            crop_bgr=crop_bgr,
-            paper_l_ref=94.0,
         )
-        self.assertFalse(bool(cleaned_bool[52, 70]), "Compact interior mounting-paper pocket must be subtracted.")
-        self.assertTrue(bool(cleaned_bool[90, 70]), "Cross-blade linen mounting strap must not sever the lamina.")
-        n_cc_strap, _ = cv2.connectedComponents(cleaned_bool.astype(np.uint8))
-        self.assertEqual(n_cc_strap - 1, 1, "Cross-blade mounting strap must leave lamina as 1 connected component.")
+        self.assertIsNotNone(unpacked_lam)
+        self.assertEqual(int(unpacked_lam[52, 70]), 0, "Interior pocket absent from specimen_paper_cleaned_mask must be carved out.")
+        self.assertGreater(int(unpacked_lam[90, 70]), 0, "Intact lamina interior must be preserved.")
 
-        # 3A. Hairline (2 px) lobe-tip contact bridge opens cleanly -> enclosed_void_frac == 0.0
-        hairline_mask = np.zeros((140, 140), dtype=np.uint8)
-        cv2.ellipse(hairline_mask, (70, 70), (42, 52), 0, 0, 360, 255, -1)
-        hairline_mask[60:80, 72:118] = 0
-        hairline_mask[60:80, 108:110] = 255
-        opened_u8, evf_hair, n_open_hair = open_hairline_sinus_bridges_and_measure_voids(hairline_mask, max_bridge_px=3.5)
-        self.assertGreaterEqual(n_open_hair, 1)
-        self.assertEqual(evf_hair, 0.0)
-        n_bg_open, _ = cv2.connectedComponents((opened_u8 == 0).astype(np.uint8), connectivity=8)
-        self.assertEqual(n_bg_open - 1, 1, "Hairline 2 px lobe-tip bridge must connect interior sinus to exterior background.")
-
-        # 3B. Broad (10 px) lobe overlap retains topology, lowers void-aware solidity, and triggers ENCLOSED_INTERLOBE_VOID
+        # 2. Read-only enclosed interlobe void measurement, hole_mask exclusion, and ENCLOSED_INTERLOBE_VOID QC
         broad_mask = np.zeros((140, 140), dtype=np.uint8)
         cv2.ellipse(broad_mask, (70, 70), (44, 54), 0, 0, 360, 255, -1)
         broad_mask[52:88, 54:86] = 0
-        kept_u8, evf_broad, n_open_broad = open_hairline_sinus_bridges_and_measure_voids(broad_mask, max_bridge_px=3.5)
-        self.assertEqual(n_open_broad, 0)
+        orig_copy = broad_mask.copy()
+
+        evf_broad = measure_enclosed_interlobe_void_frac(broad_mask)
+        self.assertTrue(np.array_equal(broad_mask, orig_copy), "measure_enclosed_interlobe_void_frac must be strictly read-only.")
         self.assertGreater(evf_broad, 0.05)
-        self.assertEqual(int(kept_u8[70, 70]), 0)
+
+        hole_m = np.zeros_like(broad_mask)
+        hole_m[52:88, 54:86] = 255
+        evf_with_hole = measure_enclosed_interlobe_void_frac(broad_mask, hole_mask=hole_m)
+        self.assertTrue(np.array_equal(broad_mask, orig_copy))
+        self.assertEqual(evf_with_hole, 0.0, "Known hole_mask overlaps (>30%) must be excluded from enclosed void fraction.")
 
         filled_ref = broad_mask.copy()
         cv2.ellipse(filled_ref, (70, 70), (44, 54), 0, 0, 360, 255, -1)
@@ -2706,8 +2725,8 @@ class TestDissectedLeafSegmentationEnhancements(unittest.TestCase):
           1. Subpetiolate lower-cauline stem leaves (`s_stem ~ 0.30`) on flowering shoots are classified
              `cauline` rather than `basal` even when angled toward the crown.
           2. Unrooted upper flowering stem fragments with sessile alternate leaves stay `cauline` (Case 4B).
-          3. `rescore_step02_qc_and_zones.py` migrates SQLite (`user_version = 20261121`), refreshes QC gates,
-             opens hairline sinus bridges, and updates `leaf_zone` across SQLite and `extracted_leaf_manifest.csv`.
+          3. `rescore_step02_qc_and_zones.py` migrates SQLite, refreshes QC gates,
+             measures read-only enclosed interlobe voids, and updates `leaf_zone` across SQLite and `extracted_leaf_manifest.csv`.
         """
         from scripts.core.db import get_db_connection
         from scripts.core.db_schema import PACKERA_SCHEMA_USER_VERSION

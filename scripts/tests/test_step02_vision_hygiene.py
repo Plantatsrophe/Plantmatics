@@ -6,7 +6,7 @@ Step 02 scientific hygiene and vision invariants test suite:
   3. Millimeter-calibrated CIELAB lamina photometry invariance and delta b*.
   4. Verified archival ruler vs. unboxed margin tick-lattice provenance.
   5. Corymbose *_MANY head counting and nodding/aged-ochre capitulum phenology.
-  6. Harmonized EFA/ECT sinus-bridge opening and save_debug_crops gating.
+  6. Read-only enclosed interlobe void measurement with EFA/ECT parity and save_debug_crops gating.
 """
 
 from __future__ import annotations
@@ -46,9 +46,9 @@ from scripts.vision.organ_crown_metrics import (
     classify_leaf_zone_anatomical,
     cluster_plant_individuals,
 )
+from scripts.vision.step02_leaf_traits_utils import measure_enclosed_interlobe_void_frac
 from scripts.vision.step02_photometry_corymb_utils import (
     compute_calibrated_blade_photometry,
-    harmonize_upright_mask_sinus_bridges,
 )
 
 
@@ -286,33 +286,31 @@ class TestStep02VisionHygiene(unittest.TestCase):
         self.assertFalse(res_bud["has_aged_ochre_corollas"])
 
     def test_sinus_bridge_efa_ect_parity_and_debug_crop_gate(self) -> None:
-        """Harmonized sinus opening feeds 120-vertex contours and 32x360 ECT, while save_debug_crops=False skips crop JPEGs."""
+        """Read-only void measurement preserves input pixels while uncut masks feed 120-vertex contours and 32x360 ECT, and save_debug_crops=False skips JPEGs."""
         mask_u8 = np.zeros((160, 160), dtype=np.uint8)
         cv2.ellipse(mask_u8, (80, 80), (45, 58), 0, 0, 360, 255, -1)
         mask_u8[68:92, 82:128] = 0
         mask_u8[68:92, 118:120] = 255
+        orig_copy = mask_u8.copy()
 
-        cleaned_u8, evf = harmonize_upright_mask_sinus_bridges(mask_u8, pixels_per_mm=10.0)
-        self.assertLess(evf, 0.01)
+        evf = measure_enclosed_interlobe_void_frac(mask_u8)
+        self.assertTrue(np.array_equal(mask_u8, orig_copy))
+        self.assertGreater(evf, 0.020)
 
         with tempfile.TemporaryDirectory() as tmp_d:
             tmp_p = Path(tmp_d)
             csv_path, coords = export_standardized_contour(
-                cleaned_u8, "TEST_SINUS", 1, tmp_p / "data",
-                return_coords=True, already_oriented=True, bridge_already_opened=True,
+                mask_u8, "TEST_SINUS", 1, tmp_p / "data",
+                return_coords=True, already_oriented=True,
             )
             self.assertTrue(Path(csv_path).is_file())
             self.assertEqual(len(coords), 120)
-            arr_xy = np.asarray(coords, dtype=np.float64)
-            self.assertTrue(np.any((arr_xy[:, 0] >= 80.0) & (arr_xy[:, 0] <= 116.0) & (arr_xy[:, 1] >= 68.0) & (arr_xy[:, 1] <= 92.0)))
 
             _ensure_ect_module_loaded()
             if "ect" in sys.modules:
-                ect_clean = compute_leaf_ect_descriptor(cleaned_u8, num_dirs=360, num_thresh=32, already_oriented=True)
-                ect_orig = compute_leaf_ect_descriptor(mask_u8, num_dirs=360, num_thresh=32, already_oriented=True)
-                self.assertIsNotNone(ect_clean)
-                self.assertEqual(ect_clean.shape, (32, 360))
-                self.assertFalse(np.allclose(ect_clean, ect_orig))
+                ect_uncut = compute_leaf_ect_descriptor(mask_u8, num_dirs=360, num_thresh=32, already_oriented=True)
+                self.assertIsNotNone(ect_uncut)
+                self.assertEqual(ect_uncut.shape, (32, 360))
 
             sheet = np.full((1000, 800, 3), 235, dtype=np.uint8)
             sheet[60:180, 310:410] = (20, 200, 240)

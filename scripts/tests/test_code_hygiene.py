@@ -97,6 +97,10 @@ FORBIDDEN_OBSOLETE_SAM2_AND_PRUNED_HELPER_TOKENS = (
     "kappa_morph_weight", "kappa_eco_weight", "fig_empirical_taxon_complex_network",
     "vision_xai_audit", "dinov2_feature_cache", "cda_biplot_pdf",
     "generate_cda_biplot_pdf", "render_allometry_diagnostic_pdf", "render_cda_biplot_4panel_pdf",
+    # Retired Step 02 mask-mutating & duplicated helper tokens
+    "_subtract_interior_mounting_paper_pockets", "_build_native_lm3_crop_masks",
+    "harmonize_upright_mask_sinus_bridges", "open_hairline_sinus_bridges_and_measure_voids",
+    "bridge_already_opened", "compute_eroded_blade_cie_l_metrics",
     # LeafMachine2 tokens
     *FORBIDDEN_LEGACY_LM2_TOKENS,
 )
@@ -231,8 +235,11 @@ class TestCodeHygiene(unittest.TestCase):
             PROJECT_ROOT / "scripts" / "data_prep" / "prune_eastern_cohort.py": 500,
             PROJECT_ROOT / "scripts" / "tests" / "test_step01_robustness_audit.py": 380,
             PROJECT_ROOT / "scripts" / "tests" / "test_step01_taxonomic_clarity.py": 400,
+            PROJECT_ROOT / "scripts" / "vision" / "step02_leaf_traits_utils.py": 360,
             PROJECT_ROOT / "scripts" / "vision" / "step02_photometry_corymb_utils.py": 360,
+            PROJECT_ROOT / "scripts" / "vision" / "leaf_geometry_utils.py": 480,
             PROJECT_ROOT / "scripts" / "tests" / "test_step02_vision_hygiene.py": 380,
+            PROJECT_ROOT / "scripts" / "tests" / "test_step02_taxonomic_clarity.py": 400,
             PROJECT_ROOT / "scripts" / "morphometrics" / "step03_config_scale_utils.R": 240,
             PROJECT_ROOT / "scripts" / "morphometrics" / "03_fourier_extractor.R": 500,
             PROJECT_ROOT / "scripts" / "morphometrics" / "fourier_parallel_utils.R": 500,

@@ -8,10 +8,12 @@ Affiliation: University of North Carolina at Chapel Hill Herbarium (NCU)
 Description:
     Fast CPU post-Step-02 re-scoring utility that refreshes Tier A leaf QC flags
     (`detector_class_id`, `is_crop_clipped`, `hole_area_frac`, `enclosed_void_frac`,
-    `bilateral_lobe_symmetry`, `efa_qc_pass`, `qc_flag_reason`), void-aware
-    `solidity` / `circularity`, hairline sinus bridge contours, and anatomical
+    `bilateral_lobe_symmetry`, `efa_qc_pass`, `qc_flag_reason`), read-only Packera
+    margin/base/terminal-lobe traits, void-aware `solidity` / `circularity`,
+    calibrated CIELAB photometry plus rosette abaxial-leaf flags, and anatomical
     `basal` vs. `cauline` leaf zones across `extracted_leaves` in SQLite and
-    `data/tables/extracted_leaf_manifest.csv` without re-running GPU inference.
+    `data/tables/extracted_leaf_manifest.csv` without mutating masks or contours
+    or re-running GPU inference.
 ===============================================================================
 """
 
@@ -19,7 +21,6 @@ from __future__ import annotations
 
 import argparse
 import inspect
-import json
 import logging
 import math
 import os
@@ -39,10 +40,8 @@ if str(PROJECT_ROOT) not in sys.path:
 from scripts.core.config import PipelineConfig, resolve_max_workers
 from scripts.core.db import get_db_connection
 from scripts.core.io_utils import atomic_write_text
-from scripts.vision.leaf_geometry_utils import (
-    compute_lm3_shape_metrics,
-    export_standardized_contour,
-)
+from scripts.vision.leaf_geometry_utils import compute_lm3_shape_metrics
+from scripts.vision.lm3_compat import rotate_image
 from scripts.vision.lm3_data_loader import _CALIBRATED_SCALE_SOURCES
 from scripts.vision.lm3_inference_engines import (
     LM3ScaleCalibrator,
@@ -50,10 +49,14 @@ from scripts.vision.lm3_inference_engines import (
     solve_ruler_tick_lattice_px_per_mm,
 )
 from scripts.vision.organ_crown_metrics import classify_leaf_zone_anatomical
+from scripts.vision.step02_leaf_traits_utils import (
+    evaluate_rosette_abaxial_leaf_flags,
+    extract_packera_leaf_margin_and_base_traits,
+    measure_enclosed_interlobe_void_frac,
+)
 from scripts.vision.step02_photometry_corymb_utils import (
     compute_calibrated_blade_photometry,
     estimate_sheet_paper_cie_l_ref,
-    harmonize_upright_mask_sinus_bridges,
 )
 
 logging.basicConfig(
@@ -99,7 +102,7 @@ def _resolve_voucher_image_file(raw_image_path: Any, catalog_number: str, data_d
 
 
 def _eval_single_leaf_qc_worker(task: Tuple[Dict[str, Any], str, bool]) -> Dict[str, Any]:
-    """Evaluate hairline sinus bridges, void-aware solidity/circ, and EFA QC gates for 1 leaf."""
+    """Read-only evaluation of enclosed voids, Packera margin/base traits, solidity/circ, and EFA QC gates."""
     row, data_dir_str, seg_partial = task
     eff_data_dir = Path(data_dir_str)
     m_file = _resolve_mask_file(row.get("mask_path"), eff_data_dir)
@@ -126,28 +129,13 @@ def _eval_single_leaf_qc_worker(task: Tuple[Dict[str, Any], str, bool]) -> Dict[
     dcid_val = _ival("detector_class_id", 0)
     haf_val = _fval("hole_area_frac", 0.0)
     clipped_val = bool(_ival("is_crop_clipped", 0))
-    evf_val = 0.0
-    new_cjson: Optional[str] = None
-    cal_src_set = {str(s).strip().lower() for s in _CALIBRATED_SCALE_SOURCES}
-    ss_row = str(row.get("scale_source") or "").strip().lower()
-    raw_px_row = row.get("pixels_per_mm")
-    if raw_px_row is None or pd.isna(raw_px_row):
-        raw_px_row = row.get("voucher_px_per_mm")
-    is_cal_row = (
-        (_ival("is_calibrated_mm", 0) == 1 or _ival("voucher_is_cal", 0) == 1)
-        and (not ss_row or ss_row in cal_src_set)
-    )
-    px_mm_eval: Optional[float] = (
-        float(raw_px_row)
-        if (
-            is_cal_row
-            and raw_px_row is not None
-            and pd.notna(raw_px_row)
-            and math.isfinite(float(raw_px_row))
-            and float(raw_px_row) > 0.0
-        )
-        else None
-    )
+    evf_val = _fval("enclosed_void_frac", 0.0)
+    packera_traits: Dict[str, float] = {
+        "basal_cordate_index": _fval("basal_cordate_index", float("nan")),
+        "margin_serration_index": _fval("margin_serration_index", float("nan")),
+        "margin_tooth_acuteness": _fval("margin_tooth_acuteness", float("nan")),
+        "terminal_lobe_area_frac": _fval("terminal_lobe_area_frac", float("nan")),
+    }
 
     if mask_u8 is not None:
         hm, wm = mask_u8.shape[:2]
@@ -160,29 +148,12 @@ def _eval_single_leaf_qc_worker(task: Tuple[Dict[str, Any], str, bool]) -> Dict[
         ):
             clipped_val = True
 
-        orig_u8 = mask_u8
-        cleaned_u8, evf_val = harmonize_upright_mask_sinus_bridges(
-            orig_u8,
-            pixels_per_mm=px_mm_eval,
-        )
-        was_opened = not np.array_equal(cleaned_u8, orig_u8)
-        mask_u8 = cleaned_u8
+        evf_val = float(measure_enclosed_interlobe_void_frac(mask_u8, hole_mask=None))
+        packera_traits = extract_packera_leaf_margin_and_base_traits(mask_u8, oriented_points=None)
         shape_m = compute_lm3_shape_metrics(mask_u8)
         if shape_m["area_px"] > 0.0:
             sol_val = round(float(shape_m["solidity"]), 4)
             circ_val = round(float(shape_m["circularity"]), 4)
-        if was_opened:
-            c_res = export_standardized_contour(
-                mask_u8,
-                str(row["catalogNumber"]),
-                int(row["leaf_id"]),
-                eff_data_dir,
-                return_coords=True,
-                already_oriented=bool(_ival("mask_is_upright", 1) or 1),
-                bridge_already_opened=True,
-            )
-            if isinstance(c_res, tuple) and c_res[1]:
-                new_cjson = json.dumps(c_res[1], separators=(",", ":"))
 
     qc_res = evaluate_leaf_damage_and_fold_qc(
         oriented_mask_u8=mask_u8,
@@ -208,8 +179,11 @@ def _eval_single_leaf_qc_worker(task: Tuple[Dict[str, Any], str, bool]) -> Dict[
         "bilateral_lobe_symmetry": 1 if qc_res["bilateral_lobe_symmetry"] else 0,
         "efa_qc_pass": 1 if qc_res["efa_qc_pass"] else 0,
         "qc_flag_reason": str(qc_res["qc_flag_reason"]),
-        "contour_xy_json": new_cjson,
         "min_rms": float(qc_res["min_margin_rms_norm"]),
+        "basal_cordate_index": packera_traits.get("basal_cordate_index", float("nan")),
+        "margin_serration_index": packera_traits.get("margin_serration_index", float("nan")),
+        "margin_tooth_acuteness": packera_traits.get("margin_tooth_acuteness", float("nan")),
+        "terminal_lobe_area_frac": packera_traits.get("terminal_lobe_area_frac", float("nan")),
     }
 
 
@@ -241,6 +215,27 @@ def _resolve_crop_file(raw_crop_path: Any, data_dir: Path) -> Optional[Path]:
     return None
 
 
+def _align_rotated_patch_to_mask(
+    patch_bgr: np.ndarray,
+    target_hw: Tuple[int, int],
+    pad_val: int = 255,
+) -> np.ndarray:
+    """Align a rotated sheet crop to an upright mask by 1:1 center-crop/pad or scale-matched resize."""
+    th, tw = int(target_hw[0]), int(target_hw[1])
+    ph, pw = int(patch_bgr.shape[0]), int(patch_bgr.shape[1])
+    if (ph, pw) == (th, tw):
+        return patch_bgr
+    if th <= ph + 20 and tw <= pw + 20 and ph <= max(int(2.2 * th), th + 48) and pw <= max(int(2.2 * tw), tw + 48):
+        canvas = np.full((th, tw, patch_bgr.shape[2]), pad_val, dtype=patch_bgr.dtype)
+        sy0, sx0 = max(0, (ph - th) // 2), max(0, (pw - tw) // 2)
+        dy0, dx0 = max(0, (th - ph) // 2), max(0, (tw - pw) // 2)
+        copy_h, copy_w = min(ph - sy0, th - dy0), min(pw - sx0, tw - dx0)
+        if copy_h > 0 and copy_w > 0:
+            canvas[dy0 : dy0 + copy_h, dx0 : dx0 + copy_w] = patch_bgr[sy0 : sy0 + copy_h, sx0 : sx0 + copy_w]
+        return canvas
+    return cv2.resize(patch_bgr, (tw, th), interpolation=cv2.INTER_AREA)
+
+
 def rescore_tier_a_leaves(
     db_path: Optional[Path] = None,
     data_dir: Optional[Path] = None,
@@ -249,7 +244,7 @@ def rescore_tier_a_leaves(
     recompute_photometry: bool = False,
     workers: Optional[int] = None,
 ) -> Dict[str, int]:
-    """Re-evaluates leaf QC gates, hairline sinus bridges, ruler scales, and basal/cauline zones."""
+    """Re-evaluates read-only leaf QC gates, Packera traits, ruler scales, photometry, and basal/cauline zones."""
     cfg = PipelineConfig.from_yaml()
     eff_data_dir = (Path(data_dir) if data_dir is not None else (PROJECT_ROOT / "data")).resolve()
     eff_manifest = (
@@ -481,8 +476,11 @@ def rescore_tier_a_leaves(
         qc_cols = [
             "catalogNumber", "leaf_id", "mask_path", "solidity", "circularity",
             "bilateral_dice", "si_a", "lm3_gates_pass", "n_lamina_components",
-            "detector_class_id", "hole_area_frac", "is_crop_clipped", "mask_is_upright",
-            "pixels_per_mm", "is_calibrated_mm", "scale_source", "voucher_px_per_mm", "voucher_is_cal",
+            "detector_class_id", "hole_area_frac", "enclosed_void_frac", "is_crop_clipped",
+            "mask_is_upright", "pixels_per_mm", "is_calibrated_mm", "scale_source",
+            "voucher_px_per_mm", "voucher_is_cal",
+            "basal_cordate_index", "margin_serration_index", "margin_tooth_acuteness",
+            "terminal_lobe_area_frac",
         ]
         avail_qc_cols = [c for c in qc_cols if c in el_df.columns]
         qc_tasks = [
@@ -505,7 +503,10 @@ def rescore_tier_a_leaves(
         el_df["efa_qc_pass"] = [r["efa_qc_pass"] for r in qc_results]
         el_df["qc_flag_reason"] = [r["qc_flag_reason"] for r in qc_results]
         el_df["_min_rms"] = [r["min_rms"] for r in qc_results]
-        upd_contour_json: List[Optional[str]] = [r["contour_xy_json"] for r in qc_results]
+        el_df["basal_cordate_index"] = [r["basal_cordate_index"] for r in qc_results]
+        el_df["margin_serration_index"] = [r["margin_serration_index"] for r in qc_results]
+        el_df["margin_tooth_acuteness"] = [r["margin_tooth_acuteness"] for r in qc_results]
+        el_df["terminal_lobe_area_frac"] = [r["terminal_lobe_area_frac"] for r in qc_results]
 
         # Re-evaluate basal vs. cauline leaf zones per (catalogNumber, plant_individual_id)
         crown_backfills: List[Tuple[float, float, str, int]] = []
@@ -629,22 +630,33 @@ def rescore_tier_a_leaves(
             "blade_cie_l_norm",
             "blade_cie_l_sd",
             "blade_cie_l_sheet_delta",
+            "blade_cie_l_q85_sheet_delta",
+            "basal_zone_cie_l_delta",
             "blade_cie_a_delta",
             "blade_cie_b_delta",
+            "abaxial_cie_l_sheet_delta",
         ):
             if _pcol not in el_df.columns:
                 el_df[_pcol] = np.nan
+        if "is_abaxial_pressed_leaf" not in el_df.columns:
+            el_df["is_abaxial_pressed_leaf"] = 0
 
         upd_cie_l_norm: List[Optional[float]] = [None] * n_rows
         upd_cie_l_sd: List[Optional[float]] = [None] * n_rows
         upd_cie_l_sheet_delta: List[Optional[float]] = [None] * n_rows
+        upd_cie_l_q85_sheet_delta: List[Optional[float]] = [None] * n_rows
+        upd_basal_zone_cie_l_delta: List[Optional[float]] = [None] * n_rows
         upd_cie_a_delta: List[Optional[float]] = [None] * n_rows
         upd_cie_b_delta: List[Optional[float]] = [None] * n_rows
         n_photo_upd = 0
         n_sheet_delta_rec = 0
-        null_sheet_delta_mask = pd.to_numeric(el_df["blade_cie_l_sheet_delta"], errors="coerce").isna()
+        prior_abax_mask = pd.to_numeric(el_df["is_abaxial_pressed_leaf"], errors="coerce").fillna(0).astype(int) == 1
+        null_sheet_delta_mask = pd.to_numeric(el_df["blade_cie_l_sheet_delta"], errors="coerce").isna() & (~prior_abax_mask)
         if recompute_photometry or bool(null_sheet_delta_mask.any()):
-            by_cat_photo: Dict[str, List[Tuple[int, Any, Any, Any, Optional[float], bool, Optional[float]]]] = {}
+            by_cat_photo: Dict[
+                str,
+                List[Tuple[int, Any, Any, Any, Optional[float], bool, Optional[float], Optional[float], Optional[Tuple[int, int, int, int]], Optional[float]]],
+            ] = {}
             for pos_p, (_idx_p, row_p) in enumerate(el_df.iterrows()):
                 if not recompute_photometry and not bool(null_sheet_delta_mask.iloc[pos_p]):
                     continue
@@ -669,6 +681,27 @@ def rescore_tier_a_leaves(
                     if (ex_ln_raw is not None and pd.notna(ex_ln_raw) and math.isfinite(float(ex_ln_raw)))
                     else None
                 )
+                ex_lsd_raw = row_p.get("blade_cie_l_sheet_delta")
+                ex_lsd_p = (
+                    float(ex_lsd_raw)
+                    if (ex_lsd_raw is not None and pd.notna(ex_lsd_raw) and math.isfinite(float(ex_lsd_raw)))
+                    else None
+                )
+                bbox_xyxy_p: Optional[Tuple[int, int, int, int]] = None
+                if all(c in row_p and pd.notna(row_p.get(c)) for c in ("bbox_x1", "bbox_y1", "bbox_x2", "bbox_y2")):
+                    try:
+                        bx1_p, by1_p = int(round(float(row_p["bbox_x1"]))), int(round(float(row_p["bbox_y1"])))
+                        bx2_p, by2_p = int(round(float(row_p["bbox_x2"]))), int(round(float(row_p["bbox_y2"])))
+                        if bx2_p > bx1_p and by2_p > by1_p:
+                            bbox_xyxy_p = (bx1_p, by1_p, bx2_p, by2_p)
+                    except (TypeError, ValueError):
+                        bbox_xyxy_p = None
+                ma_raw = row_p.get("midrib_angle_deg")
+                midrib_ang_p = (
+                    float(ma_raw)
+                    if (ma_raw is not None and pd.notna(ma_raw) and math.isfinite(float(ma_raw)))
+                    else None
+                )
                 by_cat_photo.setdefault(cat_p, []).append((
                     pos_p,
                     row_p.get("image_path"),
@@ -677,24 +710,30 @@ def rescore_tier_a_leaves(
                     px_mm_p,
                     is_up_p,
                     ex_ln_p,
+                    ex_lsd_p,
+                    bbox_xyxy_p,
+                    midrib_ang_p,
                 ))
 
             def _photo_sheet_worker(
-                item: Tuple[str, List[Tuple[int, Any, Any, Any, Optional[float], bool, Optional[float]]]],
-            ) -> List[Tuple[int, Optional[float], Optional[float], Optional[float], Optional[float], Optional[float]]]:
+                item: Tuple[
+                    str,
+                    List[Tuple[int, Any, Any, Any, Optional[float], bool, Optional[float], Optional[float], Optional[Tuple[int, int, int, int]], Optional[float]]],
+                ],
+            ) -> List[Tuple[int, Optional[float], Optional[float], Optional[float], Optional[float], Optional[float], Optional[float], Optional[float]]]:
                 cat_w, recs_w = item
                 img_f = _resolve_voucher_image_file(recs_w[0][1], cat_w, eff_data_dir)
                 img_bgr = cv2.imread(str(img_f), cv2.IMREAD_COLOR) if img_f is not None else None
                 sh_hw = img_bgr.shape[:2] if (img_bgr is not None and img_bgr.ndim == 3 and img_bgr.size > 0) else None
                 paper_ref: Optional[float] = estimate_sheet_paper_cie_l_ref(img_bgr) if sh_hw is not None else None
                 out_w: List[
-                    Tuple[int, Optional[float], Optional[float], Optional[float], Optional[float], Optional[float]]
+                    Tuple[int, Optional[float], Optional[float], Optional[float], Optional[float], Optional[float], Optional[float], Optional[float]]
                 ] = []
-                for pos_i, _, m_raw, c_raw, px_mm_i, is_up_i, ex_ln_i in recs_w:
+                for pos_i, _, m_raw, c_raw, px_mm_i, is_up_i, ex_ln_i, ex_lsd_i, bbox_i, midrib_ang_i in recs_w:
                     m_f = _resolve_mask_file(m_raw, eff_data_dir)
                     m_u8 = cv2.imread(str(m_f), cv2.IMREAD_GRAYSCALE) if m_f is not None else None
                     if m_u8 is None or int(np.count_nonzero(m_u8)) == 0:
-                        out_w.append((pos_i, None, None, None, None, None))
+                        out_w.append((pos_i, None, None, None, None, None, None, None))
                         continue
                     mh_mw = m_u8.shape[:2]
                     c_f = _resolve_crop_file(c_raw, eff_data_dir)
@@ -710,6 +749,22 @@ def rescore_tier_a_leaves(
                             res_p = compute_calibrated_blade_photometry(
                                 c_bgr, m_use, mask_origin=(0, 0), paper_l_ref=paper_ref, pixels_per_mm=px_mm_i
                             )
+                        elif img_bgr is not None and sh_hw is not None and bbox_i is not None:
+                            sh_h, sh_w = int(sh_hw[0]), int(sh_hw[1])
+                            bx1 = max(0, min(sh_w - 1, bbox_i[0]))
+                            by1 = max(0, min(sh_h - 1, bbox_i[1]))
+                            bx2 = max(bx1 + 1, min(sh_w, bbox_i[2]))
+                            by2 = max(by1 + 1, min(sh_h, bbox_i[3]))
+                            crop_b = img_bgr[by1:by2, bx1:bx2]
+                            if crop_b.size > 0:
+                                if is_up_i and midrib_ang_i is not None and math.isfinite(midrib_ang_i):
+                                    ang_cw = (-(midrib_ang_i + 90.0)) % 360.0
+                                    if 0.25 < ang_cw < 359.75:
+                                        crop_b = rotate_image(crop_b, ang_cw, bg=255, nearest=False)
+                                aligned_bgr = _align_rotated_patch_to_mask(crop_b, mh_mw, pad_val=255)
+                                res_p = compute_calibrated_blade_photometry(
+                                    aligned_bgr, m_u8, mask_origin=(0, 0), paper_l_ref=paper_ref, pixels_per_mm=px_mm_i
+                                )
                         elif img_bgr is not None and sh_hw is not None:
                             if mh_mw == sh_hw:
                                 res_p = compute_calibrated_blade_photometry(
@@ -727,7 +782,7 @@ def rescore_tier_a_leaves(
                                     res_p = compute_calibrated_blade_photometry(
                                         img_bgr, m_res, mask_origin=(0, 0), paper_l_ref=paper_ref, pixels_per_mm=px_mm_i
                                     )
-                                elif ex_ln_i is not None and 0.0 <= ex_ln_i <= 1.25 and paper_ref is not None:
+                                elif ex_lsd_i is None and ex_ln_i is not None and 0.0 <= ex_ln_i <= 1.25 and paper_ref is not None:
                                     y_p = ((paper_ref + 16.0) / 116.0) ** 3 if paper_ref > 8.0 else paper_ref / 903.3
                                     y_rat = ((ex_ln_i + 0.16) / 1.16) ** 3 if ex_ln_i > 0.08 else (ex_ln_i / 9.03296296)
                                     y_bld = max(0.0, y_rat * max(y_p, 1e-4))
@@ -737,12 +792,12 @@ def rescore_tier_a_leaves(
                                         else 903.3 * y_bld
                                     )
                                     lsd_rec = round(float(med_l_rec - paper_ref), 4)
-                                    out_w.append((pos_i, None, None, lsd_rec if math.isfinite(lsd_rec) else None, None, None))
+                                    out_w.append((pos_i, None, None, lsd_rec if math.isfinite(lsd_rec) else None, None, None, None, None))
                                     continue
                     except Exception:
                         res_p = None
                     if not isinstance(res_p, dict):
-                        out_w.append((pos_i, None, None, None, None, None))
+                        out_w.append((pos_i, None, None, None, None, None, None, None))
                         continue
 
                     def _fin_opt(k_name: str) -> Optional[float]:
@@ -757,6 +812,8 @@ def rescore_tier_a_leaves(
                         _fin_opt("blade_cie_l_norm"),
                         _fin_opt("blade_cie_l_sd"),
                         _fin_opt("blade_cie_l_sheet_delta"),
+                        _fin_opt("blade_cie_l_q85_sheet_delta"),
+                        _fin_opt("basal_zone_cie_l_delta"),
                         _fin_opt("blade_cie_a_delta"),
                         _fin_opt("blade_cie_b_delta"),
                     ))
@@ -769,7 +826,7 @@ def rescore_tier_a_leaves(
             else:
                 photo_batches = [_photo_sheet_worker(it) for it in photo_items]
             for batch in photo_batches:
-                for pos_i, ln_v, ls_v, lsd_v, a_v, b_v in batch:
+                for pos_i, ln_v, ls_v, lsd_v, lq85_v, bas_l_v, a_v, b_v in batch:
                     did_upd = False
                     if ln_v is not None:
                         upd_cie_l_norm[pos_i] = ln_v
@@ -783,6 +840,14 @@ def rescore_tier_a_leaves(
                         upd_cie_l_sheet_delta[pos_i] = lsd_v
                         el_df.iat[pos_i, el_df.columns.get_loc("blade_cie_l_sheet_delta")] = lsd_v
                         did_upd = True
+                    if lq85_v is not None:
+                        upd_cie_l_q85_sheet_delta[pos_i] = lq85_v
+                        el_df.iat[pos_i, el_df.columns.get_loc("blade_cie_l_q85_sheet_delta")] = lq85_v
+                        did_upd = True
+                    if bas_l_v is not None:
+                        upd_basal_zone_cie_l_delta[pos_i] = bas_l_v
+                        el_df.iat[pos_i, el_df.columns.get_loc("basal_zone_cie_l_delta")] = bas_l_v
+                        did_upd = True
                     if a_v is not None:
                         upd_cie_a_delta[pos_i] = a_v
                         el_df.iat[pos_i, el_df.columns.get_loc("blade_cie_a_delta")] = a_v
@@ -792,16 +857,43 @@ def rescore_tier_a_leaves(
                         el_df.iat[pos_i, el_df.columns.get_loc("blade_cie_b_delta")] = b_v
                         did_upd = True
                     if did_upd:
-                        if any(v is not None for v in (ln_v, ls_v, a_v, b_v)):
+                        if any(v is not None for v in (ln_v, ls_v, lq85_v, bas_l_v, a_v, b_v)):
                             n_photo_upd += 1
                         else:
                             n_sheet_delta_rec += 1
             logger.info(
-                f"CPU photometry recompute updated {n_photo_upd} / {n_rows} leaves where crop or sheet-matched mask existed "
+                f"CPU photometry recompute updated {n_photo_upd} / {n_rows} leaves where crop, bbox, or sheet-matched mask existed "
                 f"(+ {n_sheet_delta_rec} algebraic sheet-delta backfills)."
             )
 
-        # Persist updated QC, ruler scale, and leaf_zone columns atomically to SQLite
+        # Evaluate within-rosette flipped abaxial basal leaves across rescored records
+        abax_records: List[Dict[str, Any]] = []
+        for pos_a, (_, r_a) in enumerate(el_df.iterrows()):
+            lsd_a = r_a.get("blade_cie_l_sheet_delta")
+            if (lsd_a is None or pd.isna(lsd_a)) and bool(prior_abax_mask.iloc[pos_a]) and pd.notna(r_a.get("abaxial_cie_l_sheet_delta")):
+                lsd_a = r_a.get("abaxial_cie_l_sheet_delta")
+            abax_records.append({
+                "catalogNumber": str(r_a["catalogNumber"]).strip(),
+                "plant_individual_id": int(r_a["plant_individual_id"]) if pd.notna(r_a.get("plant_individual_id")) else 0,
+                "leaf_zone": str(r_a.get("leaf_zone") or "basal"),
+                "blade_cie_l_norm": r_a.get("blade_cie_l_norm"),
+                "blade_cie_l_sheet_delta": lsd_a,
+                "blade_cie_a_delta": r_a.get("blade_cie_a_delta"),
+                "blade_cie_b_delta": r_a.get("blade_cie_b_delta"),
+            })
+        evaluate_rosette_abaxial_leaf_flags(abax_records)
+        col_ln_idx = el_df.columns.get_loc("blade_cie_l_norm")
+        col_lsd_idx = el_df.columns.get_loc("blade_cie_l_sheet_delta")
+        el_df["is_abaxial_pressed_leaf"] = [1 if rec_a.get("is_abaxial_pressed_leaf") else 0 for rec_a in abax_records]
+        el_df["abaxial_cie_l_sheet_delta"] = [rec_a.get("abaxial_cie_l_sheet_delta", np.nan) for rec_a in abax_records]
+        for pos_a, rec_a in enumerate(abax_records):
+            if rec_a.get("is_abaxial_pressed_leaf"):
+                el_df.iat[pos_a, col_ln_idx] = np.nan
+                el_df.iat[pos_a, col_lsd_idx] = np.nan
+                upd_cie_l_norm[pos_a] = None
+                upd_cie_l_sheet_delta[pos_a] = None
+
+        # Persist updated QC, Packera traits, ruler scale, photometry, and leaf_zone columns atomically to SQLite
         def _opt_float(val: Any) -> Optional[float]:
             if val is None or pd.isna(val):
                 return None
@@ -810,7 +902,8 @@ def rescore_tier_a_leaves(
 
         sql_rows: List[Tuple[Any, ...]] = []
         for pos_i, (_, r_u) in enumerate(el_df.iterrows()):
-            cjson_new = upd_contour_json[pos_i]
+            ss_val = str(r_u.get("scale_source") or "")
+            is_abax_i = int(r_u.get("is_abaxial_pressed_leaf") or 0)
             sql_rows.append((
                 _opt_float(r_u["solidity"]),
                 _opt_float(r_u["circularity"]),
@@ -826,18 +919,28 @@ def rescore_tier_a_leaves(
                 _opt_float(r_u.get("dist_from_crown_norm")),
                 _opt_float(r_u.get("pixels_per_mm")),
                 int(r_u.get("is_calibrated_mm") or 0),
-                str(r_u.get("scale_source") or ""),
+                ss_val,
+                ss_val,
                 _opt_float(r_u.get("area_mm2")),
                 _opt_float(r_u.get("blade_length_mm")),
                 _opt_float(r_u.get("blade_width_mm")),
                 _opt_float(r_u.get("petiole_length_mm")),
                 _opt_float(r_u.get("petiole_width_mm")),
-                cjson_new,
+                _opt_float(r_u.get("basal_cordate_index")),
+                _opt_float(r_u.get("margin_serration_index")),
+                _opt_float(r_u.get("margin_tooth_acuteness")),
+                _opt_float(r_u.get("terminal_lobe_area_frac")),
+                is_abax_i,
                 _opt_float(upd_cie_l_norm[pos_i]),
                 _opt_float(upd_cie_l_sd[pos_i]),
+                is_abax_i,
                 _opt_float(upd_cie_l_sheet_delta[pos_i]),
+                _opt_float(upd_cie_l_q85_sheet_delta[pos_i]),
+                _opt_float(upd_basal_zone_cie_l_delta[pos_i]),
                 _opt_float(upd_cie_a_delta[pos_i]),
                 _opt_float(upd_cie_b_delta[pos_i]),
+                is_abax_i,
+                _opt_float(r_u.get("abaxial_cie_l_sheet_delta")),
                 str(r_u["catalogNumber"]),
                 int(r_u["plant_individual_id"]),
                 int(r_u["leaf_id"]),
@@ -867,18 +970,22 @@ def rescore_tier_a_leaves(
                     blade_width_mm = COALESCE(?, blade_width_mm),
                     petiole_length_mm = COALESCE(?, petiole_length_mm),
                     petiole_width_mm = COALESCE(?, petiole_width_mm),
-                    contour_xy_json = COALESCE(?, contour_xy_json),
-                    blade_cie_l_norm = COALESCE(?, blade_cie_l_norm),
+                    basal_cordate_index = COALESCE(?, basal_cordate_index),
+                    margin_serration_index = COALESCE(?, margin_serration_index),
+                    margin_tooth_acuteness = COALESCE(?, margin_tooth_acuteness),
+                    terminal_lobe_area_frac = COALESCE(?, terminal_lobe_area_frac),
+                    blade_cie_l_norm = CASE WHEN ? = 1 THEN NULL ELSE COALESCE(?, blade_cie_l_norm) END,
                     blade_cie_l_sd = COALESCE(?, blade_cie_l_sd),
-                    blade_cie_l_sheet_delta = COALESCE(?, blade_cie_l_sheet_delta),
+                    blade_cie_l_sheet_delta = CASE WHEN ? = 1 THEN NULL ELSE COALESCE(?, blade_cie_l_sheet_delta) END,
+                    blade_cie_l_q85_sheet_delta = COALESCE(?, blade_cie_l_q85_sheet_delta),
+                    basal_zone_cie_l_delta = COALESCE(?, basal_zone_cie_l_delta),
                     blade_cie_a_delta = COALESCE(?, blade_cie_a_delta),
-                    blade_cie_b_delta = COALESCE(?, blade_cie_b_delta)
+                    blade_cie_b_delta = COALESCE(?, blade_cie_b_delta),
+                    is_abaxial_pressed_leaf = ?,
+                    abaxial_cie_l_sheet_delta = ?
                 WHERE catalogNumber = ? AND plant_individual_id = ? AND leaf_id = ?;
                 """,
-                [
-                    r[:14] + (r[14], r[14]) + r[15:]
-                    for r in sql_rows
-                ],
+                sql_rows,
             )
             if crown_backfills:
                 conn.executemany(
@@ -982,17 +1089,25 @@ def rescore_tier_a_leaves(
                     "blade_width_mm",
                     "petiole_length_mm",
                     "petiole_width_mm",
+                    "basal_cordate_index",
+                    "margin_serration_index",
+                    "margin_tooth_acuteness",
+                    "terminal_lobe_area_frac",
                     "blade_cie_l_norm",
                     "blade_cie_l_sd",
                     "blade_cie_l_sheet_delta",
+                    "blade_cie_l_q85_sheet_delta",
+                    "basal_zone_cie_l_delta",
                     "blade_cie_a_delta",
                     "blade_cie_b_delta",
+                    "is_abaxial_pressed_leaf",
+                    "abaxial_cie_l_sheet_delta",
                 )
                 for col_s in sync_cols:
                     if col_s not in m_df.columns:
                         if col_s in {"qc_flag_reason", "leaf_zone", "scale_source"}:
                             m_df[col_s] = ""
-                        elif col_s in {"is_crop_clipped", "bilateral_lobe_symmetry", "efa_qc_pass", "is_calibrated_mm"}:
+                        elif col_s in {"is_crop_clipped", "bilateral_lobe_symmetry", "efa_qc_pass", "is_calibrated_mm", "is_abaxial_pressed_leaf"}:
                             m_df[col_s] = col_s == "efa_qc_pass"
                         elif col_s in {"detector_class_id", "plant_individual_id"}:
                             m_df[col_s] = 0
@@ -1001,7 +1116,7 @@ def rescore_tier_a_leaves(
                     elif col_s not in {
                         "qc_flag_reason", "leaf_zone", "scale_source",
                         "is_crop_clipped", "bilateral_lobe_symmetry", "efa_qc_pass",
-                        "is_calibrated_mm", "detector_class_id", "plant_individual_id",
+                        "is_calibrated_mm", "is_abaxial_pressed_leaf", "detector_class_id", "plant_individual_id",
                     }:
                         m_df[col_s] = pd.to_numeric(m_df[col_s], errors="coerce")
                 for _, r_u in el_df.iterrows():
@@ -1013,7 +1128,7 @@ def rescore_tier_a_leaves(
                         mi = cat_leaf_to_idx.get((cat_u, lid_u))
                     if mi is not None:
                         for col_s in sync_cols:
-                            if col_s in {"is_crop_clipped", "bilateral_lobe_symmetry", "efa_qc_pass", "is_calibrated_mm"}:
+                            if col_s in {"is_crop_clipped", "bilateral_lobe_symmetry", "efa_qc_pass", "is_calibrated_mm", "is_abaxial_pressed_leaf"}:
                                 m_df.at[mi, col_s] = bool(r_u[col_s])
                             elif col_s in {"detector_class_id", "plant_individual_id"}:
                                 m_df.at[mi, col_s] = int(r_u[col_s])

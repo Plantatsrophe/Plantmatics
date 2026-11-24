@@ -449,13 +449,16 @@ def _load_mask_or_contour_u8(row: pd.Series, out_dir: Path) -> Tuple[Optional[np
         if ("mask_is_upright" in row and pd.notna(row.get("mask_is_upright")))
         else True
     )
-    angle_cw: Optional[float] = None
-    if not is_upright:
-        m_ang = row.get("midrib_angle_deg", np.nan)
-        if pd.notna(m_ang) and str(m_ang).strip() != "":
-            scw = -(float(m_ang) + 90.0)
-            if abs(scw % 360.0) > 0.25:
-                angle_cw = float(scw % 360.0)
+    rot_cw: Optional[float] = None
+    m_ang = row.get("midrib_angle_deg", np.nan)
+    if pd.notna(m_ang) and str(m_ang).strip() != "":
+        try:
+            scw = (-(float(m_ang) + 90.0)) % 360.0
+            if 0.25 < scw < 359.75:
+                rot_cw = float(scw)
+        except (TypeError, ValueError):
+            rot_cw = None
+    angle_cw: Optional[float] = None if is_upright else rot_cw
 
     # Attempt to extract authentic RGB crop from voucher sheet if bbox and scan exist
     img_cand = _resolve_asset_path(row.get("image_path", ""), out_dir)
@@ -480,8 +483,23 @@ def _load_mask_or_contour_u8(row: pd.Series, out_dir: Path) -> Tuple[Optional[np
                     x2 = max(x1 + 1, min(W_f, int(round(float(row["bbox_x2"])))))
                     y2 = max(y1 + 1, min(H_f, int(round(float(row["bbox_y2"])))))
                     crop_rgb = cv2.cvtColor(bgr_full[y1:y2, x1:x2], cv2.COLOR_BGR2RGB)
-                    if crop_rgb.shape[:2] != mask_u8.shape[:2]:
-                        crop_rgb = cv2.resize(crop_rgb, (mask_u8.shape[1], mask_u8.shape[0]), interpolation=cv2.INTER_AREA)
+                    if is_upright and rot_cw is not None:
+                        from leafmachine3.core.imaging import rotate_image
+
+                        crop_rgb = rotate_image(crop_rgb, rot_cw, bg=255, nearest=False)
+                    mh, mw = mask_u8.shape[:2]
+                    ch_r, cw_r = crop_rgb.shape[:2]
+                    if (ch_r, cw_r) != (mh, mw):
+                        if is_upright and mh <= ch_r + 20 and mw <= cw_r + 20 and ch_r <= max(int(2.2 * mh), mh + 48) and cw_r <= max(int(2.2 * mw), mw + 48):
+                            aligned = np.full((mh, mw, 3), 255, dtype=np.uint8)
+                            sy0, sx0 = max(0, (ch_r - mh) // 2), max(0, (cw_r - mw) // 2)
+                            dy0, dx0 = max(0, (mh - ch_r) // 2), max(0, (mw - cw_r) // 2)
+                            cp_h, cp_w = min(ch_r - sy0, mh - dy0), min(cw_r - sx0, mw - dx0)
+                            if cp_h > 0 and cp_w > 0:
+                                aligned[dy0 : dy0 + cp_h, dx0 : dx0 + cp_w] = crop_rgb[sy0 : sy0 + cp_h, sx0 : sx0 + cp_w]
+                            crop_rgb = aligned
+                        else:
+                            crop_rgb = cv2.resize(crop_rgb, (mw, mh), interpolation=cv2.INTER_AREA)
                     rgb_patch = crop_rgb
             except Exception:
                 rgb_patch = None
@@ -623,7 +641,7 @@ def _render_lm3_ect_rgb(mask_u8: np.ndarray, n_dirs: int = 160, size: int = 320)
     from leafmachine3.core.ect_compute import compute_ect
     from leafmachine3.reporting.ect_viz import render_radial_ect_overlay, visual_log
 
-    ect_res = compute_ect(mask_u8, num_dirs=int(n_dirs), bound_radius=1.0, want_simple=True)
+    ect_res = compute_ect(mask_u8, num_dirs=int(n_dirs), bound_radius=1.0, want_simple=False)
     if ect_res is None or getattr(ect_res, "ect_matrix", None) is None:
         return None
     bgr = render_radial_ect_overlay(

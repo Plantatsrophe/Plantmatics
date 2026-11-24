@@ -46,105 +46,6 @@ from scripts.vision.organ_crown_metrics import (
 )
 
 
-def open_hairline_sinus_bridges_and_measure_voids(
-    mask: Optional[np.ndarray],
-    hole_mask: Optional[np.ndarray] = None,
-    max_bridge_px: float = 3.5,
-) -> Tuple[np.ndarray, float, int]:
-    """
-    Inspects interior `0`-pixel voids inside an unfilled lamina `mask`:
-      1. Opens hairline `<= max_bridge_px` lobe-tip contact bridges separating non-hole
-         dissected sinus pockets from the exterior background (without disconnecting the
-         lamina) so single-contour `extract_contour` enters the true sinus.
-      2. Measures `enclosed_void_frac` across any remaining broadly bridged (`> max_bridge_px`)
-         interior non-hole voids so Step 02/03 can withhold distorted single-loop EFA harmonics
-         while retaining the hole-preserved mask for topological ECT and solidity.
-    Returns `(contour_ready_mask_u8, enclosed_void_frac, n_opened_bridges)`.
-    """
-    if mask is None or np.asarray(mask).size == 0:
-        return np.zeros((0, 0), dtype=np.uint8), 0.0, 0
-    work_u8 = (np.asarray(mask) > 0).astype(np.uint8) * 255
-    fg_area = int(np.count_nonzero(work_u8))
-    if fg_area < 32:
-        return work_u8, 0.0, 0
-
-    h, w = work_u8.shape[:2]
-    padded_inv = np.ones((h + 2, w + 2), dtype=np.uint8)
-    padded_inv[1 : h + 1, 1 : w + 1] = (work_u8 == 0).astype(np.uint8)
-    num_bg, bg_labels, bg_stats, _ = cv2.connectedComponentsWithStats(padded_inv, connectivity=8)
-    if num_bg <= 2:
-        return work_u8, 0.0, 0
-
-    ext_lbl = int(bg_labels[0, 0])
-    ext_bg = (bg_labels[1 : h + 1, 1 : w + 1] == ext_lbl)
-    min_void_px = max(16, int(round(0.003 * float(fg_area))))
-    hole_bool = (
-        (np.asarray(hole_mask) > 0)
-        if (hole_mask is not None and isinstance(hole_mask, np.ndarray) and hole_mask.shape[:2] == (h, w))
-        else None
-    )
-
-    cand_void_lbls = [
-        lbl
-        for lbl in range(1, num_bg)
-        if lbl != ext_lbl and int(bg_stats[lbl, cv2.CC_STAT_AREA]) >= min_void_px
-    ]
-    if not cand_void_lbls:
-        return work_u8, 0.0, 0
-
-    dt_from_ext = cv2.distanceTransform((~ext_bg).astype(np.uint8), cv2.DIST_L2, 5)
-    n_fg_init, _, fg_stats_init, _ = cv2.connectedComponentsWithStats((work_u8 > 0).astype(np.uint8), connectivity=8)
-    sig_fg_init = sum(1 for c_i in range(1, n_fg_init) if int(fg_stats_init[c_i, cv2.CC_STAT_AREA]) >= 32)
-
-    opened_count = 0
-    unopened_void_px = 0
-    inner_bg_lbls = bg_labels[1 : h + 1, 1 : w + 1]
-
-    for v_lbl in cand_void_lbls:
-        v_mask = inner_bg_lbls == v_lbl
-        v_area = int(np.count_nonzero(v_mask))
-        if v_area < min_void_px:
-            continue
-        if hole_bool is not None:
-            overlap_h = float(np.count_nonzero(v_mask & hole_bool)) / float(max(v_area, 1))
-            if overlap_h > 0.30:
-                continue
-
-        v_dt_vals = dt_from_ext[v_mask]
-        if v_dt_vals.size == 0:
-            continue
-        min_dt = float(np.min(v_dt_vals))
-        bridge_px = max(0.0, min_dt - 1.0)
-        if bridge_px <= float(max_bridge_px):
-            v_ys, v_xs = np.where(v_mask)
-            best_v_i = int(np.argmin(v_dt_vals))
-            vy0, vx0 = int(v_ys[best_v_i]), int(v_xs[best_v_i])
-            rad_w = int(math.ceil(max_bridge_px)) + 4
-            wy0, wy1 = max(0, vy0 - rad_w), min(h, vy0 + rad_w + 1)
-            wx0, wx1 = max(0, vx0 - rad_w), min(w, vx0 + rad_w + 1)
-            ext_sub = ext_bg[wy0:wy1, wx0:wx1]
-            if np.any(ext_sub):
-                ey_s, ex_s = np.where(ext_sub)
-                d2_ext = (ey_s + wy0 - vy0) ** 2 + (ex_s + wx0 - vx0) ** 2
-                best_e_i = int(np.argmin(d2_ext))
-                ey0, ex0 = int(ey_s[best_e_i] + wy0), int(ex_s[best_e_i] + wx0)
-                trial_u8 = work_u8.copy()
-                cv2.line(trial_u8, (vx0, vy0), (ex0, ey0), 0, thickness=2)
-                n_fg_tr, _, fg_stats_tr, _ = cv2.connectedComponentsWithStats((trial_u8 > 0).astype(np.uint8), connectivity=8)
-                sig_fg_tr = sum(1 for c_i in range(1, n_fg_tr) if int(fg_stats_tr[c_i, cv2.CC_STAT_AREA]) >= 32)
-                if sig_fg_tr <= max(1, sig_fg_init):
-                    work_u8 = trial_u8
-                    ext_bg = ext_bg | v_mask | (work_u8 == 0)
-                    dt_from_ext = cv2.distanceTransform((~ext_bg).astype(np.uint8), cv2.DIST_L2, 5)
-                    opened_count += 1
-                    continue
-
-        unopened_void_px += v_area
-
-    enclosed_void_frac = float(unopened_void_px) / float(max(fg_area, 1))
-    return work_u8, round(enclosed_void_frac, 4), opened_count
-
-
 def compute_lm3_shape_metrics(
     mask: Optional[np.ndarray],
     angle_cw: Optional[float] = None,
@@ -341,7 +242,6 @@ def _extract_resampled_contour_pts(
     p_apex_pt: Optional[Tuple[float, float]] = None,
     keypoints_31: Optional[Any] = None,
     already_oriented: bool = False,
-    bridge_already_opened: bool = False,
 ) -> Optional[np.ndarray]:
     is_preoriented = bool(already_oriented)
     if momocs_outline_xy is not None and len(np.asarray(momocs_outline_xy)) >= 10:
@@ -363,8 +263,6 @@ def _extract_resampled_contour_pts(
             raw_u8 = (arr_in > 0).astype(np.uint8) * 255
             if not is_preoriented and hole_mask is not None and isinstance(hole_mask, np.ndarray) and hole_mask.shape[:2] == raw_u8.shape[:2]:
                 raw_u8 = np.where((raw_u8 > 0) & (hole_mask == 0), 255, 0).astype(np.uint8)
-            if not bridge_already_opened:
-                raw_u8, _, _ = open_hairline_sinus_bridges_and_measure_voids(raw_u8, hole_mask=hole_mask)
             extracted_xy = extract_contour(raw_u8)
             if extracted_xy is None or len(extracted_xy) < 10:
                 return None
@@ -442,7 +340,6 @@ def resample_normalized_contour(
     keypoints_31: Optional[Any] = None,
     n_pts: Optional[int] = None,
     already_oriented: bool = False,
-    bridge_already_opened: bool = False,
 ) -> Optional[np.ndarray]:
     """Extracts resampled, tip-up unit-scaled 2D coordinates via LeafMachine3 helpers."""
     _ = petiole_mask
@@ -458,7 +355,6 @@ def resample_normalized_contour(
         p_apex_pt=p_apex_pt,
         keypoints_31=keypoints_31,
         already_oriented=already_oriented,
-        bridge_already_opened=bridge_already_opened,
     )
     if resamp_pts is None:
         return None
@@ -488,7 +384,6 @@ def export_standardized_contour(
     momocs_outline_xy: Optional[np.ndarray] = None,
     keypoints_31: Optional[Any] = None,
     already_oriented: bool = False,
-    bridge_already_opened: bool = False,
 ) -> Any:
     """Exports LeafMachine3 120-vertex clockwise tip-up contour CSV to `output_dir/contours/{catalogNumber}_leaf{id}.csv`."""
     _ = petiole_mask
@@ -504,7 +399,6 @@ def export_standardized_contour(
         p_apex_pt=p_apex_pt,
         keypoints_31=keypoints_31,
         already_oriented=already_oriented,
-        bridge_already_opened=bridge_already_opened,
     )
     if resamp_pts is None:
         return empty_ret
@@ -531,7 +425,6 @@ def export_standardized_contour(
 
 
 __all__ = [
-    "open_hairline_sinus_bridges_and_measure_voids",
     "compute_lm3_shape_metrics",
     "save_leaf_mask_png",
     "resample_normalized_contour",

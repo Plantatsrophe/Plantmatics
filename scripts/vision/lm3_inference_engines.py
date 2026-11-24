@@ -215,6 +215,18 @@ class DetectedInstance:
     blade_cie_l_sheet_delta: float = np.nan
     blade_cie_a_delta: float = np.nan
     blade_cie_b_delta: float = np.nan
+    base_angle_deg: float = float("nan")
+    apex_angle_deg: float = float("nan")
+    lamina_curvature: float = float("nan")
+    lamina_trace_length_px: float = float("nan")
+    bbox_x1: Optional[int] = None
+    bbox_y1: Optional[int] = None
+    bbox_x2: Optional[int] = None
+    bbox_y2: Optional[int] = None
+    blade_cie_l_q85_sheet_delta: float = float("nan")
+    basal_zone_cie_l_delta: float = float("nan")
+    is_abaxial_pressed_leaf: bool = False
+    abaxial_cie_l_sheet_delta: float = float("nan")
 
 
 @dataclass
@@ -375,6 +387,41 @@ def compute_capitulum_metrics(
 
         floret_mask = fg_plant & (H_ch >= 10) & (H_ch <= 36) & (S_ch >= 76) & (V_ch >= 85)
         pappus_mask = fg_plant & (~floret_mask) & (V_ch >= 158) & (S_ch <= 48)
+
+        # Resolve distal half along anatomical axis and exclude distal aged ochre/amber corollas on non-Bud heads
+        fg_ys_all, fg_xs_all = np.where(fg_plant)
+        if fg_xs_all.size > 0 and (class_id is None or int(class_id) in (2, 4)):
+            prelim_distal = floret_mask | pappus_mask
+            prelim_cup = fg_plant & (~prelim_distal) & (V_ch <= 198)
+            dist_ax_ux, dist_ax_uy = axis_ux, axis_uy
+            if (
+                not has_anatomical_axis
+                and int(np.count_nonzero(prelim_distal)) >= 8
+                and int(np.count_nonzero(prelim_cup)) >= 12
+            ):
+                py_c, px_c = np.where(prelim_cup)
+                py_d, px_d = np.where(prelim_distal)
+                dx_p = float(np.mean(px_d) - np.mean(px_c))
+                dy_p = float(np.mean(py_d) - np.mean(py_c))
+                dn_p = float(np.hypot(dx_p, dy_p))
+                if dn_p >= 2.0:
+                    dist_ax_ux, dist_ax_uy = dx_p / dn_p, dy_p / dn_p
+            proj_fg = fg_xs_all.astype(np.float32) * dist_ax_ux + fg_ys_all.astype(np.float32) * dist_ax_uy
+            proj_mid = 0.5 * (float(np.min(proj_fg)) + float(np.max(proj_fg)))
+            yy_g, xx_g = np.ogrid[:ch, :cw]
+            distal_half = (xx_g.astype(np.float32) * dist_ax_ux + yy_g.astype(np.float32) * dist_ax_uy) >= proj_mid
+            aged_ochre_mask = (
+                fg_plant
+                & distal_half
+                & (H_ch >= 8)
+                & (H_ch <= 36)
+                & (S_ch >= 38)
+                & (S_ch <= 75)
+                & (V_ch >= 75)
+            )
+            floret_mask = floret_mask | aged_ochre_mask
+            pappus_mask = fg_plant & (~floret_mask) & (V_ch >= 158) & (S_ch <= 48)
+
         involucre_cand = fg_plant & (~floret_mask) & (~pappus_mask) & (V_ch <= 198)
 
         min_inv_px = max(12, int(0.04 * ch * cw))
@@ -390,6 +437,58 @@ def compute_capitulum_metrics(
                 if d_norm >= 2.0:
                     axis_ux, axis_uy = dx_a / d_norm, dy_a / d_norm
                     has_anatomical_axis = True
+
+        # Collect viewpoint symmetry cues for top-down radial disc detection
+        n_floret_px = int(np.count_nonzero(floret_mask))
+        n_inv_px = int(np.count_nonzero(involucre_cand))
+        topdown_radial_4q = False
+        topdown_radial_3q = False
+        if fg_xs_all.size >= 24 and n_floret_px >= 12 and n_inv_px >= 12:
+            fg_cx = float(np.mean(fg_xs_all))
+            fg_cy = float(np.mean(fg_ys_all))
+            fg_w = float(int(fg_xs_all.max()) - int(fg_xs_all.min()) + 1)
+            fg_h = float(int(fg_ys_all.max()) - int(fg_ys_all.min()) + 1)
+            head_diam = max(fg_w, fg_h, 1.0)
+            fg_bbox_ar = min(fg_w, fg_h) / head_diam
+
+            fl_y, fl_x = np.where(floret_mask)
+            inv_y, inv_x = np.where(involucre_cand)
+            fl_cx, fl_cy = float(np.mean(fl_x)), float(np.mean(fl_y))
+            inv_cx, inv_cy = float(np.mean(inv_x)), float(np.mean(inv_y))
+
+            fl_offset_frac = float(np.hypot(fl_cx - fg_cx, fl_cy - fg_cy)) / head_diam
+            inv_fl_offset_frac = float(np.hypot(fl_cx - inv_cx, fl_cy - inv_cy)) / head_diam
+
+            def _occupied_quadrants(xs_a: np.ndarray, ys_a: np.ndarray, ref_x: float, ref_y: float) -> int:
+                dx_q = xs_a.astype(np.float32) - ref_x
+                dy_q = ys_a.astype(np.float32) - ref_y
+                min_q = max(4, int(0.06 * xs_a.size))
+                return int(
+                    (int(np.count_nonzero((dx_q >= 0.0) & (dy_q >= 0.0))) >= min_q)
+                    + (int(np.count_nonzero((dx_q < 0.0) & (dy_q >= 0.0))) >= min_q)
+                    + (int(np.count_nonzero((dx_q >= 0.0) & (dy_q < 0.0))) >= min_q)
+                    + (int(np.count_nonzero((dx_q < 0.0) & (dy_q < 0.0))) >= min_q)
+                )
+
+            n_inv_quads = _occupied_quadrants(inv_x, inv_y, fl_cx, fl_cy)
+            n_fl_quads = _occupied_quadrants(fl_x, fl_y, inv_cx, inv_cy)
+            r_fl_q75 = float(np.percentile(np.hypot(fl_x - fg_cx, fl_y - fg_cy), 75))
+            r_inv_q75 = float(np.percentile(np.hypot(inv_x - fg_cx, inv_y - fg_cy), 75))
+            outer_lig_ring_4q = bool(n_fl_quads == 4 and r_fl_q75 > 1.15 * max(r_inv_q75, 1.0))
+            outer_lig_ring_3q = bool(n_fl_quads >= 3 and r_fl_q75 > 1.15 * max(r_inv_q75, 1.0))
+
+            if (
+                fg_bbox_ar >= 0.72
+                and fl_offset_frac <= 0.18
+                and inv_fl_offset_frac <= 0.18
+                and (n_inv_quads == 4 or outer_lig_ring_4q)
+            ):
+                topdown_radial_4q = True
+            if fl_offset_frac <= 0.22 and (n_inv_quads >= 3 or outer_lig_ring_3q):
+                topdown_radial_3q = True
+    else:
+        topdown_radial_4q = False
+        topdown_radial_3q = False
 
     h_inv_px = 0.0
     w_inv_px = 0.0
@@ -425,6 +524,17 @@ def compute_capitulum_metrics(
         return None
 
     aspect_ratio = h_inv_px / w_inv_px
+    is_lateral_profile = not (topdown_radial_4q or (topdown_radial_3q and aspect_ratio < 0.52))
+    if not is_lateral_profile:
+        return {
+            "involucre_height_px": np.nan,
+            "involucre_width_px": np.nan,
+            "involucre_height_mm": np.nan,
+            "involucre_width_mm": np.nan,
+            "AR_inv": np.nan,
+            "is_lateral_profile": False,
+        }
+
     if not (min_ar <= aspect_ratio <= max_ar):
         return None
 
@@ -438,6 +548,7 @@ def compute_capitulum_metrics(
         "involucre_height_mm": round(h_inv_mm, 3) if not np.isnan(h_inv_mm) else np.nan,
         "involucre_width_mm": round(w_inv_mm, 3) if not np.isnan(w_inv_mm) else np.nan,
         "AR_inv": round(aspect_ratio, 4),
+        "is_lateral_profile": True,
     }
 
 
@@ -1273,10 +1384,10 @@ def _reduce_crop_predictions_native_lm3(
       - Unions `cls_id == 1` (`Petiole`) into its largest 8-connected component (`area >= min_area_px`)
         and `cls_id == 2` (`Hole`) into all 8-connected components (`area >= min_area_px`).
       - Processes each `cls_id == 0` (`Leaf`) instance individually, retaining its primary
-        8-connected component (`area >= min_area_px`) plus any unbridged lateral pinna islands
-        (`area >= min_area_px`) within that same instance that attach along the segmented
-        `petiole` stalk (`cls_id == 1`) or lie interior to the crop adjacent to the primary
-        blade (while rejecting border-clipped neighbor bleed), subtracting `hole_mask_u8` as
+        8-connected component (`area >= min_area_px`) plus all interior unbridged lateral
+        pinna islands (`area >= min_area_px`) and any component touching the segmented
+        `petiole` corridor (`cls_id == 1`) without distance truncation (while rejecting
+        border-clipped neighbor bleed), subtracting `hole_mask_u8` as
         `lamina = silhouette & ~hole` without adding any synthetic bridging pixels.
     """
     ch, cw = int(crop_shape[0]), int(crop_shape[1])
@@ -1367,10 +1478,6 @@ def _reduce_crop_predictions_native_lm3(
             continue
         keep_lbls: List[int] = [best_lbl]
         if n_cc > 2:
-            prim_bool = labels == best_lbl
-            prim_touches_pet = bool(pet_corridor_bool is not None and np.any(prim_bool & pet_corridor_bool))
-            dist_to_prim = cv2.distanceTransform((~prim_bool).astype(np.uint8), cv2.DIST_L2, 3)
-            max_pinna_gap = max(10.0, 0.16 * math.sqrt(float(best_area)))
             for cid_sub in range(1, n_cc):
                 if cid_sub == best_lbl:
                     continue
@@ -1383,11 +1490,10 @@ def _reduce_crop_predictions_native_lm3(
                 sx1 = sx0 + int(stats[cid_sub, cv2.CC_STAT_WIDTH])
                 sy1 = sy0 + int(stats[cid_sub, cv2.CC_STAT_HEIGHT])
                 touches_crop_edge = (sx0 <= 1) or (sy0 <= 1) or (sx1 >= cw - 1) or (sy1 >= ch - 1)
-                on_same_petiole = bool(
-                    prim_touches_pet and pet_corridor_bool is not None and np.any(sub_bool & pet_corridor_bool)
+                touches_pet_corridor = bool(
+                    pet_corridor_bool is not None and np.any(sub_bool & pet_corridor_bool)
                 )
-                min_gap_px = float(np.min(dist_to_prim[sub_bool])) if np.any(sub_bool) else float("inf")
-                if on_same_petiole or ((not touches_crop_edge) and min_gap_px <= max_pinna_gap):
+                if (not touches_crop_edge) or touches_pet_corridor:
                     keep_lbls.append(cid_sub)
         raster_u8 = (np.isin(labels, keep_lbls).astype(np.uint8)) * 255
         if hole_sub_u8 is not None:
@@ -2503,17 +2609,24 @@ def _extract_native_lm3_petiole_anchor(
 
             lm_res = compute_measurements(pts_2d)
             if lm_res is not None:
+                lam_tr = getattr(lm_res, "lamina_trace_length", getattr(lm_res, "lamina_trace_length_px", None))
+                lam_tb = getattr(lm_res, "lamina_tip_base_length", getattr(lm_res, "lamina_tip_base_length_px", None))
+                pet_tr = getattr(lm_res, "petiole_trace_length", getattr(lm_res, "petiole_trace_length_px", None))
+                lw_px = getattr(lm_res, "leaf_width", getattr(lm_res, "leaf_width_px", None))
+                ap_ang = getattr(lm_res, "apex_angle", getattr(lm_res, "apex_angle_deg", None))
+                bs_ang = getattr(lm_res, "base_angle", getattr(lm_res, "base_angle_deg", None))
+                lm_curv = getattr(lm_res, "lamina_curvature", None)
                 lm_metrics_dict = {
-                    "lamina_trace_length_px": lm_res.lamina_trace_length_px,
-                    "lamina_tip_base_length_px": lm_res.lamina_tip_base_length_px,
-                    "petiole_trace_length_px": lm_res.petiole_trace_length_px,
-                    "leaf_width_px": lm_res.leaf_width_px,
-                    "apex_angle_deg": lm_res.apex_angle_deg,
-                    "base_angle_deg": lm_res.base_angle_deg,
-                    "lamina_curvature": lm_res.lamina_curvature,
+                    "lamina_trace_length_px": lam_tr,
+                    "lamina_tip_base_length_px": lam_tb,
+                    "petiole_trace_length_px": pet_tr,
+                    "leaf_width_px": lw_px,
+                    "apex_angle_deg": ap_ang,
+                    "base_angle_deg": bs_ang,
+                    "lamina_curvature": lm_curv,
                 }
-                if lm_res.petiole_trace_length_px is not None and np.isfinite(lm_res.petiole_trace_length_px):
-                    petiole_len_px = max(petiole_len_px, float(lm_res.petiole_trace_length_px))
+                if pet_tr is not None and np.isfinite(pet_tr):
+                    petiole_len_px = max(petiole_len_px, float(pet_tr))
         except Exception:
             pass
 
@@ -3105,6 +3218,10 @@ def orient_and_score_leaf_lm3(
             "largest_frac": 0.0,
             "gates_pass": False,
             "is_archetypal": False,
+            "base_angle_deg": np.nan,
+            "apex_angle_deg": np.nan,
+            "lamina_curvature": np.nan,
+            "lamina_trace_length_px": np.nan,
         }
 
     norm_kps = normalize_lm3_keypoints_dict(keypoints_31, offset_xy=offset_xy)
@@ -3128,14 +3245,32 @@ def orient_and_score_leaf_lm3(
     )
 
     def _swap_midvein_poles(pts_map: Dict[str, Tuple[float, float]]) -> None:
-        pts_map["lamina_base"], pts_map["lamina_tip"] = pts_map["lamina_tip"], pts_map["lamina_base"]
-        if "base_center" in pts_map and "apex_center" in pts_map:
-            pts_map["base_center"], pts_map["apex_center"] = pts_map["apex_center"], pts_map["base_center"]
-        mv_keys = [f"midvein_{i}" for i in range(15) if f"midvein_{i}" in pts_map]
-        if len(mv_keys) == 15:
+        def _swap_pair(k1: str, k2: str) -> None:
+            if k1 in pts_map and k2 in pts_map:
+                pts_map[k1], pts_map[k2] = pts_map[k2], pts_map[k1]
+            elif k1 in pts_map:
+                pts_map[k2] = pts_map.pop(k1)
+            elif k2 in pts_map:
+                pts_map[k1] = pts_map.pop(k2)
+
+        _swap_pair("lamina_base", "lamina_tip")
+        _swap_pair("base_center", "apex_center")
+        _swap_pair("base_left", "apex_left")
+        _swap_pair("base_right", "apex_right")
+        _swap_pair("base_1", "apex_1")
+        _swap_pair("base_2", "apex_2")
+        _swap_pair("base_3", "apex_3")
+        mv_present = [i for i in range(15) if f"midvein_{i}" in pts_map]
+        if len(mv_present) == 15:
             rev_vals = [pts_map[f"midvein_{14 - i}"] for i in range(15)]
             for i in range(15):
                 pts_map[f"midvein_{i}"] = rev_vals[i]
+        elif len(mv_present) >= 2:
+            rev_vals = [pts_map[f"midvein_{idx}"] for idx in reversed(mv_present)]
+            for idx, val in zip(mv_present, rev_vals):
+                pts_map[f"midvein_{idx}"] = val
+        if "midvein_15" in pts_map and "midvein_14" in pts_map:
+            pts_map["midvein_15"] = pts_map["midvein_14"]
 
     if (
         petiole_mask is not None
@@ -3143,7 +3278,6 @@ def orient_and_score_leaf_lm3(
         and int(np.count_nonzero(petiole_mask)) > 0
         and "lamina_base" in pts_2d
         and "lamina_tip" in pts_2d
-        and (not norm_kps or _kp_conf_min < 0.55)
     ):
         pys, pxs = np.where(petiole_mask > 0)
         lb_pt = pts_2d["lamina_base"]
@@ -3151,7 +3285,34 @@ def orient_and_score_leaf_lm3(
         d_lb_pet = float(np.min(np.hypot(pxs - lb_pt[0], pys - lb_pt[1])))
         d_lt_pet = float(np.min(np.hypot(pxs - lt_pt[0], pys - lt_pt[1])))
         span_bt = math.hypot(lt_pt[0] - lb_pt[0], lt_pt[1] - lb_pt[1])
-        if (not norm_kps and d_lt_pet < d_lb_pet) or (d_lt_pet + 0.15 * span_bt < d_lb_pet):
+        swapped_poles = False
+        pet_near_tip_rad = max(8.0, 0.08 * span_bt)
+        if span_bt > 1.0 and d_lt_pet <= pet_near_tip_rad and d_lb_pet > 0.35 * span_bt:
+            near_tip_idx = np.hypot(pxs - lt_pt[0], pys - lt_pt[1]) <= pet_near_tip_rad
+            _, lbl_p, stats_p, _ = cv2.connectedComponentsWithStats((petiole_mask > 0).astype(np.uint8), connectivity=8)
+            near_lbls = {int(v) for v in lbl_p[pys[near_tip_idx], pxs[near_tip_idx]] if int(v) > 0}
+            has_contig_pet = any(int(stats_p[lbl_i, cv2.CC_STAT_AREA]) >= 4 for lbl_i in near_lbls)
+            crown_corrob = False
+            crown_contradicts = False
+            if crown_hint_xy is not None:
+                cr_x = float(crown_hint_xy[0]) - float(offset_xy[0])
+                cr_y = float(crown_hint_xy[1]) - float(offset_xy[1])
+                d_lb_cr = math.hypot(lb_pt[0] - cr_x, lb_pt[1] - cr_y)
+                d_lt_cr = math.hypot(lt_pt[0] - cr_x, lt_pt[1] - cr_y)
+                crown_corrob = bool(d_lt_cr < 0.70 * d_lb_cr)
+                crown_contradicts = bool(d_lb_cr < 0.70 * d_lt_cr)
+            if (
+                has_contig_pet
+                and (not norm_kps or _kp_conf_min < 0.88)
+                and (crown_corrob or (not crown_contradicts))
+            ):
+                _swap_midvein_poles(pts_2d)
+                swapped_poles = True
+        if (
+            not swapped_poles
+            and (not norm_kps or _kp_conf_min < 0.55)
+            and ((not norm_kps and d_lt_pet < d_lb_pet) or (d_lt_pet + 0.15 * span_bt < d_lb_pet))
+        ):
             _swap_midvein_poles(pts_2d)
     elif (
         crown_hint_xy is not None
@@ -3181,6 +3342,7 @@ def orient_and_score_leaf_lm3(
         from scripts.vision.lm3_compat import (
             OrientedLeaf,
             apply_affine,
+            compute_measurements,
             compute_orientation,
             crop_to_box,
             mask_bbox,
@@ -3329,6 +3491,31 @@ def orient_and_score_leaf_lm3(
             blade_w_px = float(xs_lw.max() - xs_lw.min()) if len(xs_lw) > 0 else 0.0
         anatomical_lw = (blade_l_px / max(blade_w_px, 1e-6)) if (blade_l_px > 0.0 and blade_w_px > 0.0) else np.nan
 
+        def _meas_float(obj: Any, *attrs: str) -> float:
+            if obj is None:
+                return np.nan
+            for attr_name in attrs:
+                val = getattr(obj, attr_name, None)
+                if val is not None:
+                    try:
+                        fval = float(val)
+                        if np.isfinite(fval):
+                            return round(fval, 4)
+                    except (TypeError, ValueError):
+                        pass
+            return np.nan
+
+        lm_meas = None
+        try:
+            if shifted_pts:
+                lm_meas = compute_measurements(shifted_pts)
+        except Exception:
+            lm_meas = None
+        base_angle_deg = _meas_float(lm_meas, "base_angle", "base_angle_deg")
+        apex_angle_deg = _meas_float(lm_meas, "apex_angle", "apex_angle_deg")
+        lamina_curvature = _meas_float(lm_meas, "lamina_curvature")
+        lamina_trace_length_px = _meas_float(lm_meas, "lamina_trace_length", "lamina_trace_length_px")
+
         kpt_conf = {
             k: (float(norm_kps[k][2]) if k in norm_kps and len(norm_kps[k]) >= 3 else 0.95)
             for k in shifted_pts
@@ -3364,6 +3551,10 @@ def orient_and_score_leaf_lm3(
                 "aspect_ratio": round(float(anatomical_lw), 4) if np.isfinite(anatomical_lw) else np.nan,
                 "blade_length_px": round(blade_l_px, 4),
                 "blade_width_px": round(blade_w_px, 4),
+                "base_angle_deg": base_angle_deg,
+                "apex_angle_deg": apex_angle_deg,
+                "lamina_curvature": lamina_curvature,
+                "lamina_trace_length_px": lamina_trace_length_px,
                 "oriented_mask": crop_lamina_u8,
                 "oriented_hole_mask": crop_hole,
                 "oriented_petiole_mask": crop_pet,
@@ -3383,6 +3574,10 @@ def orient_and_score_leaf_lm3(
             "aspect_ratio": round(float(anatomical_lw), 4) if np.isfinite(anatomical_lw) else np.nan,
             "blade_length_px": round(blade_l_px, 4),
             "blade_width_px": round(blade_w_px, 4),
+            "base_angle_deg": base_angle_deg,
+            "apex_angle_deg": apex_angle_deg,
+            "lamina_curvature": lamina_curvature,
+            "lamina_trace_length_px": lamina_trace_length_px,
             "oriented_mask": crop_lamina_u8,
             "oriented_hole_mask": crop_hole,
             "oriented_petiole_mask": crop_pet,
@@ -3401,6 +3596,10 @@ def orient_and_score_leaf_lm3(
             "largest_frac": 1.0,
             "gates_pass": True,
             "is_archetypal": True,
+            "base_angle_deg": np.nan,
+            "apex_angle_deg": np.nan,
+            "lamina_curvature": np.nan,
+            "lamina_trace_length_px": np.nan,
         }
 
 
@@ -3959,49 +4158,89 @@ class LM3ScaleCalibrator:
         if self.archival_session is not None:
             ruler_boxes = self._detect_ruler_boxes(image_bgr)
             min_det_sc = min(0.45, float(getattr(self, "archival_conf_thres", 0.25)))
+            _IMPERIAL_TOKENS = ("INCH", "INCHES", "STD_IN", "IMPERIAL", "1/16", "1/8", "1/4")
             for (ymin, xmin, ymax, xmax), _det_sc in ruler_boxes:
                 crop = image_bgr[ymin:ymax, xmin:xmax]
                 if crop.size == 0 or min(crop.shape[:2]) < 16:
                     continue
                 ruler_cls_ok = True
                 ruler_cls_confirmed = False
+                is_explicit_imperial = False
+                lattice_cls_allowed = True
+                corrob_tick_mm: Optional[float] = None
+                corrob_tick_evaluated = False
                 try:
                     if self.ruler_classifier is not None:
                         cls_pred = self.ruler_classifier.predict(crop)
                         if isinstance(cls_pred, dict):
                             lbl_u = str(cls_pred.get("label", "UNKNOWN")).strip().upper()
                             lbl_conf = float(cls_pred.get("conf", 0.0) or 0.0)
-                            if lbl_u == "MESSY" and lbl_conf >= 0.85 and float(_det_sc) < 0.50:
-                                ruler_cls_ok = False
-                            elif (
+                            is_metric_lbl = (
                                 lbl_u.startswith("METRIC")
                                 or lbl_u in {"GRID_CM", "STD_IN8_CM", "FP"}
-                            ) and lbl_conf >= 0.35:
+                            )
+                            if is_metric_lbl and lbl_conf >= 0.35:
                                 ruler_cls_confirmed = True
+                            is_explicit_imperial = bool(
+                                (not is_metric_lbl)
+                                and any(tok in lbl_u for tok in _IMPERIAL_TOKENS)
+                            )
+                            if is_explicit_imperial and lbl_conf >= 0.45:
+                                ruler_cls_ok = False
+                            elif lbl_u == "MESSY" and lbl_conf >= 0.85 and float(_det_sc) < 0.50:
+                                ruler_cls_ok = False
+                            if is_explicit_imperial or ((not ruler_cls_confirmed) and lbl_conf >= 0.45):
+                                lattice_cls_allowed = False
                         elif not getattr(cls_pred, "is_ruler", True):
                             ruler_cls_ok = False
                     if not ruler_cls_ok:
                         continue
-                    if self.ruler_lattice is not None:
+                    if self.ruler_lattice is not None and lattice_cls_allowed:
                         crop_rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
                         lat_res = self.ruler_lattice.predict(crop_rgb)
                         px_per_cm = getattr(lat_res, "px_per_cm", None)
                         conf = float(getattr(lat_res, "confidence", 0.0) or 0.0)
                         if px_per_cm is not None and np.isfinite(float(px_per_cm)) and float(px_per_cm) > 10.0 and conf >= 0.45:
                             px_per_mm = round(float(px_per_cm) / 10.0, 4)
-                            return {
-                                "pixels_per_mm": px_per_mm,
-                                "is_calibrated_mm": True,
-                                "cf_source": "measured_from_ruler",
-                                "scale_source": "ruler_calibrated",
-                            }
+                            in_mp_bounds = (0.35 * mp_prior_mm) <= px_per_mm <= (2.25 * mp_prior_mm)
+                            if in_mp_bounds:
+                                return {
+                                    "pixels_per_mm": px_per_mm,
+                                    "is_calibrated_mm": True,
+                                    "cf_source": "measured_from_ruler",
+                                    "scale_source": "ruler_calibrated",
+                                }
+                            corrob_tick_mm = solve_ruler_tick_lattice_px_per_mm(
+                                crop,
+                                mp_prior_px_per_mm=mp_prior_mm,
+                                verified_ruler_crop=True,
+                            )
+                            corrob_tick_evaluated = True
+                            if (
+                                corrob_tick_mm is not None
+                                and np.isfinite(float(corrob_tick_mm))
+                                and float(corrob_tick_mm) > 1.0
+                                and abs(px_per_mm - float(corrob_tick_mm)) / max(float(corrob_tick_mm), 1e-6) <= 0.15
+                            ):
+                                return {
+                                    "pixels_per_mm": px_per_mm,
+                                    "is_calibrated_mm": True,
+                                    "cf_source": "measured_from_ruler",
+                                    "scale_source": "ruler_calibrated",
+                                }
                 except Exception:
                     pass
+                if not ruler_cls_ok:
+                    continue
                 if ruler_cls_confirmed or float(_det_sc) >= min_det_sc:
-                    crop_ruler_mm = solve_ruler_tick_lattice_px_per_mm(
-                        crop,
-                        mp_prior_px_per_mm=mp_prior_mm,
-                        verified_ruler_crop=True,
+                    crop_ruler_mm = (
+                        corrob_tick_mm
+                        if corrob_tick_evaluated
+                        else solve_ruler_tick_lattice_px_per_mm(
+                            crop,
+                            mp_prior_px_per_mm=mp_prior_mm,
+                            verified_ruler_crop=True,
+                        )
                     )
                     if crop_ruler_mm is not None and np.isfinite(float(crop_ruler_mm)) and float(crop_ruler_mm) > 1.0:
                         return {

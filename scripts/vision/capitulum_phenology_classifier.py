@@ -540,6 +540,136 @@ def extract_biomarker_aged_ochre_corollas(
     return has_aged_ochre, float(round(ochre_ratio, 4)), diagnostics
 
 
+def extract_biomarker_radiate_ligules(
+    oriented_rgb: np.ndarray,
+    min_floret_yellow_saturation: float = 0.32,
+) -> Tuple[bool, Dict[str, float]]:
+    """
+    Detects peripheral yellow or aged-ochre ray ligules extending outside the
+    compact central disc core / involucre cup, separating radiate from discoid heads.
+    """
+    if (
+        oriented_rgb is None
+        or not isinstance(oriented_rgb, np.ndarray)
+        or oriented_rgb.size == 0
+        or oriented_rgb.ndim < 3
+        or oriented_rgb.shape[2] < 3
+    ):
+        return False, {"outer_corolla_frac": 0.0, "corolla_to_cup_width_ratio": 0.0}
+
+    h, w = oriented_rgb.shape[:2]
+    if h < 8 or w < 8:
+        return False, {"outer_corolla_frac": 0.0, "corolla_to_cup_width_ratio": 0.0}
+
+    rgb3 = oriented_rgb[:, :, :3]
+    lab = cv2.cvtColor(rgb3, cv2.COLOR_RGB2LAB)
+    hsv = cv2.cvtColor(rgb3, cv2.COLOR_RGB2HSV)
+
+    l_star = lab[:, :, 0].astype(np.float32) * (100.0 / 255.0)
+    b_star = lab[:, :, 2].astype(np.float32) - 128.0
+    h_deg = hsv[:, :, 0].astype(np.float32) * 2.0
+    s_norm = hsv[:, :, 1].astype(np.float32) / 255.0
+    v_norm = hsv[:, :, 2].astype(np.float32) / 255.0
+
+    border_mask = np.zeros((h, w), dtype=bool)
+    bw = min(3, max(1, h // 4), max(1, w // 4))
+    border_mask[:bw, :] = True
+    border_mask[-bw:, :] = True
+    border_mask[:, :bw] = True
+    border_mask[:, -bw:] = True
+    paper_border = border_mask & (l_star >= 65.0) & (s_norm <= 0.22)
+    b_paper = float(np.median(b_star[paper_border])) if np.any(paper_border) else 0.0
+
+    is_paper = (l_star >= 75.0) & (s_norm <= 0.20)
+    is_pappus = (l_star >= 75.0) & (s_norm <= 0.18)
+    non_paper = ~is_paper
+    if int(np.count_nonzero(non_paper)) < 24:
+        return False, {"outer_corolla_frac": 0.0, "corolla_to_cup_width_ratio": 0.0}
+
+    fresh_yellow = (
+        (h_deg >= 18.0)
+        & (h_deg <= 52.0)
+        & (s_norm >= max(0.28, float(min_floret_yellow_saturation) - 0.02))
+        & (v_norm >= 0.35)
+    )
+    aged_ochre = (
+        (h_deg >= 10.0)
+        & (h_deg <= 48.0)
+        & (s_norm >= 0.18)
+        & (s_norm < max(float(min_floret_yellow_saturation), 0.19))
+        & (v_norm >= 0.28)
+        & ((b_star - b_paper) >= 8.0)
+        & (~is_pappus)
+    )
+    corolla_mask = non_paper & (fresh_yellow | aged_ochre)
+    n_cor = int(np.count_nonzero(corolla_mask))
+    if n_cor < 16:
+        return False, {"outer_corolla_frac": 0.0, "corolla_to_cup_width_ratio": 0.0}
+
+    fg_ys, fg_xs = np.where(non_paper)
+    fg_w = max(1.0, float(int(fg_xs.max()) - int(fg_xs.min()) + 1))
+    fg_h = max(1.0, float(int(fg_ys.max()) - int(fg_ys.min()) + 1))
+    fg_cx = 0.5 * float(int(fg_xs.min()) + int(fg_xs.max()))
+    fg_cy = 0.5 * float(int(fg_ys.min()) + int(fg_ys.max()))
+
+    cor_ys, cor_xs = np.where(corolla_mask)
+    cor_cy = float(np.mean(cor_ys))
+    inv_tissue = non_paper & (~corolla_mask) & (~is_pappus)
+    lower_y = int(round(h * 0.48))
+    inv_lower = inv_tissue[lower_y:, :]
+
+    yy_grid, xx_grid = np.ogrid[:h, :w]
+    has_lateral_rays = False
+    has_radial_rays = False
+    outer_cor_frac = 0.0
+    width_ratio = 0.0
+
+    is_lateral_cup = False
+    if int(np.count_nonzero(inv_lower)) >= 12:
+        il_y, il_x = np.where(inv_lower)
+        cup_x0 = float(np.percentile(il_x, 5))
+        cup_x1 = float(np.percentile(il_x, 95))
+        cup_w = max(1.0, cup_x1 - cup_x0)
+        cup_cx = 0.5 * (cup_x0 + cup_x1)
+        cup_cy = float(lower_y) + float(np.mean(il_y))
+        if cup_w >= 4.0 and (cup_cy - cor_cy) >= 0.12 * fg_h:
+            is_lateral_cup = True
+            cor_x0 = float(np.percentile(cor_xs, 2))
+            cor_x1 = float(np.percentile(cor_xs, 98))
+            cor_w = max(1.0, cor_x1 - cor_x0)
+            width_ratio = cor_w / cup_w
+            flank_r = max(0.60 * cup_w, min(0.30 * float(w), 0.28 * fg_w))
+            flank_px = int(np.count_nonzero(corolla_mask & (np.abs(xx_grid.astype(np.float32) - cup_cx) >= flank_r)))
+            outer_cor_frac = float(flank_px) / float(n_cor)
+            has_lateral_rays = bool(width_ratio >= 1.45 and flank_px >= 12 and outer_cor_frac >= 0.14)
+
+    if not is_lateral_cup:
+        r_map = np.hypot(xx_grid.astype(np.float32) - fg_cx, yy_grid.astype(np.float32) - fg_cy)
+        r_head = max(1.0, float(np.percentile(r_map[non_paper], 98)))
+        outer_cor_px = int(np.count_nonzero(corolla_mask & (r_map >= 0.55 * r_head)))
+        outer_cor_frac = float(outer_cor_px) / float(n_cor)
+        all_cor_pts = np.column_stack([cor_xs, cor_ys]).astype(np.int32)
+        hull_area = float(cv2.contourArea(cv2.convexHull(all_cor_pts))) if len(all_cor_pts) >= 3 else float(n_cor)
+        cor_solidity = float(n_cor) / max(hull_area, 1.0)
+        inner_fg = non_paper & (r_map < 0.45 * r_head)
+        inner_fg_n = int(np.count_nonzero(inner_fg))
+        inner_non_cor_frac = (
+            float(np.count_nonzero(inner_fg & (~corolla_mask))) / float(inner_fg_n)
+            if inner_fg_n > 0
+            else 0.0
+        )
+        has_radial_rays = bool(
+            outer_cor_px >= 16
+            and outer_cor_frac >= 0.20
+            and (cor_solidity < 0.88 or inner_non_cor_frac >= 0.20)
+        )
+
+    return bool(has_lateral_rays or has_radial_rays), {
+        "outer_corolla_frac": round(float(outer_cor_frac), 4),
+        "corolla_to_cup_width_ratio": round(float(width_ratio), 4),
+    }
+
+
 def classify_single_capitulum(
     crop_rgb: np.ndarray,
     min_crop_dim: int = 5,
@@ -595,6 +725,7 @@ def classify_single_capitulum(
             "has_pappus_plume": False,
             "has_fresh_yellow_corollas": False,
             "has_aged_ochre_corollas": False,
+            "has_radiate_ligules": False,
             "erect_involucre": False,
             "reflexed_involucre": False,
             "white_fibrous_ratio": 0.0,
@@ -663,11 +794,25 @@ def classify_single_capitulum(
         else:
             head_state = HEAD_BUD
 
+    eval_radiate = bool(
+        (class_id in (4, 5))
+        or (class_id is None and (head_state == HEAD_ANTHESIS or has_fresh_yellow_corollas or aged_anthesis_ok))
+    )
+    if eval_radiate:
+        has_radiate_ligules, diag_rad = extract_biomarker_radiate_ligules(
+            oriented_rgb,
+            min_floret_yellow_saturation=float(min_floret_yellow_saturation),
+        )
+    else:
+        has_radiate_ligules = False
+        diag_rad = {"outer_corolla_frac": 0.0, "corolla_to_cup_width_ratio": 0.0}
+
     return CapitulumResult({
         "head_state": head_state,
         "has_pappus_plume": has_pappus_plume,
         "has_fresh_yellow_corollas": has_fresh_yellow_corollas,
         "has_aged_ochre_corollas": bool(aged_anthesis_ok),
+        "has_radiate_ligules": bool(has_radiate_ligules),
         "erect_involucre": erect_involucre,
         "reflexed_involucre": reflexed_involucre,
         "white_fibrous_ratio": white_fibrous_ratio,
@@ -680,6 +825,7 @@ def classify_single_capitulum(
             "corolla": diag_b,
             "aged_ochre": diag_ochre,
             "involucre": diag_c,
+            "radiate": diag_rad,
         },
     })
 
@@ -691,11 +837,13 @@ def classify_voucher_phenology(
 ) -> Dict[str, Any]:
     """
     Aggregates head-level classifications for a voucher into a single phenological state
-    governed by the Botanical Determinate Cyme Rule.
+    governed by the Botanical Determinate Cyme Rule with predominantly-fruiting corymb guarding.
 
     Biological Cyme Rule:
-      - N_anthesis >= 1: Scored as "anthesis" (active flowering head present; valid for Delta DOY).
-      - N_fruit > 0 and N_anthesis == 0: Scored as "fruit" (entirely post-anthesis/dispersal).
+      - N_anthesis >= 1 (with multi-head / proportion / fresh-yellow guard when N_fruit >= 3):
+        Scored as "anthesis" (active flowering head present; valid for Delta DOY).
+      - N_fruit > 0 and N_anthesis == 0 (or predominantly fruiting corymb failing anthesis guard):
+        Scored as "fruit" (post-anthesis/dispersal).
       - N_total == 0: Scored as "sterile" (vegetative rosette only).
       - N_bud > 0 and N_anthesis == 0 and N_fruit == 0: Scored as "bud" (pre-anthesis).
 
@@ -716,8 +864,27 @@ def classify_voucher_phenology(
     n_fruiting = sum(1 for h in head_classifications if h.get("head_state") == HEAD_FRUIT)
     n_bud = sum(1 for h in head_classifications if h.get("head_state") == HEAD_BUD)
 
-    if n_anthesis >= max(1, int(min_anthesis_heads_for_flowering)):
-        voucher_state = VOUCHER_ANTHESIS
+    min_anth = max(1, int(min_anthesis_heads_for_flowering))
+    has_strong_fresh_yellow = any(
+        h.get("head_state") == HEAD_ANTHESIS
+        and bool(h.get("has_fresh_yellow_corollas", False))
+        and float(h.get("yellow_ratio", 0.0) or 0.0) >= 0.18
+        for h in head_classifications
+    )
+
+    if n_anthesis >= min_anth:
+        if n_fruiting >= 3:
+            anth_frac = float(n_anthesis) / float(max(1, n_anthesis + n_fruiting))
+            if (
+                n_anthesis >= max(2, min_anth)
+                or anth_frac >= 0.25
+                or has_strong_fresh_yellow
+            ):
+                voucher_state = VOUCHER_ANTHESIS
+            else:
+                voucher_state = VOUCHER_FRUIT
+        else:
+            voucher_state = VOUCHER_ANTHESIS
     elif n_fruiting > 0 and n_anthesis == 0:
         voucher_state = VOUCHER_FRUIT
     elif total_capitula == 0:
@@ -734,6 +901,21 @@ def classify_voucher_phenology(
     ]
     dominant_pappus_ratio = round(max(pappus_ratios), 4) if pappus_ratios else 0.0
 
+    flowering_eval_heads = [
+        h
+        for h in head_classifications
+        if h.get("head_state") != HEAD_UNKNOWN
+        and (
+            h.get("head_state") == HEAD_ANTHESIS
+            or (h.get("class_id") is not None and int(h.get("class_id")) in (4, 5))
+        )
+    ]
+    if flowering_eval_heads:
+        n_radiate = sum(1 for h in flowering_eval_heads if bool(h.get("has_radiate_ligules", False)))
+        radiate_head_fraction = round(float(n_radiate) / float(len(flowering_eval_heads)), 4)
+    else:
+        radiate_head_fraction = float("nan")
+
     return VoucherPhenologyResult({
         "catalogNumber": str(catalog_number).strip(),
         "total_capitula": int(total_capitula),
@@ -742,4 +924,5 @@ def classify_voucher_phenology(
         "n_bud": int(n_bud),
         "voucher_phenological_state": voucher_state,
         "dominant_pappus_ratio": float(dominant_pappus_ratio),
+        "radiate_head_fraction": float(radiate_head_fraction),
     })

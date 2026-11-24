@@ -408,6 +408,7 @@ class TestCapitulumPhenologyClassifier(unittest.TestCase):
             "n_bud",
             "voucher_phenological_state",
             "dominant_pappus_ratio",
+            "radiate_head_fraction",
         ]
         self.assertListEqual(list(df.columns), expected_cols)
         self.assertEqual(len(df), 2)

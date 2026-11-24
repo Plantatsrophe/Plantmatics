@@ -1004,6 +1004,10 @@ def record_voucher_segmentation_transaction(
         pids.add(int(k_pid))
     for k_pid in centroids.keys():
         pids.add(int(k_pid))
+    for k_pid in (repro_by_pid or {}).keys():
+        pids.add(int(k_pid))
+    for k_pid in (pheno_by_pid or {}).keys():
+        pids.add(int(k_pid))
     if not pids:
         pids.add(0)
 
@@ -1121,6 +1125,16 @@ def record_voucher_segmentation_transaction(
             if is_ver_anth is None and ph_state:
                 low_st = ph_state.lower()
                 is_ver_anth = 1 if ("anthesis" in low_st and "pre" not in low_st) else 0
+            corymb_est_raw = (
+                pid_repro.get("corymb_head_count_est")
+                if pid_repro.get("corymb_head_count_est") is not None
+                else pid_pheno.get("corymb_head_count_est")
+            )
+            radiate_frac_raw = (
+                pid_repro.get("radiate_head_fraction")
+                if pid_repro.get("radiate_head_fraction") is not None
+                else pid_pheno.get("radiate_head_fraction")
+            )
 
             repro_pheno_rows.append((
                 cat,
@@ -1140,6 +1154,8 @@ def record_voucher_segmentation_transaction(
                 is_ver_anth,
                 _to_float(pid_pheno.get("reproductive_stage_confidence")),
                 _to_float(pid_pheno.get("dominant_pappus_ratio")),
+                _to_int(corymb_est_raw, default=0) or 0,
+                _to_float(radiate_frac_raw),
             ))
 
     for r in extracted_records:
@@ -1233,6 +1249,22 @@ def record_voucher_segmentation_transaction(
             _to_float(r.get("blade_cie_l_sheet_delta")),
             _to_float(r.get("blade_cie_a_delta")),
             _to_float(r.get("blade_cie_b_delta")),
+            _to_int(r.get("bbox_x1")),
+            _to_int(r.get("bbox_y1")),
+            _to_int(r.get("bbox_x2")),
+            _to_int(r.get("bbox_y2")),
+            _to_float(r.get("base_angle_deg")),
+            _to_float(r.get("apex_angle_deg")),
+            _to_float(r.get("lamina_curvature")),
+            _to_float(r.get("lamina_trace_length_px")),
+            _to_float(r.get("basal_cordate_index")),
+            _to_float(r.get("margin_serration_index")),
+            _to_float(r.get("margin_tooth_acuteness")),
+            _to_float(r.get("terminal_lobe_area_frac")),
+            _to_float(r.get("blade_cie_l_q85_sheet_delta")),
+            _to_float(r.get("basal_zone_cie_l_delta")),
+            _to_bool_int(r.get("is_abaxial_pressed_leaf"), default=0),
+            _to_float(r.get("abaxial_cie_l_sheet_delta")),
         ))
 
     if extracted_records and not leaf_rows:
@@ -1242,6 +1274,7 @@ def record_voucher_segmentation_transaction(
 
     _ensure_dynamic_table_migrated(conn, "plant_individuals")
     _ensure_dynamic_table_migrated(conn, "extracted_leaves")
+    _ensure_dynamic_table_migrated(conn, "voucher_reproductive_phenology")
 
     def _apply_sql() -> None:
         conn.execute(
@@ -1285,8 +1318,9 @@ def record_voucher_segmentation_transaction(
                     involucre_height_mm, involucre_width_mm, AR_inv,
                     total_capitula, n_anthesis, n_bud, n_fruiting, n_senescent,
                     voucher_phenological_state, is_verified_anthesis,
-                    reproductive_stage_confidence, dominant_pappus_ratio
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                    reproductive_stage_confidence, dominant_pappus_ratio,
+                    corymb_head_count_est, radiate_head_fraction
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                 """,
                 repro_pheno_rows,
             )
@@ -1344,6 +1378,22 @@ def record_voucher_segmentation_transaction(
                 "blade_cie_l_sheet_delta",
                 "blade_cie_a_delta",
                 "blade_cie_b_delta",
+                "bbox_x1",
+                "bbox_y1",
+                "bbox_x2",
+                "bbox_y2",
+                "base_angle_deg",
+                "apex_angle_deg",
+                "lamina_curvature",
+                "lamina_trace_length_px",
+                "basal_cordate_index",
+                "margin_serration_index",
+                "margin_tooth_acuteness",
+                "terminal_lobe_area_frac",
+                "blade_cie_l_q85_sheet_delta",
+                "basal_zone_cie_l_delta",
+                "is_abaxial_pressed_leaf",
+                "abaxial_cie_l_sheet_delta",
             ]
             known_set = set(insert_cols)
             extra_vals: List[Any] = []
@@ -1370,29 +1420,55 @@ def record_voucher_segmentation_transaction(
         _apply_sql()
 
 
+class _PidAwareDict(dict):
+    """Dict keyed by catalogNumber that also exposes per-(catalogNumber, pid) rows via `.by_pid`."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.by_pid: Dict[Tuple[str, int], Dict[str, Any]] = {}
+
+
 def load_step02_records_from_db(
     conn: sqlite3.Connection,
-    catalog_numbers: Sequence[str],
-) -> Tuple[
-    Dict[str, List[Dict[str, Any]]],
-    Dict[str, Dict[str, Any]],
-    Dict[str, Dict[str, Any]],
-    Dict[str, Dict[str, Any]],
-]:
+    catalog_numbers: Optional[Sequence[str]] = None,
+    include_by_pid: bool = False,
+) -> Any:
     """
     Fetch existing Step 02 leaf, failed-QC, reproductive, and phenology records
-    from SQLite for a list of `catalog_numbers` when resuming Step 02.
+    from SQLite for `catalog_numbers` (or all stored vouchers when `None`) when
+    resuming Step 02. Both `repro_by_cat` and `pheno_by_cat` expose `.by_pid`
+    mappings keyed by `(catalogNumber, plant_individual_id)`; passing
+    `include_by_pid=True` returns a 6-tuple including those mappings explicitly.
     """
-    cats = [str(c).strip() for c in catalog_numbers if str(c).strip()]
     extracted_by_cat: Dict[str, List[Dict[str, Any]]] = {}
     failed_by_cat: Dict[str, Dict[str, Any]] = {}
-    repro_by_cat: Dict[str, Dict[str, Any]] = {}
-    pheno_by_cat: Dict[str, Dict[str, Any]] = {}
+    repro_by_cat: _PidAwareDict = _PidAwareDict()
+    pheno_by_cat: _PidAwareDict = _PidAwareDict()
+    repro_by_pid = repro_by_cat.by_pid
+    pheno_by_pid = pheno_by_cat.by_pid
+
+    if catalog_numbers is None:
+        cat_set: Set[str] = set()
+        for q_sql in (
+            "SELECT DISTINCT catalogNumber FROM extracted_leaves;",
+            "SELECT DISTINCT catalogNumber FROM voucher_reproductive_phenology;",
+            "SELECT DISTINCT catalogNumber FROM vouchers WHERE qc_status IN ('PASS', 'FAILED_QC');",
+        ):
+            for r in conn.execute(q_sql).fetchall():
+                if r[0]:
+                    cat_set.add(str(r[0]).strip())
+        cats = sorted(cat_set)
+    else:
+        cats = [str(c).strip() for c in catalog_numbers if str(c).strip()]
+
     if not cats:
+        if include_by_pid:
+            return extracted_by_cat, failed_by_cat, repro_by_cat, pheno_by_cat, repro_by_pid, pheno_by_pid
         return extracted_by_cat, failed_by_cat, repro_by_cat, pheno_by_cat
 
     _ensure_dynamic_table_migrated(conn, "plant_individuals")
     _ensure_dynamic_table_migrated(conn, "extracted_leaves")
+    _ensure_dynamic_table_migrated(conn, "voucher_reproductive_phenology")
     chunk_size = 500
     for i in range(0, len(cats), chunk_size):
         chunk = cats[i : i + chunk_size]
@@ -1412,6 +1488,11 @@ def load_step02_records_from_db(
                 el.bilateral_lobe_symmetry, el.efa_qc_pass, el.qc_flag_reason,
                 el.blade_cie_l_norm, el.blade_cie_l_sd,
                 el.blade_cie_l_sheet_delta, el.blade_cie_a_delta, el.blade_cie_b_delta,
+                el.bbox_x1, el.bbox_y1, el.bbox_x2, el.bbox_y2,
+                el.base_angle_deg, el.apex_angle_deg, el.lamina_curvature, el.lamina_trace_length_px,
+                el.basal_cordate_index, el.margin_serration_index, el.margin_tooth_acuteness, el.terminal_lobe_area_frac,
+                el.blade_cie_l_q85_sheet_delta, el.basal_zone_cie_l_delta,
+                el.is_abaxial_pressed_leaf, el.abaxial_cie_l_sheet_delta,
                 el.petiole_length_px,
                 el.blade_length_px,
                 el.blade_width_px, el.blade_width_mm,
@@ -1422,7 +1503,7 @@ def load_step02_records_from_db(
                 el.petiole_to_blade_ratio,
                 vrp.capitula_count, vrp.involucre_height_px, vrp.involucre_width_px,
                 vrp.involucre_height_mm, vrp.involucre_width_mm,
-                vrp.AR_inv
+                vrp.AR_inv, vrp.corymb_head_count_est, vrp.radiate_head_fraction
             FROM extracted_leaves el
             LEFT JOIN plant_individuals pi
                 ON pi.catalogNumber = el.catalogNumber
@@ -1448,6 +1529,8 @@ def load_step02_records_from_db(
                 d["bilateral_lobe_symmetry"] = bool(d.get("bilateral_lobe_symmetry"))
             if d.get("efa_qc_pass") is not None:
                 d["efa_qc_pass"] = bool(d.get("efa_qc_pass"))
+            if d.get("is_abaxial_pressed_leaf") is not None:
+                d["is_abaxial_pressed_leaf"] = bool(d.get("is_abaxial_pressed_leaf"))
             if "cf_source" not in d or d.get("cf_source") is None:
                 s_src = str(d.get("scale_source") or "").strip().lower()
                 if s_src == "mp_estimated":
@@ -1476,48 +1559,65 @@ def load_step02_records_from_db(
                 vrp.catalogNumber, vrp.plant_individual_id,
                 vrp.capitula_count, vrp.involucre_height_px, vrp.involucre_width_px,
                 vrp.involucre_height_mm, vrp.involucre_width_mm,
-                vrp.AR_inv,
+                vrp.AR_inv, vrp.corymb_head_count_est, vrp.radiate_head_fraction,
                 pi.plant_height_cm, pi.scape_to_basal_leaf_ratio, pi.is_bent_stem,
                 vrp.total_capitula, vrp.n_anthesis, vrp.n_fruiting,
-                vrp.n_bud, vrp.voucher_phenological_state, vrp.dominant_pappus_ratio
+                vrp.n_bud, vrp.n_senescent, vrp.voucher_phenological_state,
+                vrp.is_verified_anthesis, vrp.reproductive_stage_confidence,
+                vrp.dominant_pappus_ratio
             FROM voucher_reproductive_phenology vrp
             LEFT JOIN plant_individuals pi
                 ON pi.catalogNumber = vrp.catalogNumber
                AND pi.plant_individual_id = vrp.plant_individual_id
             WHERE vrp.catalogNumber IN ({ph})
-            ORDER BY vrp.plant_individual_id ASC;
+            ORDER BY vrp.catalogNumber ASC, vrp.plant_individual_id ASC;
             """,
             chunk,
         )
         for row in cur_rp.fetchall():
             d = dict(row)
             c = str(d["catalogNumber"])
+            pid_i = int(d.get("plant_individual_id") or 0)
+            repro_item = {
+                "catalogNumber": c,
+                "plant_individual_id": pid_i,
+                "capitula_count": d.get("capitula_count"),
+                "involucre_height_px": d.get("involucre_height_px"),
+                "involucre_width_px": d.get("involucre_width_px"),
+                "involucre_height_mm": d.get("involucre_height_mm"),
+                "involucre_width_mm": d.get("involucre_width_mm"),
+                "AR_inv": d.get("AR_inv"),
+                "corymb_head_count_est": int(d.get("corymb_head_count_est") or 0),
+                "radiate_head_fraction": d.get("radiate_head_fraction"),
+                "plant_height_cm": d.get("plant_height_cm"),
+                "scape_to_basal_leaf_ratio": d.get("scape_to_basal_leaf_ratio"),
+                "is_bent_stem": bool(d.get("is_bent_stem")),
+            }
+            repro_by_pid[(c, pid_i)] = repro_item
             if c not in repro_by_cat:
-                repro_by_cat[c] = {
+                repro_by_cat[c] = repro_item
+            if d.get("voucher_phenological_state") is not None:
+                pheno_item = {
                     "catalogNumber": c,
-                    "plant_individual_id": int(d.get("plant_individual_id") or 0),
-                    "capitula_count": d.get("capitula_count"),
-                    "involucre_height_px": d.get("involucre_height_px"),
-                    "involucre_width_px": d.get("involucre_width_px"),
-                    "involucre_height_mm": d.get("involucre_height_mm"),
-                    "involucre_width_mm": d.get("involucre_width_mm"),
-                    "AR_inv": d.get("AR_inv"),
-                    "plant_height_cm": d.get("plant_height_cm"),
-                    "scape_to_basal_leaf_ratio": d.get("scape_to_basal_leaf_ratio"),
-                    "is_bent_stem": bool(d.get("is_bent_stem")),
-                }
-            if c not in pheno_by_cat and d.get("voucher_phenological_state") is not None:
-                pheno_by_cat[c] = {
-                    "catalogNumber": c,
-                    "plant_individual_id": int(d.get("plant_individual_id") or 0),
+                    "plant_individual_id": pid_i,
                     "total_capitula": d.get("total_capitula"),
                     "n_anthesis": d.get("n_anthesis"),
                     "n_fruiting": d.get("n_fruiting"),
                     "n_bud": d.get("n_bud"),
+                    "n_senescent": d.get("n_senescent"),
                     "voucher_phenological_state": d.get("voucher_phenological_state"),
+                    "is_verified_anthesis": bool(d.get("is_verified_anthesis")) if d.get("is_verified_anthesis") is not None else None,
+                    "reproductive_stage_confidence": d.get("reproductive_stage_confidence"),
                     "dominant_pappus_ratio": d.get("dominant_pappus_ratio"),
+                    "corymb_head_count_est": int(d.get("corymb_head_count_est") or 0),
+                    "radiate_head_fraction": d.get("radiate_head_fraction"),
                 }
+                pheno_by_pid[(c, pid_i)] = pheno_item
+                if c not in pheno_by_cat:
+                    pheno_by_cat[c] = pheno_item
 
+    if include_by_pid:
+        return extracted_by_cat, failed_by_cat, repro_by_cat, pheno_by_cat, repro_by_pid, pheno_by_pid
     return extracted_by_cat, failed_by_cat, repro_by_cat, pheno_by_cat
 
 
@@ -1589,6 +1689,7 @@ def consolidate_false_multi_plant_splits_db(conn: sqlite3.Connection) -> Dict[st
          leaves per independent rosette).
     """
     stats = {"phantom_zero_stubs_removed": 0, "false_split_individuals_merged": 0}
+    _ensure_dynamic_table_migrated(conn, "voucher_reproductive_phenology")
     with conn:
         cur_stub = conn.execute(
             """
@@ -1771,7 +1872,8 @@ def consolidate_false_multi_plant_splits_db(conn: sqlite3.Connection) -> Dict[st
                            involucre_height_mm, involucre_width_mm, AR_inv,
                            total_capitula, n_anthesis, n_bud, n_fruiting, n_senescent,
                            voucher_phenological_state, is_verified_anthesis,
-                           reproductive_stage_confidence, dominant_pappus_ratio
+                           reproductive_stage_confidence, dominant_pappus_ratio,
+                           corymb_head_count_est, radiate_head_fraction
                     FROM voucher_reproductive_phenology
                     WHERE catalogNumber = ? AND plant_individual_id = ?;
                     """,
@@ -1784,7 +1886,8 @@ def consolidate_false_multi_plant_splits_db(conn: sqlite3.Connection) -> Dict[st
                                involucre_height_mm, involucre_width_mm, AR_inv,
                                total_capitula, n_anthesis, n_bud, n_fruiting, n_senescent,
                                voucher_phenological_state, is_verified_anthesis,
-                               reproductive_stage_confidence, dominant_pappus_ratio
+                               reproductive_stage_confidence, dominant_pappus_ratio,
+                               corymb_head_count_est, radiate_head_fraction
                         FROM voucher_reproductive_phenology
                         WHERE catalogNumber = ? AND plant_individual_id = ?;
                         """,
@@ -1838,7 +1941,9 @@ def consolidate_false_multi_plant_splits_db(conn: sqlite3.Connection) -> Dict[st
                                 voucher_phenological_state = ?,
                                 is_verified_anthesis = ?,
                                 reproductive_stage_confidence = COALESCE(reproductive_stage_confidence, ?),
-                                dominant_pappus_ratio = COALESCE(dominant_pappus_ratio, ?)
+                                dominant_pappus_ratio = COALESCE(dominant_pappus_ratio, ?),
+                                corymb_head_count_est = ?,
+                                radiate_head_fraction = COALESCE(radiate_head_fraction, ?)
                             WHERE catalogNumber = ? AND plant_individual_id = ?;
                             """,
                             (
@@ -1857,6 +1962,8 @@ def consolidate_false_multi_plant_splits_db(conn: sqlite3.Connection) -> Dict[st
                                 merged_ver,
                                 vrp_src[13],
                                 vrp_src[14],
+                                _sum_opt(vrp_dst[15], vrp_src[15]) or 0,
+                                vrp_src[16],
                                 cat,
                                 dst_pid,
                             ),
@@ -3149,8 +3256,24 @@ def ingest_existing_csvs_to_db(
         repro_rows = _read_csv_dicts(t_dir / "voucher_reproductive_metrics.csv")
         pheno_rows = _read_csv_dicts(t_dir / "voucher_phenological_states.csv")
 
-        repro_by_cat = {str(r.get("catalogNumber", "")).strip(): r for r in repro_rows if r.get("catalogNumber")}
-        pheno_by_cat = {str(r.get("catalogNumber", "")).strip(): r for r in pheno_rows if r.get("catalogNumber")}
+        repro_by_cat: Dict[str, Dict[str, Any]] = {}
+        repro_by_cat_pid: Dict[str, Dict[int, Dict[str, Any]]] = {}
+        for r in repro_rows:
+            c_key = str(r.get("catalogNumber", "")).strip()
+            if not c_key:
+                continue
+            p_key = _to_int(r.get("plant_individual_id"), default=0) or 0
+            repro_by_cat.setdefault(c_key, r)
+            repro_by_cat_pid.setdefault(c_key, {})[p_key] = r
+        pheno_by_cat: Dict[str, Dict[str, Any]] = {}
+        pheno_by_cat_pid: Dict[str, Dict[int, Dict[str, Any]]] = {}
+        for r in pheno_rows:
+            c_key = str(r.get("catalogNumber", "")).strip()
+            if not c_key:
+                continue
+            p_key = _to_int(r.get("plant_individual_id"), default=0) or 0
+            pheno_by_cat.setdefault(c_key, r)
+            pheno_by_cat_pid.setdefault(c_key, {})[p_key] = r
         failed_by_cat = {str(r.get("catalogNumber", "")).strip(): r for r in failed_rows if r.get("catalogNumber")}
         leaves_by_cat: Dict[str, List[Dict[str, Any]]] = {}
         for lr in leaf_manifest_rows:
@@ -3232,6 +3355,17 @@ def ingest_existing_csvs_to_db(
                             "n_fruiting": _to_int(phe.get("n_fruiting")),
                             "voucher_phenological_state": _to_str(phe.get("voucher_phenological_state")),
                             "dominant_pappus_ratio": _to_float(phe.get("dominant_pappus_ratio")),
+                            "corymb_head_count_est": _to_int(
+                                rep.get("corymb_head_count_est")
+                                if rep.get("corymb_head_count_est") is not None
+                                else phe.get("corymb_head_count_est"),
+                                default=0,
+                            ) or 0,
+                            "radiate_head_fraction": _to_float(
+                                rep.get("radiate_head_fraction")
+                                if rep.get("radiate_head_fraction") is not None
+                                else phe.get("radiate_head_fraction")
+                            ),
                         }],
                         pk_cols=("catalogNumber", "plant_individual_id"),
                     )
@@ -3244,6 +3378,8 @@ def ingest_existing_csvs_to_db(
                 failure_record=fail_rec,
                 repro_record=repro_by_cat.get(cat),
                 pheno_record=pheno_by_cat.get(cat),
+                repro_by_pid=repro_by_cat_pid.get(cat),
+                pheno_by_pid=pheno_by_cat_pid.get(cat),
                 contour_coords_by_leaf=coords_by_leaf,
                 output_dir=t_dir.parent,
                 workspace_root=ws,

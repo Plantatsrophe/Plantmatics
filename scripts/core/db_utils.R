@@ -245,7 +245,29 @@ PACKERA_DB_WC_BIO_COLS <- c(
       blade_cie_l_sd = "REAL",
       blade_cie_l_sheet_delta = "REAL",
       blade_cie_a_delta = "REAL",
-      blade_cie_b_delta = "REAL"
+      blade_cie_b_delta = "REAL",
+      bbox_x1 = "INTEGER",
+      bbox_y1 = "INTEGER",
+      bbox_x2 = "INTEGER",
+      bbox_y2 = "INTEGER",
+      base_angle_deg = "REAL",
+      apex_angle_deg = "REAL",
+      lamina_curvature = "REAL",
+      lamina_trace_length_px = "REAL",
+      basal_cordate_index = "REAL",
+      margin_serration_index = "REAL",
+      margin_tooth_acuteness = "REAL",
+      terminal_lobe_area_frac = "REAL",
+      blade_cie_l_q85_sheet_delta = "REAL",
+      basal_zone_cie_l_delta = "REAL",
+      is_abaxial_pressed_leaf = "INTEGER DEFAULT 0",
+      abaxial_cie_l_sheet_delta = "REAL"
+    ))
+  }
+  if (identical(table_name, "voucher_reproductive_phenology")) {
+    return(c(
+      corymb_head_count_est = "INTEGER DEFAULT 0",
+      radiate_head_fraction = "REAL"
     ))
   }
   if (identical(table_name, "run_active_cohort")) {
@@ -590,7 +612,7 @@ PACKERA_DB_WC_BIO_COLS <- c(
     return(FALSE)
   }
   changed <- FALSE
-  for (tbl in c("vouchers", "extracted_leaves", "run_active_cohort", "leaf_efa_harmonics", "otu_morphometrics", "spatial_rf_predictions", "curation_triage", "environmental_cache", "genomic_samples", "genetic_lineage_assignments", "cytological_records", "taxon_cytology_summary", "taxon_backbone_profiles", "natureserve_subnational_ranges")) {
+  for (tbl in c("vouchers", "extracted_leaves", "voucher_reproductive_phenology", "run_active_cohort", "leaf_efa_harmonics", "otu_morphometrics", "spatial_rf_predictions", "curation_triage", "environmental_cache", "genomic_samples", "genetic_lineage_assignments", "cytological_records", "taxon_cytology_summary", "taxon_backbone_profiles", "natureserve_subnational_ranges")) {
     if (isTRUE(.migrate_dynamic_sqlite_table_r(conn, tbl))) {
       changed <- TRUE
     }
@@ -816,14 +838,17 @@ connect_packera_db <- function(
 
   cur_ver <- .get_sqlite_user_version_r(conn)
   v_fields_chk <- if (db_table_exists_safe(conn, "vouchers")) tryCatch(DBI::dbListFields(conn, "vouchers"), error = function(e) character(0)) else c("typified_basionym", "verbatim_taxon_concept", "concept_synonymy_status", "identification_year", "is_open_or_hybrid_concept")
-  el_fields_chk <- if (db_table_exists_safe(conn, "extracted_leaves")) tryCatch(DBI::dbListFields(conn, "extracted_leaves"), error = function(e) character(0)) else c("leaf_zone", "ect_path")
+  el_fields_chk <- if (db_table_exists_safe(conn, "extracted_leaves")) tryCatch(DBI::dbListFields(conn, "extracted_leaves"), error = function(e) character(0)) else c("leaf_zone", "ect_path", "bbox_x1", "basal_cordate_index", "blade_cie_l_q85_sheet_delta", "is_abaxial_pressed_leaf")
+  vrp_fields_chk <- if (db_table_exists_safe(conn, "voucher_reproductive_phenology")) tryCatch(DBI::dbListFields(conn, "voucher_reproductive_phenology"), error = function(e) character(0)) else c("corymb_head_count_est", "radiate_head_fraction")
   om_fields_chk <- if (db_table_exists_safe(conn, "otu_morphometrics")) tryCatch(DBI::dbListFields(conn, "otu_morphometrics"), error = function(e) character(0)) else c("cauline_leaf_count", "ECT_PC1", "scale_source")
   mv_fields_chk <- if (db_table_exists_safe(conn, "v_integrative_triage_master")) tryCatch(DBI::dbListFields(conn, "v_integrative_triage_master"), error = function(e) character(0)) else character(0)
   v_has_concept <- all(c("typified_basionym", "verbatim_taxon_concept", "concept_synonymy_status", "identification_year", "is_open_or_hybrid_concept") %in% v_fields_chk)
-  el_has_zone <- all(c("leaf_zone", "ect_path") %in% el_fields_chk)
+  el_has_zone <- all(c("leaf_zone", "ect_path", "bbox_x1", "basal_cordate_index", "blade_cie_l_q85_sheet_delta", "is_abaxial_pressed_leaf") %in% el_fields_chk)
+  vrp_has_latest <- all(c("corymb_head_count_est", "radiate_head_fraction") %in% vrp_fields_chk)
   om_has_cauline <- all(c("cauline_leaf_count", "ECT_PC1", "scale_source") %in% om_fields_chk)
   mv_has_latest <- identical(eff_path, ":memory:") || all(c(
     "is_passive", "scale_source", "AR_inv_std", "reproductive_trait_status",
+    "corymb_head_count_est", "radiate_head_fraction",
     "ecoregion_can1", "ecoregion_can2", "w_geno_kappa",
     "geno_predicted_taxon", "geno_linkage_tier", "is_geno_admixed",
     "coalescent_gdi", "hybrid_generation_class", "cytonuclear_discordant",
@@ -843,7 +868,7 @@ connect_packera_db <- function(
     "env_mahal_d2", "env_mcd_outlier_flag"
   ) %in% mv_fields_chk)
   if (cur_ver >= PLANTMATICS_SCHEMA_USER_VERSION &&
-    v_has_concept && el_has_zone && om_has_cauline && mv_has_latest &&
+    v_has_concept && el_has_zone && vrp_has_latest && om_has_cauline && mv_has_latest &&
     (identical(eff_path, ":memory:") || (
       db_table_exists_safe(conn, "v_integrative_triage_master") &&
         db_table_exists_safe(conn, "genomic_samples") &&
@@ -881,7 +906,8 @@ connect_packera_db <- function(
         "hybrid_zone_cohesion_pass", "hybrid_parent_1", "hybrid_parent_2",
         "cda_oof_posterior_prob", "self_morph_mahal_d2", "open_set_df",
         "is_passive", "scale_source",
-        "AR_inv_std", "reproductive_trait_status", "ecoregion_can1", "ecoregion_can2",
+        "AR_inv_std", "reproductive_trait_status", "corymb_head_count_est", "radiate_head_fraction",
+        "ecoregion_can1", "ecoregion_can2",
         "w_geno_kappa", "geno_predicted_taxon", "geno_linkage_tier", "is_geno_admixed",
         "coalescent_gdi", "hybrid_generation_class", "cytonuclear_discordant",
         "public_plastome_match", "public_its_match", "waxy_lineage_match",

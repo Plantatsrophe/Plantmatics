@@ -272,6 +272,8 @@ def _build_master_view_ddl() -> str:
         CASE WHEN vrp.catalogNumber IS NOT NULL THEN vrp.is_verified_anthesis ELSE vrp0.is_verified_anthesis END AS is_verified_anthesis,
         CASE WHEN vrp.catalogNumber IS NOT NULL THEN vrp.reproductive_stage_confidence ELSE vrp0.reproductive_stage_confidence END AS reproductive_stage_confidence,
         CASE WHEN vrp.catalogNumber IS NOT NULL THEN vrp.dominant_pappus_ratio ELSE vrp0.dominant_pappus_ratio END AS dominant_pappus_ratio,
+        CASE WHEN vrp.catalogNumber IS NOT NULL THEN vrp.corymb_head_count_est ELSE vrp0.corymb_head_count_est END AS corymb_head_count_est,
+        CASE WHEN vrp.catalogNumber IS NOT NULL THEN vrp.radiate_head_fraction ELSE vrp0.radiate_head_fraction END AS radiate_head_fraction,
         -- Step 03 & Step 04 OTU Morphometrics & CDA
         om.solidity AS solidity,
         om.dissection_index AS dissection_index,
@@ -846,6 +848,22 @@ def _build_schema_ddl() -> str:
         blade_cie_l_sheet_delta REAL,
         blade_cie_a_delta REAL,
         blade_cie_b_delta REAL,
+        bbox_x1 INTEGER,
+        bbox_y1 INTEGER,
+        bbox_x2 INTEGER,
+        bbox_y2 INTEGER,
+        base_angle_deg REAL,
+        apex_angle_deg REAL,
+        lamina_curvature REAL,
+        lamina_trace_length_px REAL,
+        basal_cordate_index REAL,
+        margin_serration_index REAL,
+        margin_tooth_acuteness REAL,
+        terminal_lobe_area_frac REAL,
+        blade_cie_l_q85_sheet_delta REAL,
+        basal_zone_cie_l_delta REAL,
+        is_abaxial_pressed_leaf INTEGER DEFAULT 0,
+        abaxial_cie_l_sheet_delta REAL,
         PRIMARY KEY (catalogNumber, plant_individual_id, leaf_id),
         FOREIGN KEY (catalogNumber, plant_individual_id)
             REFERENCES plant_individuals(catalogNumber, plant_individual_id) ON DELETE CASCADE
@@ -871,6 +889,8 @@ def _build_schema_ddl() -> str:
         is_verified_anthesis INTEGER,
         reproductive_stage_confidence REAL,
         dominant_pappus_ratio REAL,
+        corymb_head_count_est INTEGER DEFAULT 0,
+        radiate_head_fraction REAL,
         PRIMARY KEY (catalogNumber, plant_individual_id),
         FOREIGN KEY (catalogNumber, plant_individual_id)
             REFERENCES plant_individuals(catalogNumber, plant_individual_id) ON DELETE CASCADE
@@ -1461,6 +1481,26 @@ _DYNAMIC_TABLE_MIGRATION_SPECS: Dict[str, Tuple[Tuple[str, str], ...]] = {
         ("blade_cie_l_sheet_delta", "REAL"),
         ("blade_cie_a_delta", "REAL"),
         ("blade_cie_b_delta", "REAL"),
+        ("bbox_x1", "INTEGER"),
+        ("bbox_y1", "INTEGER"),
+        ("bbox_x2", "INTEGER"),
+        ("bbox_y2", "INTEGER"),
+        ("base_angle_deg", "REAL"),
+        ("apex_angle_deg", "REAL"),
+        ("lamina_curvature", "REAL"),
+        ("lamina_trace_length_px", "REAL"),
+        ("basal_cordate_index", "REAL"),
+        ("margin_serration_index", "REAL"),
+        ("margin_tooth_acuteness", "REAL"),
+        ("terminal_lobe_area_frac", "REAL"),
+        ("blade_cie_l_q85_sheet_delta", "REAL"),
+        ("basal_zone_cie_l_delta", "REAL"),
+        ("is_abaxial_pressed_leaf", "INTEGER DEFAULT 0"),
+        ("abaxial_cie_l_sheet_delta", "REAL"),
+    ),
+    "voucher_reproductive_phenology": (
+        ("corymb_head_count_est", "INTEGER DEFAULT 0"),
+        ("radiate_head_fraction", "REAL"),
     ),
     "run_active_cohort": (
         ("type_status", "TEXT"),
@@ -1817,6 +1857,22 @@ _CANONICAL_EXTRACTED_LEAVES_COLS: Tuple[str, ...] = (
     "blade_cie_l_sheet_delta",
     "blade_cie_a_delta",
     "blade_cie_b_delta",
+    "bbox_x1",
+    "bbox_y1",
+    "bbox_x2",
+    "bbox_y2",
+    "base_angle_deg",
+    "apex_angle_deg",
+    "lamina_curvature",
+    "lamina_trace_length_px",
+    "basal_cordate_index",
+    "margin_serration_index",
+    "margin_tooth_acuteness",
+    "terminal_lobe_area_frac",
+    "blade_cie_l_q85_sheet_delta",
+    "basal_zone_cie_l_delta",
+    "is_abaxial_pressed_leaf",
+    "abaxial_cie_l_sheet_delta",
 )
 
 _CANONICAL_VOUCHER_REPRO_COLS: Tuple[str, ...] = (
@@ -1837,6 +1893,8 @@ _CANONICAL_VOUCHER_REPRO_COLS: Tuple[str, ...] = (
     "is_verified_anthesis",
     "reproductive_stage_confidence",
     "dominant_pappus_ratio",
+    "corymb_head_count_est",
+    "radiate_head_fraction",
 )
 
 
@@ -1965,6 +2023,22 @@ def _rebuild_tier_a_step02_tables_if_needed(
                 blade_cie_l_sheet_delta REAL,
                 blade_cie_a_delta REAL,
                 blade_cie_b_delta REAL,
+                bbox_x1 INTEGER,
+                bbox_y1 INTEGER,
+                bbox_x2 INTEGER,
+                bbox_y2 INTEGER,
+                base_angle_deg REAL,
+                apex_angle_deg REAL,
+                lamina_curvature REAL,
+                lamina_trace_length_px REAL,
+                basal_cordate_index REAL,
+                margin_serration_index REAL,
+                margin_tooth_acuteness REAL,
+                terminal_lobe_area_frac REAL,
+                blade_cie_l_q85_sheet_delta REAL,
+                basal_zone_cie_l_delta REAL,
+                is_abaxial_pressed_leaf INTEGER DEFAULT 0,
+                abaxial_cie_l_sheet_delta REAL,
                 PRIMARY KEY (catalogNumber, plant_individual_id, leaf_id),
                 FOREIGN KEY (catalogNumber, plant_individual_id)
                     REFERENCES plant_individuals(catalogNumber, plant_individual_id) ON DELETE CASCADE
@@ -1994,6 +2068,8 @@ def _rebuild_tier_a_step02_tables_if_needed(
                 is_verified_anthesis INTEGER,
                 reproductive_stage_confidence REAL,
                 dominant_pappus_ratio REAL,
+                corymb_head_count_est INTEGER DEFAULT 0,
+                radiate_head_fraction REAL,
                 PRIMARY KEY (catalogNumber, plant_individual_id),
                 FOREIGN KEY (catalogNumber, plant_individual_id)
                     REFERENCES plant_individuals(catalogNumber, plant_individual_id) ON DELETE CASCADE
@@ -2278,7 +2354,7 @@ def init_db_schema(conn: sqlite3.Connection) -> None:
             om_cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(otu_morphometrics);").fetchall()}
             srf_cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(spatial_rf_predictions);").fetchall()}
             mv_cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(v_integrative_triage_master);").fetchall()}
-            req_mv_cols = {"is_passive", "scale_source", "AR_inv_std", "log1p_capitulum_count", "blade_cie_l_norm", "blade_cie_l_sheet_delta", "blade_cie_a_delta", "blade_cie_b_delta", "nearest_type_basionym", "reproductive_trait_status", "ecoregion_can1", "ecoregion_can2", "hybrid_zone_cohesion_pass", "hybrid_parent_1", "hybrid_parent_2", "cda_oof_posterior_prob", "self_morph_mahal_d2", "open_set_df", "cryptic_non_clinal_pass", "resurrection_basionym", "w_geno_kappa", "geno_predicted_taxon", "geno_linkage_tier", "is_geno_admixed", "coalescent_gdi", "hybrid_generation_class", "cytonuclear_discordant", "public_plastome_match", "public_its_match", "waxy_lineage_match", "public_backbone_clade", "public_phytop_ils_index", "public_phytop_ih_index", "genomic_propagation_tier", "cluster_propagated_gdi", "cytology_linkage_tier", "voucher_sporophytic_2n", "voucher_ploidy_level", "taxon_reported_cytotypes", "is_multi_cytotype_taxon", "cytotype_reproductive_barrier_pass", "soil_ca_mg_molar_ratio", "soil_ultramafic_ni_cr_index", "soil_carbonate_c_pct", "is_nwi_wetland", "nwi_wetland_system", "nwi_wetland_dist_m", "hydro_edaphic_niche_regime", "wetland_fidelity_concordance", "basionym_synonymy_type", "backbone_basionym_name", "protologue_url", "natureserve_global_rank", "nwpl_indicator_code", "nwpl_wetland_score", "is_centroid_or_inst_coord", "coord_quarantine_reason", "typified_basionym", "verbatim_taxon_concept", "concept_synonymy_status", "identification_year", "is_open_or_hybrid_concept", "env_mahal_d2", "env_mcd_outlier_flag"}
+            req_mv_cols = {"is_passive", "scale_source", "AR_inv_std", "log1p_capitulum_count", "corymb_head_count_est", "radiate_head_fraction", "blade_cie_l_norm", "blade_cie_l_sheet_delta", "blade_cie_a_delta", "blade_cie_b_delta", "nearest_type_basionym", "reproductive_trait_status", "ecoregion_can1", "ecoregion_can2", "hybrid_zone_cohesion_pass", "hybrid_parent_1", "hybrid_parent_2", "cda_oof_posterior_prob", "self_morph_mahal_d2", "open_set_df", "cryptic_non_clinal_pass", "resurrection_basionym", "w_geno_kappa", "geno_predicted_taxon", "geno_linkage_tier", "is_geno_admixed", "coalescent_gdi", "hybrid_generation_class", "cytonuclear_discordant", "public_plastome_match", "public_its_match", "waxy_lineage_match", "public_backbone_clade", "public_phytop_ils_index", "public_phytop_ih_index", "genomic_propagation_tier", "cluster_propagated_gdi", "cytology_linkage_tier", "voucher_sporophytic_2n", "voucher_ploidy_level", "taxon_reported_cytotypes", "is_multi_cytotype_taxon", "cytotype_reproductive_barrier_pass", "soil_ca_mg_molar_ratio", "soil_ultramafic_ni_cr_index", "soil_carbonate_c_pct", "is_nwi_wetland", "nwi_wetland_system", "nwi_wetland_dist_m", "hydro_edaphic_niche_regime", "wetland_fidelity_concordance", "basionym_synonymy_type", "backbone_basionym_name", "protologue_url", "natureserve_global_rank", "nwpl_indicator_code", "nwpl_wetland_score", "is_centroid_or_inst_coord", "coord_quarantine_reason", "typified_basionym", "verbatim_taxon_concept", "concept_synonymy_status", "identification_year", "is_open_or_hybrid_concept", "env_mahal_d2", "env_mcd_outlier_flag"}
             if (
                 "leaf_zone" not in el_cols
                 or "area_mm2" not in el_cols
@@ -2289,6 +2365,10 @@ def init_db_schema(conn: sqlite3.Connection) -> None:
                 or "efa_qc_pass" not in el_cols
                 or "enclosed_void_frac" not in el_cols
                 or "bilateral_lobe_symmetry" not in el_cols
+                or "bbox_x1" not in el_cols
+                or "basal_cordate_index" not in el_cols
+                or "blade_cie_l_q85_sheet_delta" not in el_cols
+                or "is_abaxial_pressed_leaf" not in el_cols
                 or _tier_a_step02_needs_rebuild(conn)
                 or "cauline_leaf_count" not in om_cols
                 or "ECT_PC1" not in om_cols

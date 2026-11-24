@@ -685,14 +685,60 @@ def _fb_compute_measurements(pts_2d: Dict[str, Tuple[float, float]]) -> Optional
         if (w1 is not None and w2 is not None)
         else None
     )
+
+    def _interior_angle_deg(
+        vertex: Optional[Tuple[float, float]],
+        left: Optional[Tuple[float, float]],
+        right: Optional[Tuple[float, float]],
+    ) -> Optional[float]:
+        if vertex is None or left is None or right is None:
+            return None
+        v1x = float(left[0]) - float(vertex[0])
+        v1y = float(left[1]) - float(vertex[1])
+        v2x = float(right[0]) - float(vertex[0])
+        v2y = float(right[1]) - float(vertex[1])
+        n1 = math.hypot(v1x, v1y)
+        n2 = math.hypot(v2x, v2y)
+        if n1 <= 1e-9 or n2 <= 1e-9:
+            return None
+        dot = v1x * v2x + v1y * v2y
+        cos_val = float(np.clip(dot / (n1 * n2), -1.0, 1.0))
+        return float(math.degrees(math.acos(cos_val)))
+
+    a_left = pts_2d.get("apex_left") or pts_2d.get("apex_1")
+    a_right = pts_2d.get("apex_right") or pts_2d.get("apex_3")
+    a_center = pts_2d.get("apex_center") or pts_2d.get("apex_2") or pts_2d.get("lamina_tip") or lt
+    if a_left is not None and a_right is not None and a_center is not None:
+        apex_ang = _interior_angle_deg(a_center, a_left, a_right)
+    elif lt is not None and w1 is not None and w2 is not None:
+        apex_ang = _interior_angle_deg(lt, w1, w2)
+    else:
+        apex_ang = None
+
+    b_left = pts_2d.get("base_left") or pts_2d.get("base_1")
+    b_right = pts_2d.get("base_right") or pts_2d.get("base_3")
+    b_center = pts_2d.get("base_center") or pts_2d.get("base_2") or pts_2d.get("lamina_base") or lb
+    if b_left is not None and b_right is not None and b_center is not None:
+        base_ang = _interior_angle_deg(b_center, b_left, b_right)
+    elif lb is not None and w1 is not None and w2 is not None:
+        base_ang = _interior_angle_deg(lb, w1, w2)
+    else:
+        base_ang = None
+
     curv = (lam_trace / tip_base_len) if (lam_trace and tip_base_len and tip_base_len > 1e-6) else 1.0
     return SimpleNamespace(
+        lamina_trace_length=lam_trace,
+        lamina_tip_base_length=tip_base_len,
+        petiole_trace_length=pet_trace,
+        leaf_width=leaf_w,
+        apex_angle=apex_ang,
+        base_angle=base_ang,
         lamina_trace_length_px=lam_trace,
         lamina_tip_base_length_px=tip_base_len,
         petiole_trace_length_px=pet_trace,
         leaf_width_px=leaf_w,
-        apex_angle_deg=None,
-        base_angle_deg=None,
+        apex_angle_deg=apex_ang,
+        base_angle_deg=base_ang,
         lamina_curvature=curv,
     )
 
