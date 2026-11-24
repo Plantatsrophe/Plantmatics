@@ -289,25 +289,35 @@ def run_coalescent_delimitation(
         taxa_labels = [_infer_taxon(sid, sample_taxon_map) for sid in sids]
         sids, mat, taxa_labels, group_members = _collapse_dosage_replicates(sids, mat, taxa_labels, rep_pair_map, hq_reads_map, miss_rate_map)
         n_s, n_l = mat.shape
-        diff_blk = np.zeros((1, n_s, n_s), dtype=np.float64)
-        call_blk = np.ones((1, n_s, n_s), dtype=np.float64) * max(1, n_l)
-        for i in range(n_s):
-            for j in range(n_s):
-                ok = np.isfinite(mat[i]) & np.isfinite(mat[j])
-                if np.any(ok):
-                    call_blk[0, i, j] = float(np.sum(ok))
-                    diff_blk[0, i, j] = float(np.sum(np.abs(mat[i, ok] - mat[j, ok]) * 0.02))
-        w_het = (np.nansum(mat * (1.0 - mat), axis=1, keepdims=True) * 0.02).T
-        w_call = np.sum(np.isfinite(mat), axis=1, keepdims=True).astype(np.float64).T
-        gdi_df, gdi_s_df = compute_coalescent_gdi_delimitation(sids, taxa_labels, diff_blk, call_blk, w_het, w_call, n_boot=50)
+        n_blk = min(32, max(4, n_l // 4)) if n_l >= 16 else (min(16, n_l) if n_l >= 4 else max(1, n_l))
+        blk_cols = [cols for cols in np.array_split(np.arange(n_l), n_blk) if cols.size > 0] if n_l > 0 else [np.arange(0)]
+        n_blk = len(blk_cols)
+        site_scale = 50.0
+        diff_blk = np.zeros((n_blk, n_s, n_s), dtype=np.float64)
+        call_blk = np.zeros((n_blk, n_s, n_s), dtype=np.float64)
+        w_het = np.zeros((n_blk, n_s), dtype=np.float64)
+        w_call = np.zeros((n_blk, n_s), dtype=np.float64)
+        for bi, cols in enumerate(blk_cols):
+            if cols.size == 0:
+                call_blk[bi], w_call[bi] = 1.0, 1.0
+                continue
+            sub = np.clip(mat[:, cols], 0.0, 1.0)
+            ok = np.isfinite(sub)
+            ok_f = ok.astype(np.float64)
+            xs, omx = np.where(ok, sub, 0.0), np.where(ok, 1.0 - sub, 0.0)
+            call_blk[bi] = (ok_f @ ok_f.T) * site_scale
+            diff_blk[bi] = xs @ omx.T + omx @ xs.T
+            w_call[bi] = np.sum(ok_f, axis=1) * site_scale
+            w_het[bi] = np.sum(2.0 * xs * omx, axis=1)
+        gdi_df, gdi_s_df = compute_coalescent_gdi_delimitation(sids, taxa_labels, diff_blk, call_blk, w_het, w_call, n_boot=eff_n_boot)
         adequacy_df = gdi_df.attrs.get("adequacy_df", pd.DataFrame())
-        gdi_df = _apply_intraspecific_demes(gdi_df, sids, taxa_labels, diff_blk, call_blk, w_het, w_call, 50, "JC69", None)
+        gdi_df = _apply_intraspecific_demes(gdi_df, sids, taxa_labels, diff_blk, call_blk, w_het, w_call, eff_n_boot, "JC69", None)
         gdi_df["gdi_source"] = gdi_source
         gdi_s_df = _expand_gdi_samples(gdi_s_df, group_members, orig_sids)
         gdi_s_df["gdi_source"] = gdi_source
         gdi_df.to_csv(gdi_csv, index=False); gdi_s_df.to_csv(gdi_samp_csv, index=False); adequacy_df.to_csv(adequacy_csv, index=False)
         pd.DataFrame(columns=["quartet_id", "best_split", "svd_score_best", "svd_score_second", "quartet_support", "quartet_boot_support", "quartet_p_value", "n_sites_used"]).to_csv(svdq_csv, index=False)
-        return {"status": "completed_dosage_fallback", "n_samples": n_s, "gdi_csv": str(gdi_csv)}
+        return {"status": "completed_dosage_fallback", "n_samples": n_s, "n_blocks": n_blk, "gdi_csv": str(gdi_csv)}
 
     return {"status": "skipped_empty", "n_samples": 0}
 

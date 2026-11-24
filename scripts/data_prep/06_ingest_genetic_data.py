@@ -40,71 +40,61 @@ from scripts.data_prep.step06_ploidy_hdplot_utils import (
 )
 from scripts.data_prep.step06_sample_metadata_utils import (
     ALIGNMENT_SUFFIXES, DOSAGE_HINTS, OUTGROUP_CODE_TO_TAXON, PAC_CODE_TO_TAXON, TREE_PREFIXES, TREE_SUFFIXES, VARIANT_SUFFIXES,
-    StagedGenomicAssets, _canonical_taxon_equiv_key, _normalize_event_date_part, _normalize_exsiccatae_key, _parse_field_metadata,
-    _parse_key_samples, _parse_stats_file, clean_sample_id, discover_genomic_inputs, normalize_taxon_name, parse_sample_code,
-    sanitize_step06_sample_coordinates, strip_smart_quotes,
+    StagedGenomicAssets, _NON_TYPE_STATUS_TOKENS, _canonical_taxon_equiv_key, _normalize_event_date_part, _normalize_exsiccatae_key,
+    _parse_field_metadata, _parse_key_samples, _parse_stats_file, _safe_text, clean_sample_id, discover_genomic_inputs,
+    evaluate_step06_sample_coordinates, normalize_taxon_name, parse_sample_code, sanitize_step06_sample_coordinates, strip_smart_quotes,
 )
 from scripts.data_prep.step06_vcf_dosage_utils import (
     _extract_cell_depths, _load_organellar_metadata, _parse_dosage_table, _parse_vcf_with_depths, align_vcf_depths_to_dosage_grid,
 )
 from scripts.data_prep.step06_voucher_linker_utils import (
-    _build_exsiccatae_index, _extract_meta_exsiccatae_keys, _link_sample_to_voucher, _load_db_cytology_priors,
+    _build_exsiccatae_index, _coerce_flag_int, _extract_meta_exsiccatae_keys, _link_sample_to_voucher, _load_db_cytology_priors,
     _load_db_vouchers, _match_field_record, _normalize_exsiccatae_lookup_key, _parse_int_ploidy,
 )
 
 logger = setup_logging(name="plantmatics.genomics.ingest")
 
 
-def _resolve_sample_record(
-    sid: str,
-    vouchers: Sequence[Dict[str, Any]],
-    exsiccatae_index: Dict[str, List[Dict[str, Any]]],
-    field_rows: Sequence[Dict[str, Any]],
-    direct_user_meta: Dict[str, Dict[str, Any]],
-    stats_map: Dict[str, Dict[str, Any]],
-    organellar_map: Dict[str, Dict[str, Any]],
-    db_priors: Dict[str, Dict[str, Any]],
-    ex_prior_lc: Dict[str, int],
-    dosage_mat: np.ndarray,
-    ref_depth_mat: np.ndarray,
-    alt_depth_mat: np.ndarray,
-    sample_idx_map: Dict[str, int],
-    n_loci_raw: int,
-    marker_platform: str,
-    min_hq_reads: int,
-    max_missing_rate: float,
-    cyto_ctx_out: Optional[Dict[str, Tuple[Optional[int], Optional[int], bool, bool]]] = None,
-) -> Tuple[Dict[str, Any], Optional[int]]:
-    parsed = parse_sample_code(sid)
-    u_meta = direct_user_meta.get(sid)
-    f_row = _match_field_record(sid, parsed, field_rows)
-    st = stats_map.get(sid, {})
-    org = organellar_map.get(sid, {})
+def _opt_float_val(val: Any) -> Optional[float]:
+    if val is None or isinstance(val, bool):
+        return None
+    try:
+        f = float(val)
+        return f if np.isfinite(f) else None
+    except (TypeError, ValueError):
+        return None
 
-    raw_t = parsed.get("taxon_raw")
-    sp_std = parsed.get("species_standardized")
-    code_up = (parsed.get("taxon_code") or "").upper()
+
+def _resolve_sample_record(
+    sid: str, vouchers: Sequence[Dict[str, Any]], exsiccatae_index: Dict[str, List[Dict[str, Any]]],
+    field_rows: Sequence[Dict[str, Any]], direct_user_meta: Dict[str, Dict[str, Any]],
+    stats_map: Dict[str, Dict[str, Any]], organellar_map: Dict[str, Dict[str, Any]],
+    db_priors: Dict[str, Dict[str, Any]], ex_prior_lc: Dict[str, int],
+    dosage_mat: np.ndarray, ref_depth_mat: np.ndarray, alt_depth_mat: np.ndarray,
+    sample_idx_map: Dict[str, int], n_loci_raw: int, marker_platform: str,
+    min_hq_reads: int, max_missing_rate: float,
+    cyto_ctx_out: Optional[Dict[str, Tuple[Optional[int], Optional[int], bool, bool]]] = None,
+    ref_holdout_out: Optional[set] = None,
+) -> Tuple[Dict[str, Any], Optional[int]]:
+    parsed, u_meta = parse_sample_code(sid), direct_user_meta.get(sid)
+    f_row, st, org = _match_field_record(sid, parsed, field_rows), stats_map.get(sid, {}), organellar_map.get(sid, {})
+    raw_t, sp_std, code_up = parsed.get("taxon_raw"), parsed.get("species_standardized"), (parsed.get("taxon_code") or "").upper()
     is_nov_code = code_up == "NOV"
     f_same_taxon = bool(f_row is not None and (not code_up or (f_row.get("taxon_code") or "").upper() == code_up))
     is_query = is_nov_code
     if f_row is not None:
         if is_nov_code or (f_same_taxon and f_row.get("is_putative_novel_or_hybrid_query")):
-            raw_t = f_row.get("taxon_raw") or raw_t
-            sp_std = f_row.get("species_standardized") or sp_std
+            raw_t, sp_std = f_row.get("taxon_raw") or raw_t, f_row.get("species_standardized") or sp_std
             is_query = is_query or bool(f_row.get("is_putative_novel_or_hybrid_query"))
         elif not sp_std and f_same_taxon:
-            raw_t = f_row.get("taxon_raw")
-            sp_std = f_row.get("species_standardized")
-            is_query = bool(f_row.get("is_putative_novel_or_hybrid_query"))
+            raw_t, sp_std, is_query = f_row.get("taxon_raw"), f_row.get("species_standardized"), bool(f_row.get("is_putative_novel_or_hybrid_query"))
     if is_nov_code:
         raw_t = raw_t or (f_row or {}).get("taxon_raw") or "Packera sp. nov."
         sp_std = sp_std or (f_row or {}).get("species_standardized") or raw_t
     if u_meta is not None:
         if u_meta.get("taxon_raw") or u_meta.get("species_standardized"):
             ut_raw, ut_std, ut_q = normalize_taxon_name(u_meta.get("taxon_raw") or u_meta.get("species_standardized"))
-            raw_t = ut_raw or raw_t
-            sp_std = ut_std or sp_std
-            is_query = is_query or ut_q
+            raw_t, sp_std, is_query = ut_raw or raw_t, ut_std or sp_std, is_query or ut_q
         if str(u_meta.get("is_putative_novel_or_hybrid_query", "")).strip().lower() in ("1", "true", "yes"):
             is_query = True
 
@@ -113,17 +103,34 @@ def _resolve_sample_record(
     link = _link_sample_to_voucher(sid, parsed, u_meta, f_row, vouchers, exsiccatae_index=exsiccatae_index)
     v_rec = link.get("voucher") or {}
 
+    typ_bas = _safe_text((u_meta or {}).get("typified_basionym") or link.get("typified_basionym") or v_rec.get("typified_basionym")) or None
+    con_stat = _safe_text((u_meta or {}).get("concept_synonymy_status") or link.get("concept_synonymy_status") or v_rec.get("concept_synonymy_status")) or None
+    raw_open = bool((raw_t and normalize_taxon_name(raw_t)[2]) or (not raw_t and v_rec.get("scientificName") and normalize_taxon_name(v_rec.get("scientificName"))[2]))
+    is_open_hybrid = 1 if (
+        raw_open or _coerce_flag_int(link.get("is_open_or_hybrid_concept")) == 1
+        or _coerce_flag_int(v_rec.get("is_open_or_hybrid_concept")) == 1 or _coerce_flag_int((u_meta or {}).get("is_open_or_hybrid_concept")) == 1
+        or str(con_stat or "").strip().lower() in ("open_nomenclature", "hybrid_formula")
+    ) else 0
+    if is_open_hybrid == 1:
+        is_query = True
+    v_type_raw = str((u_meta or {}).get("type_status") or v_rec.get("type_status") or "").strip().upper()
+    is_verified_type = bool(v_type_raw and v_type_raw not in _NON_TYPE_STATUS_TOKENS and "NOT A TYPE" not in v_type_raw and "NON-TYPE" not in v_type_raw and "NON TYPE" not in v_type_raw)
+    is_heterotypic_type = (str(con_stat or "").strip().lower() == "heterotypic_synonym") and is_verified_type
+    if ref_holdout_out is not None and (is_open_hybrid == 1 or is_heterotypic_type):
+        ref_holdout_out.add(sid)
+
+    gb_acc = str((u_meta or {}).get("genbank_accession") or (u_meta or {}).get("genbank") or parsed.get("genbank_accession") or (f_row or {}).get("genbank_accession") or "").strip() or None
     ploidy = _parse_int_ploidy(u_meta.get("ploidy_level")) if u_meta else None
     if ploidy is None and (cat_link := str(link.get("catalogNumber") or "").strip()):
         ploidy = db_priors["by_catalog"].get(cat_link)
     if ploidy is None and (ex_link := _normalize_exsiccatae_lookup_key(link.get("exsiccatae_key")).lower()):
         ploidy = ex_prior_lc.get(ex_link)
-    if ploidy is None and (gb_acc := str((u_meta or {}).get("genbank_accession") or parsed.get("genbank_accession") or (f_row or {}).get("genbank_accession") or "").strip()):
+    if ploidy is None and gb_acc:
         ploidy = db_priors["by_genbank"].get(gb_acc)
 
     tax_sp = str(sp_std or v_rec.get("species_standardized") or "").strip()
     tax_info = None
-    if not is_query and tax_sp:
+    if not is_query and not is_heterotypic_type and tax_sp:
         tax_info = db_priors["by_taxon"].get(tax_sp)
         if tax_info is None:
             eq = _canonical_taxon_equiv_key(tax_sp)
@@ -153,6 +160,7 @@ def _resolve_sample_record(
         qc_pass = True
 
     lat = lon = state = county = ev_date = None
+    coord_from_v = False
     if u_meta and u_meta.get("decimalLatitude") and u_meta.get("decimalLongitude"):
         try:
             lat, lon = float(u_meta["decimalLatitude"]), float(u_meta["decimalLongitude"])
@@ -163,6 +171,7 @@ def _resolve_sample_record(
         state, county, ev_date = f_row.get("stateProvince"), f_row.get("county"), f_row.get("eventDate")
     if lat is None and v_rec:
         lat, lon = v_rec.get("decimalLatitude"), v_rec.get("decimalLongitude")
+        coord_from_v = lat is not None and lon is not None
     if state is None and v_rec: state = v_rec.get("stateProvince")
     if county is None and v_rec: county = v_rec.get("county")
     if ev_date is None and v_rec: ev_date = v_rec.get("eventDate")
@@ -171,25 +180,35 @@ def _resolve_sample_record(
         county = u_meta.get("county") or county
         ev_date = u_meta.get("eventDate") or ev_date
 
+    v_lat, v_lon = _opt_float_val(v_rec.get("decimalLatitude")), _opt_float_val(v_rec.get("decimalLongitude"))
+    same_v_coord = bool(coord_from_v or (lat is None) or (v_lat is not None and v_lon is not None and lat is not None and lon is not None and abs(float(lat) - v_lat) < 1e-4 and abs(float(lon) - v_lon) < 1e-4))
+    u_unc_raw = (u_meta or {}).get("coordinateUncertainty") if (u_meta and u_meta.get("coordinateUncertainty") is not None) else (u_meta or {}).get("coordinateUncertaintyInMeters")
+    coord_unc = _opt_float_val(u_unc_raw) if u_unc_raw is not None else (_opt_float_val((f_row or {}).get("coordinateUncertainty")) if (f_row and f_row.get("coordinateUncertainty") is not None) else (_opt_float_val(link.get("coordinateUncertainty") if link.get("coordinateUncertainty") is not None else v_rec.get("coordinateUncertainty")) if same_v_coord else None))
+    u_cent = _coerce_flag_int((u_meta or {}).get("is_centroid_or_inst_coord")) == 1
+    v_cent = same_v_coord and (_coerce_flag_int(link.get("is_centroid_or_inst_coord")) == 1 or _coerce_flag_int(v_rec.get("is_centroid_or_inst_coord")) == 1)
+    v_cent_reason = _safe_text((u_meta or {}).get("coord_quarantine_reason")) or (_safe_text(link.get("coord_quarantine_reason") or v_rec.get("coord_quarantine_reason")) if same_v_coord else "")
+
     is_vouchered = bool(link.get("catalogNumber"))
-    loc_txt = (u_meta or {}).get("locality") or (f_row or {}).get("notes") or ""
-    lat, lon, was_nullified = sanitize_step06_sample_coordinates(
-        lat, lon, state_prov=state or "", county=county or "", locality=loc_txt, is_vouchered=is_vouchered,
+    loc_txt = (u_meta or {}).get("locality") or (f_row or {}).get("notes") or v_rec.get("locality") or ""
+    lat, lon, was_nullified, is_cent_flag, cent_reason = evaluate_step06_sample_coordinates(
+        lat, lon, state_prov=state or "", county=county or "", locality=loc_txt,
+        uncertainty_m=coord_unc, is_type_specimen=is_verified_type,
+        voucher_flagged=(u_cent or v_cent), voucher_reason=v_cent_reason,
     )
     if not is_vouchered and was_nullified and link.get("linkage_tier") == "G3_Georeferenced_Unvouchered":
         link["linkage_tier"] = "G4_Ungeoreferenced_Tip"
 
     rec = {
-        "genetic_sample_id": sid,
-        "catalogNumber": link.get("catalogNumber"),
-        "exsiccatae_key": link.get("exsiccatae_key"),
+        "genetic_sample_id": sid, "catalogNumber": link.get("catalogNumber"), "exsiccatae_key": link.get("exsiccatae_key"),
+        "genbank_accession": gb_acc,
         "project_id": (u_meta or {}).get("project_id") or ((f_row or {}).get("project_id") if (f_same_taxon or is_nov_code) else None) or parsed.get("replicate_pair_id"),
         "population_id": (u_meta or {}).get("population_id") or parsed.get("population_id"),
         "replicate_pair_id": (u_meta or {}).get("replicate_pair_id") or parsed.get("replicate_pair_id"),
-        "taxon_raw": raw_t, "species_standardized": sp_std,
-        "is_putative_novel_or_hybrid_query": 1 if is_query else 0,
+        "taxon_raw": raw_t, "species_standardized": sp_std, "is_putative_novel_or_hybrid_query": 1 if is_query else 0,
         "ploidy_level": ploidy, "marker_platform": (u_meta or {}).get("marker_platform") or marker_platform,
-        "decimalLatitude": lat, "decimalLongitude": lon,
+        "decimalLatitude": lat, "decimalLongitude": lon, "coordinateUncertainty": coord_unc,
+        "is_centroid_or_inst_coord": is_cent_flag, "coord_quarantine_reason": cent_reason,
+        "typified_basionym": typ_bas, "concept_synonymy_status": con_stat, "is_open_or_hybrid_concept": is_open_hybrid,
         "stateProvince": state, "county": county, "eventDate": ev_date,
         "hq_reads": hq_reads, "mapped_reads": mapped_reads, "pct_repetitive": pct_rep,
         "n_called_loci": n_called, "missing_genotype_rate": miss_rate, "observed_het": obs_het,
@@ -207,12 +226,14 @@ def _resolve_sample_record(
 
 
 _EMPTY_SAMPLE_COLS = (
-    "genetic_sample_id", "catalogNumber", "exsiccatae_key", "project_id", "population_id", "replicate_pair_id",
-    "taxon_raw", "species_standardized", "is_putative_novel_or_hybrid_query", "ploidy_level", "marker_platform",
-    "decimalLatitude", "decimalLongitude", "stateProvince", "county", "eventDate", "hq_reads", "mapped_reads",
-    "pct_repetitive", "n_called_loci", "missing_genotype_rate", "observed_het", "geno_quality_pass", "linkage_tier",
-    "hdplot_retained_loci", "inferred_cytotype", "nquire_delta_logl", "plastid_clade", "its_ribotype",
-    "cytonuclear_discordant", "public_plastome_match", "public_its_match", "waxy_lineage_match", "role_in_run",
+    "genetic_sample_id", "catalogNumber", "exsiccatae_key", "genbank_accession", "project_id", "population_id",
+    "replicate_pair_id", "taxon_raw", "species_standardized", "is_putative_novel_or_hybrid_query", "ploidy_level",
+    "marker_platform", "decimalLatitude", "decimalLongitude", "coordinateUncertainty", "is_centroid_or_inst_coord",
+    "coord_quarantine_reason", "typified_basionym", "concept_synonymy_status", "is_open_or_hybrid_concept",
+    "stateProvince", "county", "eventDate", "hq_reads", "mapped_reads", "pct_repetitive", "n_called_loci",
+    "missing_genotype_rate", "observed_het", "geno_quality_pass", "linkage_tier", "hdplot_retained_loci",
+    "inferred_cytotype", "nquire_delta_logl", "plastid_clade", "its_ribotype", "cytonuclear_discordant",
+    "public_plastome_match", "public_its_match", "waxy_lineage_match", "role_in_run",
 )
 
 
@@ -230,8 +251,8 @@ def _global_vcf_cache_path(
             h.update(f"{p.resolve()}|{st.st_mtime_ns}|{st.st_size}|".encode("utf-8"))
         except OSError:
             return None
-    v_sig = "|".join(f"{v.get('catalogNumber','')}:{v.get('species_standardized','')}" for v in vouchers[:200])
-    h.update(f"{min_hq_reads}|{max_missing_rate}|{paralog_ho_threshold}|{hdplot_d_threshold}|{len(vouchers)}|{len(db_priors.get('by_taxon', {}))}|{v_sig}".encode("utf-8"))
+    v_sig = "|".join(f"{v.get('catalogNumber','')}:{v.get('species_standardized','')}:{v.get('is_centroid_or_inst_coord','')}:{v.get('coord_quarantine_reason','')}:{v.get('concept_synonymy_status','')}:{v.get('is_open_or_hybrid_concept','')}:{v.get('type_status','')}:{v.get('typified_basionym','')}:{v.get('coordinateUncertainty','')}" for v in vouchers[:200])
+    h.update(f"step06_v2|{min_hq_reads}|{max_missing_rate}|{paralog_ho_threshold}|{hdplot_d_threshold}|{len(vouchers)}|{len(db_priors.get('by_taxon', {}))}|{v_sig}".encode("utf-8"))
     return Path(tempfile.gettempdir()) / "plantmatics_step06_vcf_cache" / f"{h.hexdigest()[:24]}.pkl"
 
 
@@ -324,22 +345,32 @@ def run_genomic_ingestion(
         min_het_cfg, strong_bic_cfg, min_logl_per_locus_cfg = int(gcfg.get("nquire_min_het_loci", 60)), float(gcfg.get("nquire_strong_delta_bic", 25.0)), float(gcfg.get("nquire_min_delta_logl_per_locus", 0.15))
         sample_idx_map, n_loci_raw = {sid: i for i, sid in enumerate(dosage_samples)}, (int(dosage_mat.shape[1]) if dosage_mat.ndim == 2 else 0)
         ex_prior_lc = {_normalize_exsiccatae_lookup_key(k).lower(): v for k, v in db_priors["by_exsiccatae"].items()}
-        fallback_ploidy_by_sid, cyto_ctx_by_sid = {}, {}
+        fallback_ploidy_by_sid, cyto_ctx_by_sid, ref_holdout_sids = {}, {}, set()
         for sid in all_sample_ids:
-            rec, fb_pl = _resolve_sample_record(sid, vouchers, exsiccatae_index, field_rows, direct_user_meta, stats_map, organellar_map, db_priors, ex_prior_lc, dosage_mat, ref_depth_mat, alt_depth_mat, sample_idx_map, n_loci_raw, marker_platform, min_hq_reads, max_missing_rate, cyto_ctx_out=cyto_ctx_by_sid)
+            rec, fb_pl = _resolve_sample_record(sid, vouchers, exsiccatae_index, field_rows, direct_user_meta, stats_map, organellar_map, db_priors, ex_prior_lc, dosage_mat, ref_depth_mat, alt_depth_mat, sample_idx_map, n_loci_raw, marker_platform, min_hq_reads, max_missing_rate, cyto_ctx_out=cyto_ctx_by_sid, ref_holdout_out=ref_holdout_sids)
             records.append(rec); fallback_ploidy_by_sid[sid] = fb_pl
         paraloss_catalog = _load_paraloss1272_catalog(genomics_dir)
         hd_df, weights_df = None, None
         if dosage_samples and n_loci_raw > 0:
             pass_recs = [r for r in records if r["geno_quality_pass"] == 1 and r["genetic_sample_id"] in sample_idx_map]
             pass_ids = [r["genetic_sample_id"] for r in pass_recs]
-            ref_pass_ids = [r["genetic_sample_id"] for r in pass_recs if r["is_putative_novel_or_hybrid_query"] == 0]
+            ref_pass_recs = [r for r in pass_recs if r["is_putative_novel_or_hybrid_query"] == 0 and r.get("is_open_or_hybrid_concept", 0) == 0 and r["genetic_sample_id"] not in ref_holdout_sids]
             pass_rows = [sample_idx_map[s] for s in pass_ids]
-            ref_rows = [sample_idx_map[s] for s in ref_pass_ids] if len(ref_pass_ids) >= 4 else pass_rows
+            ref_recs_eff = ref_pass_recs if ref_pass_recs else pass_recs
+            ref_rows = [sample_idx_map[r["genetic_sample_id"]] for r in ref_recs_eff]
             if pass_rows:
+                ref_cytos, ref_plds = [], []
+                for r_item in ref_recs_eff:
+                    sid_r, cur_c = r_item["genetic_sample_id"], str(r_item.get("inferred_cytotype") or "").strip()
+                    u_pl, sp_m, sp_mu, has_u_c = cyto_ctx_by_sid.get(sid_r, (r_item.get("ploidy_level"), None, False, False))
+                    if (not has_u_c) and u_pl is None and ref_depth_mat.size > 0 and alt_depth_mat.size > 0:
+                        sidx_r = sample_idx_map[sid_r]
+                        cur_c, _ = _infer_sample_cytotype(ref_depth_mat[sidx_r, :], alt_depth_mat[sidx_r, :], dosage_mat[sidx_r, :], u_pl, species_modal_ploidy=sp_m, is_multi_cytotype=sp_mu, min_het_loci=min_het_cfg, strong_delta_bic=strong_bic_cfg, min_delta_logl_per_locus=min_logl_per_locus_cfg)
+                    ref_cytos.append(cur_c)
+                    ref_plds.append(u_pl if u_pl is not None else (sp_m if not sp_mu else None))
                 rd_ref = ref_depth_mat[ref_rows, :] if ref_depth_mat.size > 0 else np.empty((0, 0), dtype=np.float32)
                 ad_ref = alt_depth_mat[ref_rows, :] if alt_depth_mat.size > 0 else np.empty((0, 0), dtype=np.float32)
-                keep_mask, hd_df = _evaluate_hdplot_loci(dosage_mat[pass_rows, :], dosage_mat[ref_rows, :], rd_ref, ad_ref, locus_ids, h_max=paralog_ho_threshold, d_max=hdplot_d_threshold, paraloss_catalog=paraloss_catalog)
+                keep_mask, hd_df = _evaluate_hdplot_loci(dosage_mat[pass_rows, :], dosage_mat[ref_rows, :], rd_ref, ad_ref, locus_ids, h_max=paralog_ho_threshold, d_max=hdplot_d_threshold, paraloss_catalog=paraloss_catalog, ref_cytotypes=ref_cytos, ref_ploidies=ref_plds)
                 hd_df.to_csv(hdplot_out_path, sep="\t", index=False, na_rep="NA")
                 kept_indices = np.where(keep_mask)[0]
                 n_loci_retained = int(kept_indices.size)
@@ -363,12 +394,13 @@ def run_genomic_ingestion(
                         r_item["nquire_delta_logl"] = nq_d
                         if str(r_item.get("inferred_cytotype") or "") in _CYTO_TO_PLOIDY: fallback_ploidy_by_sid[sid] = _CYTO_TO_PLOIDY[str(r_item["inferred_cytotype"])]
                 if not from_precomputed_dosage and ref_depth_mat.size > 0 and n_loci_retained > 0:
-                    kept_dosage = _compute_eb_polyrad_dosage(kept_dosage, ref_depth_mat[pass_rows, :][:, kept_indices], alt_depth_mat[pass_rows, :][:, kept_indices], [str(r["inferred_cytotype"]) for r in pass_recs], fallback_ploidies=[fallback_ploidy_by_sid.get(r["genetic_sample_id"]) for r in pass_recs], taxa_labels=[None if r["is_putative_novel_or_hybrid_query"] else r.get("species_standardized") for r in pass_recs])
+                    eb_taxa = [None if (r["is_putative_novel_or_hybrid_query"] or r.get("is_open_or_hybrid_concept", 0) or r["genetic_sample_id"] in ref_holdout_sids) else r.get("species_standardized") for r in pass_recs]
+                    kept_dosage = _compute_eb_polyrad_dosage(kept_dosage, ref_depth_mat[pass_rows, :][:, kept_indices], alt_depth_mat[pass_rows, :][:, kept_indices], [str(r["inferred_cytotype"]) for r in pass_recs], fallback_ploidies=[fallback_ploidy_by_sid.get(r["genetic_sample_id"]) for r in pass_recs], taxa_labels=eb_taxa)
                 for pos_i, r in enumerate(pass_recs):
                     r["hdplot_retained_loci"] = int(np.sum(np.isfinite(kept_dosage[pos_i, :]))) if n_loci_retained > 0 else 0
                 dos_df = pd.DataFrame(np.round(kept_dosage, 4), columns=kept_loci); dos_df.insert(0, "genetic_sample_id", pass_ids)
-                if paraloss_catalog and any(_lookup_paraloss1272_locus(lid, paraloss_catalog)[0] for lid in locus_ids):
-                    weights_df = hd_df.loc[hd_df["hdplot_keep"] == 1, ["locus_id", "locus_paralogy_weight", "is_paraloss1272_single_copy"]]
+                if n_loci_retained > 0:
+                    weights_df = hd_df.loc[hd_df["hdplot_keep"] == 1, ["locus_id", "paraloss_status", "locus_paralogy_weight", "is_paraloss1272_single_copy"]].reset_index(drop=True)
                     weights_df.to_csv(weights_out_path, sep="\t", index=False, na_rep="NA")
         if cache_p is not None and not demo:
             try:

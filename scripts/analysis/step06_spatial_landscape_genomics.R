@@ -1,58 +1,51 @@
 # ==============================================================================
 # Module: scripts/analysis/step06_spatial_landscape_genomics.R
-# Project: Packera Species Delimitation & Morphometrics Pipeline
-# Affiliation: University of North Carolina at Chapel Hill Herbarium (NCU)
-#
-# Description:
-#   Modular Phase 2 Landscape Genomics Helpers for Step 06:
-#     1. Small-sample (`median_n < 5`) statistical guardrail disabling Fst outliers.
-#     2. Nested 5-model Wang (2013) MMRR with Gaussian AICc, Akaike weights,
-#        partial IBE|IBD permutations, and centroid/rooftop coordinate quarantine.
-#     3. `conStruct`-style spatial vs. non-spatial allelic covariance decay.
-#     4. `FEEMS`-style kNN/MST graph-Laplacian migration corridors with LOOCV.
+# Project: Plantmatics | Affiliation: UNC-Chapel Hill Herbarium (NCU)
+# Small-n guardrails, honest nested Wang (2013) MMRR (IBD-only fallback when
+# ecological covariates are absent/collinear), conStruct decay, and FEEMS CV.
 # ==============================================================================
 
-if (grDevices::dev.cur() == 1L) {
-  grDevices::pdf(NULL)
-}
+if (grDevices::dev.cur() == 1L) grDevices::pdf(NULL)
 
 .haversine_km_mat <- function(lat, lon) {
-  n <- length(lat)
-  dmat <- matrix(0.0, nrow = n, ncol = n)
+  n <- length(lat); dmat <- matrix(0.0, nrow = n, ncol = n)
   rlat <- lat * pi / 180.0; rlon <- lon * pi / 180.0
-  for (i in seq_len(n - 1L)) {
-    for (j in (i + 1L):n) {
-      dlat <- rlat[j] - rlat[i]; dlon <- rlon[j] - rlon[i]
-      a <- sin(dlat / 2)^2 + cos(rlat[i]) * cos(rlat[j]) * sin(dlon / 2)^2
-      dkm <- 2.0 * 6371.0088 * asin(min(1.0, sqrt(max(0.0, a))))
-      dmat[i, j] <- dkm; dmat[j, i] <- dkm
-    }
+  for (i in seq_len(n - 1L)) for (j in (i + 1L):n) {
+    a <- sin((rlat[j] - rlat[i]) / 2)^2 + cos(rlat[i]) * cos(rlat[j]) * sin((rlon[j] - rlon[i]) / 2)^2
+    dkm <- 2.0 * 6371.0088 * asin(min(1.0, sqrt(max(0.0, a)))); dmat[i, j] <- dkm; dmat[j, i] <- dkm
   }
   dmat
 }
 
 .filter_step06_valid_geo_idx <- function(pass_df, lat, lon, db_path = "") {
-  n <- length(lat)
-  if (n == 0L) return(integer(0))
-  valid <- is.finite(lat) & is.finite(lon) & abs(lat) <= 90 & abs(lon) <= 180 &
-    !(abs(lat) < 1e-4 & abs(lon) < 1e-4) & !(lat > 15.0 & lon > 40.0)
+  n <- length(lat); if (n == 0L) return(integer(0))
+  valid <- is.finite(lat) & is.finite(lon) & lat >= -90.0 & lat <= 90.0 & lon >= -180.0 & lon <= 180.0 &
+    !(lat > -1e-4 & lat < 1e-4 & lon > -1e-4 & lon < 1e-4) & !(lat > 15.0 & lon > 40.0)
   if ("is_centroid_or_inst_coord" %in% names(pass_df)) {
     cf <- pass_df$is_centroid_or_inst_coord
-    c_bad <- if (is.logical(cf)) !is.na(cf) & cf else tolower(trimws(as.character(cf))) %in% c("1", "true", "t", "yes")
-    valid <- valid & !c_bad
+    valid <- valid & !(if (is.logical(cf)) !is.na(cf) & cf else tolower(trimws(as.character(cf))) %in% c("1", "true", "t", "yes"))
   }
+  for (ucol in intersect(c("coordinateUncertainty", "coordinateUncertaintyInMeters"), names(pass_df))) {
+    uv <- suppressWarnings(as.numeric(pass_df[[ucol]]))
+    valid <- valid & (is.na(uv) | !is.finite(uv) | uv <= 10000.0)
+  }
+  if ("anchor_tier_source" %in% names(pass_df)) valid <- valid & (is.na(pass_df$anchor_tier_source) | as.character(pass_df$anchor_tier_source) != "Passive_Type_Uncertain_Coord")
   cats <- if ("catalogNumber" %in% names(pass_df)) trimws(as.character(pass_df$catalogNumber)) else rep("", n)
-  cats[is.na(cats)] <- ""
-  u_cats <- unique(cats[nzchar(cats)])
+  cats[is.na(cats)] <- ""; u_cats <- unique(cats[nzchar(cats)])
   if (length(u_cats) > 0L && !is.null(db_path) && nzchar(db_path) && file.exists(db_path) &&
       requireNamespace("DBI", quietly = TRUE) && requireNamespace("RSQLite", quietly = TRUE)) {
     conn <- tryCatch(DBI::dbConnect(RSQLite::SQLite(), dbname = db_path, flags = RSQLite::SQLITE_RO), error = function(e) NULL)
     if (!is.null(conn)) {
       v_cols <- tryCatch(DBI::dbGetQuery(conn, "PRAGMA table_info(vouchers);")$name, error = function(e) character(0))
+      q_c <- paste(vapply(u_cats, function(s) as.character(DBI::dbQuoteString(conn, s)), character(1)), collapse = ", ")
       if ("is_centroid_or_inst_coord" %in% v_cols) {
-        q_c <- paste(vapply(u_cats, function(s) as.character(DBI::dbQuoteString(conn, s)), character(1)), collapse = ", ")
         bad_v <- tryCatch(DBI::dbGetQuery(conn, sprintf("SELECT catalogNumber FROM vouchers WHERE is_centroid_or_inst_coord = 1 AND catalogNumber IN (%s);", q_c))$catalogNumber, error = function(e) character(0))
         if (length(bad_v) > 0L) valid <- valid & !(cats %in% trimws(as.character(bad_v)))
+      }
+      u_db <- intersect(c("coordinateUncertainty", "coordinateUncertaintyInMeters"), v_cols)
+      if (length(u_db) > 0L) {
+        bad_u <- tryCatch(DBI::dbGetQuery(conn, sprintf("SELECT catalogNumber FROM vouchers WHERE %s > 10000 AND catalogNumber IN (%s);", u_db[1L], q_c))$catalogNumber, error = function(e) character(0))
+        if (length(bad_u) > 0L) valid <- valid & !(cats %in% trimws(as.character(bad_u)))
       }
       tryCatch(DBI::dbDisconnect(conn), error = function(e) NULL)
     }
@@ -60,34 +53,26 @@ if (grDevices::dev.cur() == 1L) {
   inst_lat <- c(35.9108, 36.0014, 35.7877, 40.8623, 42.3785, 38.8889, 38.6128, 41.8663, 39.9571, 32.7397, 30.2850, 43.0742, 44.9845, 35.9544, 33.9480, 37.2707, 30.4133, 40.4433, 39.5097, 42.8186, 45.3920, 45.5569, 43.6677)
   inst_lon <- c(-79.0505, -78.9382, -78.6703, -73.8803, -71.1160, -77.0260, -90.2594, -87.6170, -75.1714, -97.3631, -97.7340, -89.4012, -93.1832, -83.9295, -83.3773, -76.7153, -91.1800, -79.9496, -84.7345, -103.0005, -75.7160, -73.5575, -79.3948)
   for (i in which(valid & !nzchar(cats))) {
-    rl1 <- lat[i] * pi / 180.0; rn1 <- lon[i] * pi / 180.0
-    rl2 <- inst_lat * pi / 180.0; rn2 <- inst_lon * pi / 180.0
+    rl1 <- lat[i] * pi / 180.0; rn1 <- lon[i] * pi / 180.0; rl2 <- inst_lat * pi / 180.0; rn2 <- inst_lon * pi / 180.0
     a <- sin((rl2 - rl1) / 2)^2 + cos(rl1) * cos(rl2) * sin((rn2 - rn1) / 2)^2
     if (min(2.0 * 6371.0088 * asin(pmin(1.0, sqrt(pmax(0.0, a))))) <= 0.25) valid[i] <- FALSE
   }
   which(valid)
 }
 
-.zscore_vec <- function(v) {
-  sd_v <- stats::sd(v, na.rm = TRUE)
-  if (!is.finite(sd_v) || sd_v <= 1e-12) return(rep(0.0, length(v)))
-  (v - mean(v, na.rm = TRUE)) / sd_v
-}
+.zscore_vec <- function(v) { sd_v <- stats::sd(v, na.rm = TRUE); if (!is.finite(sd_v) || sd_v <= 1e-12) rep(0.0, length(v)) else (v - mean(v, na.rm = TRUE)) / sd_v }
 
 .scale_feature_dist <- function(mat) {
   for (j in seq_len(ncol(mat))) {
     fin <- is.finite(mat[, j])
-    if (sum(fin) >= 2L && stats::sd(mat[fin, j]) > 1e-9) {
-      mat[fin, j] <- (mat[fin, j] - mean(mat[fin, j])) / stats::sd(mat[fin, j])
-      mat[!fin, j] <- 0.0
-    } else mat[, j] <- 0.0
+    if (sum(fin) >= 2L && stats::sd(mat[fin, j]) > 1e-9) { mat[fin, j] <- (mat[fin, j] - mean(mat[fin, j])) / stats::sd(mat[fin, j]); mat[!fin, j] <- 0.0 } else mat[, j] <- 0.0
   }
   as.matrix(stats::dist(mat))
 }
 
 .agg_by_catalog <- function(df, cols, cats) {
   out <- matrix(NA_real_, nrow = length(cats), ncol = length(cols))
-  if (length(cols) == 0L || is.null(df) || nrow(df) == 0L) return(out)
+  if (length(cols) == 0L || is.null(df) || nrow(df) == 0L || !("catalogNumber" %in% names(df))) return(out)
   dcats <- trimws(as.character(df$catalogNumber))
   for (i in seq_along(cats)) {
     if (is.na(cats[i]) || !nzchar(cats[i])) next
@@ -113,55 +98,95 @@ if (grDevices::dev.cur() == 1L) {
 
 .fetch_posthoc_step04_step05_covariates <- function(pass_df, db_path, run_id, demo) {
   n <- nrow(pass_df); pc_cands <- paste0("PC", 1:15)
-  eco_cands <- c("bio1_temp_mean", "bio12_precip_annual", "bio4_temp_seasonality", "soil_ph", "soil_clay_pct", "elevation_m")
-  out_morph <- matrix(NA_real_, nrow = n, ncol = 5L); out_eco <- matrix(NA_real_, nrow = n, ncol = length(eco_cands))
-  if (!exists("connect_packera_db", mode = "function") || isTRUE(demo) || !nzchar(db_path) || !file.exists(db_path)) {
-    return(list(morph = out_morph, eco = out_eco))
+  smooth_eco <- c("lithic_outcrop_index", "wetland_seepage_index", "hopkins_adjusted_doy_resid", "summer_moisture_deficit_idx", "maritime_continentality_idx", "fine_soil_ph", "climate_pc1", "climate_pc2")
+  base_eco <- c("bio1_temp_mean", "bio12_precip_annual", "bio4_temp_seasonality", "soil_ph", "soil_clay_pct", "elevation_m")
+  eco_cands <- c(smooth_eco, base_eco)
+  out_morph <- matrix(NA_real_, nrow = n, ncol = length(pc_cands), dimnames = list(NULL, pc_cands))
+  out_eco <- matrix(NA_real_, nrow = n, ncol = length(eco_cands), dimnames = list(NULL, eco_cands))
+  fill_mat <- function(dst, src, cols) {
+    if (is.null(src) || length(cols) == 0L) return(dst)
+    for (j in seq_along(cols)) { cn <- cols[j]; v <- suppressWarnings(as.numeric(src[, j])); ok <- !is.finite(dst[, cn]) & is.finite(v); if (any(ok)) dst[ok, cn] <- v[ok] }
+    dst
   }
-  conn <- tryCatch(connect_packera_db(db_path = db_path, read_only = TRUE, demo = FALSE), error = function(e) NULL)
-  if (is.null(conn)) return(list(morph = out_morph, eco = out_eco))
-  on.exit(disconnect_packera_db(conn), add = TRUE)
+  for (cn in intersect(pc_cands, names(pass_df))) out_morph[, cn] <- suppressWarnings(as.numeric(pass_df[[cn]]))
+  for (cn in intersect(eco_cands, names(pass_df))) out_eco[, cn] <- suppressWarnings(as.numeric(pass_df[[cn]]))
 
-  mv <- if (nzchar(run_id) && exists("fetch_run_master_view", mode = "function")) tryCatch(fetch_run_master_view(conn, run_id = run_id), error = function(e) NULL) else NULL
-  cats <- trimws(as.character(pass_df$catalogNumber))
-  if (!is.null(mv) && nrow(mv) > 0L) {
-    mcols <- intersect(pc_cands, names(mv)); ecols <- intersect(eco_cands, names(mv))
-    if (length(mcols) > 0L) out_morph <- .agg_by_catalog(mv, mcols, cats)
-    if (length(ecols) > 0L) out_eco[, seq_along(ecols)] <- .agg_by_catalog(mv, ecols, cats)
-    return(list(morph = out_morph, eco = out_eco))
+  cats <- if ("catalogNumber" %in% names(pass_df)) trimws(as.character(pass_df$catalogNumber)) else rep("", n)
+  lat_p <- if ("decimalLatitude" %in% names(pass_df)) suppressWarnings(as.numeric(pass_df$decimalLatitude)) else rep(NA_real_, n)
+  lon_p <- if ("decimalLongitude" %in% names(pass_df)) suppressWarnings(as.numeric(pass_df$decimalLongitude)) else rep(NA_real_, n)
+  k5 <- ifelse(is.finite(lat_p) & is.finite(lon_p), sprintf("%.5f_%.5f", lat_p, lon_p), NA_character_)
+  k4 <- ifelse(is.finite(lat_p) & is.finite(lon_p), sprintf("%.4f_%.4f", round(lat_p, 4), round(lon_p, 4)), NA_character_)
+  fill_by_key <- function(dst, tbl_df, cols) {
+    if (is.null(tbl_df) || nrow(tbl_df) == 0L || !("lat_lon_key" %in% names(tbl_df)) || length(cols) == 0L) return(dst)
+    tk <- as.character(tbl_df$lat_lon_key); idx <- match(k5, tk); mk <- is.na(idx) & !is.na(k4)
+    if (any(mk)) idx[mk] <- match(k4[mk], tk)
+    ok_r <- which(!is.na(idx))
+    if (length(ok_r) > 0L) for (cn in cols) {
+      v <- suppressWarnings(as.numeric(tbl_df[[cn]][idx[ok_r]])); fi <- ok_r[!is.finite(dst[ok_r, cn]) & is.finite(v)]
+      if (length(fi) > 0L) dst[fi, cn] <- suppressWarnings(as.numeric(tbl_df[[cn]][idx[fi]]))
+    }
+    dst
   }
-  if (DBI::dbExistsTable(conn, "otu_morphometrics")) {
-    otu_df <- tryCatch({
-      if (nzchar(run_id)) DBI::dbGetQuery(conn, "SELECT * FROM otu_morphometrics WHERE run_id = ?", params = list(run_id))
-      else DBI::dbGetQuery(conn, "SELECT * FROM otu_morphometrics")
-    }, error = function(e) NULL)
-    mcols <- if (!is.null(otu_df) && nrow(otu_df) > 0L) intersect(pc_cands, names(otu_df)) else character(0)
-    if (length(mcols) > 0L) out_morph <- .agg_by_catalog(otu_df, mcols, cats)
-  }
-  if (DBI::dbExistsTable(conn, "environmental_cache") && all(c("decimalLatitude", "decimalLongitude") %in% names(pass_df))) {
-    ec_df <- tryCatch(DBI::dbGetQuery(conn, "SELECT * FROM environmental_cache"), error = function(e) NULL)
-    if (!is.null(ec_df) && nrow(ec_df) > 0L && "lat_lon_key" %in% names(ec_df)) {
-      ecols <- intersect(eco_cands, names(ec_df))
-      if (length(ecols) > 0L) {
-        lat_p <- suppressWarnings(as.numeric(pass_df$decimalLatitude)); lon_p <- suppressWarnings(as.numeric(pass_df$decimalLongitude))
-        keys <- ifelse(is.finite(lat_p) & is.finite(lon_p), sprintf("%.4f_%.4f", round(lat_p, 4), round(lon_p, 4)), NA_character_)
-        idx_e <- match(keys, as.character(ec_df$lat_lon_key)); ok_e <- which(!is.na(idx_e))
-        if (length(ok_e) > 0L) for (j in seq_along(ecols)) out_eco[ok_e, j] <- suppressWarnings(as.numeric(ec_df[[ecols[j]]][idx_e[ok_e]]))
+
+  if (!isTRUE(demo) && !is.null(db_path) && nzchar(db_path) && file.exists(db_path) &&
+      requireNamespace("DBI", quietly = TRUE) && requireNamespace("RSQLite", quietly = TRUE)) {
+    conn <- tryCatch(DBI::dbConnect(RSQLite::SQLite(), dbname = db_path, flags = RSQLite::SQLITE_RO), error = function(e) NULL)
+    if (!is.null(conn)) {
+      on.exit(tryCatch(DBI::dbDisconnect(conn), error = function(e) NULL), add = TRUE)
+      mv <- if (nzchar(run_id) && exists("fetch_run_master_view", mode = "function")) {
+        tryCatch(fetch_run_master_view(conn, run_id = run_id), error = function(e) NULL)
+      } else if (DBI::dbExistsTable(conn, "v_integrative_triage_master")) {
+        tryCatch(if (nzchar(run_id)) DBI::dbGetQuery(conn, "SELECT * FROM v_integrative_triage_master WHERE run_id = ?", params = list(run_id)) else DBI::dbGetQuery(conn, "SELECT * FROM v_integrative_triage_master"), error = function(e) NULL)
+      } else NULL
+      if (!is.null(mv) && nrow(mv) > 0L) {
+        mc <- intersect(pc_cands, names(mv)); ec <- intersect(eco_cands, names(mv))
+        if (length(mc) > 0L) out_morph <- fill_mat(out_morph, .agg_by_catalog(mv, mc, cats), mc)
+        if (length(ec) > 0L) out_eco <- fill_mat(out_eco, .agg_by_catalog(mv, ec, cats), ec)
+      }
+      if (DBI::dbExistsTable(conn, "spatial_rf_predictions")) {
+        srf_df <- tryCatch(if (nzchar(run_id)) DBI::dbGetQuery(conn, "SELECT * FROM spatial_rf_predictions WHERE run_id = ?", params = list(run_id)) else DBI::dbGetQuery(conn, "SELECT * FROM spatial_rf_predictions"), error = function(e) NULL)
+        if (!is.null(srf_df) && nrow(srf_df) > 0L) {
+          ec_s <- intersect(eco_cands, names(srf_df))
+          if (length(ec_s) > 0L) { out_eco <- fill_mat(out_eco, .agg_by_catalog(srf_df, ec_s, cats), ec_s); out_eco <- fill_by_key(out_eco, srf_df, ec_s) }
+        }
+      }
+      if (DBI::dbExistsTable(conn, "otu_morphometrics")) {
+        otu_df <- tryCatch(if (nzchar(run_id)) DBI::dbGetQuery(conn, "SELECT * FROM otu_morphometrics WHERE run_id = ?", params = list(run_id)) else DBI::dbGetQuery(conn, "SELECT * FROM otu_morphometrics"), error = function(e) NULL)
+        mc_o <- if (!is.null(otu_df) && nrow(otu_df) > 0L) intersect(pc_cands, names(otu_df)) else character(0)
+        if (length(mc_o) > 0L) out_morph <- fill_mat(out_morph, .agg_by_catalog(otu_df, mc_o, cats), mc_o)
+      }
+      if (DBI::dbExistsTable(conn, "environmental_cache")) {
+        ec_df <- tryCatch(DBI::dbGetQuery(conn, "SELECT * FROM environmental_cache"), error = function(e) NULL)
+        if (!is.null(ec_df) && nrow(ec_df) > 0L) out_eco <- fill_by_key(out_eco, ec_df, intersect(eco_cands, names(ec_df)))
       }
     }
   }
-  list(morph = out_morph, eco = out_eco)
+  valid_col <- function(v) { fv <- v[is.finite(v)]; length(fv) >= 4L && stats::sd(fv) > 1e-9 }
+  ok_sm <- smooth_eco[vapply(smooth_eco, function(cn) valid_col(out_eco[, cn]), logical(1))]
+  ok_bs <- base_eco[vapply(base_eco, function(cn) valid_col(out_eco[, cn]), logical(1))]
+  keep_eco <- if (length(ok_sm) > 0L) ok_sm else ok_bs
+  ok_m <- pc_cands[vapply(pc_cands, function(cn) valid_col(out_morph[, cn]), logical(1))]
+  list(
+    morph = if (length(ok_m) > 0L) out_morph[, ok_m, drop = FALSE] else matrix(NA_real_, nrow = n, ncol = 0L),
+    eco = if (length(keep_eco) > 0L) out_eco[, keep_eco, drop = FALSE] else matrix(numeric(0), nrow = n, ncol = 0L)
+  )
 }
 
-.fit_mmrr_model_table <- function(dg_sub, d_geo_log, d_eco, d_morph, use_morph, eff_perm) {
+.fit_mmrr_model_table <- function(dg_sub, d_geo_log, d_eco, d_morph, use_morph, eff_perm, use_eco = TRUE) {
   ut <- upper.tri(dg_sub); n_pairs <- sum(ut); m <- nrow(dg_sub)
-  y_v <- .zscore_vec(dg_sub[ut]); x1_v <- .zscore_vec(d_geo_log[ut]); x2_v <- .zscore_vec(d_eco[ut])
+  y_v <- .zscore_vec(dg_sub[ut]); x1_v <- .zscore_vec(d_geo_log[ut])
+  x2_v <- if (isTRUE(use_eco)) .zscore_vec(d_eco[ut]) else numeric(0)
   x3_v <- if (use_morph) .zscore_vec(d_morph[ut]) else numeric(0)
   sst <- max(1e-12, sum((y_v - mean(y_v))^2))
   specs <- list(Null = matrix(1.0, nrow = n_pairs, ncol = 1L, dimnames = list(NULL, "Intercept")),
-                IBD_only = cbind(Intercept = 1.0, IBD = x1_v), IBE_only = cbind(Intercept = 1.0, IBE = x2_v),
-                IBD_plus_IBE = cbind(Intercept = 1.0, IBD = x1_v, IBE = x2_v))
-  if (use_morph) specs[["IBD_plus_IBE_plus_Morph"]] <- cbind(Intercept = 1.0, IBD = x1_v, IBE = x2_v, Morph = x3_v)
+                IBD_only = cbind(Intercept = 1.0, IBD = x1_v))
+  if (isTRUE(use_eco)) {
+    specs[["IBE_only"]] <- cbind(Intercept = 1.0, IBE = x2_v)
+    specs[["IBD_plus_IBE"]] <- cbind(Intercept = 1.0, IBD = x1_v, IBE = x2_v)
+    if (use_morph) specs[["IBD_plus_IBE_plus_Morph"]] <- cbind(Intercept = 1.0, IBD = x1_v, IBE = x2_v, Morph = x3_v)
+  } else if (use_morph) {
+    specs[["IBD_plus_Morph"]] <- cbind(Intercept = 1.0, IBD = x1_v, Morph = x3_v)
+  }
 
   m_names <- names(specs); k_vec <- vapply(specs, ncol, integer(1))
   fits <- lapply(specs, function(X) stats::lm.fit(X, y_v))
@@ -174,11 +199,14 @@ if (grDevices::dev.cur() == 1L) {
   }, numeric(1))
   delta_aicc <- aicc_vec - min(aicc_vec); w_aicc <- exp(-0.5 * delta_aicc); w_aicc <- w_aicc / sum(w_aicc)
   full_name <- m_names[length(m_names)]; fb <- fits[[full_name]]$coefficients
-  b_ibd <- unname(fb["IBD"]); b_ibe <- unname(fb["IBE"]); b_morph <- if ("Morph" %in% names(fb)) unname(fb["Morph"]) else NA_real_
+  b_ibd <- if ("IBD" %in% names(fb)) unname(fb["IBD"]) else NA_real_
+  b_ibe <- if (isTRUE(use_eco) && "IBE" %in% names(fb)) unname(fb["IBE"]) else NA_real_
+  b_morph <- if ("Morph" %in% names(fb)) unname(fb["Morph"]) else NA_real_
 
   q_list <- lapply(specs, qr); q_ibd <- q_list[["IBD_only"]]
   e_y <- fits[["IBD_only"]]$residuals; ssr_y_ibd <- max(1e-12, sum(e_y^2))
-  r2_ibd <- r2_vec[match("IBD_only", m_names)]; delta_r2_obs <- r2_vec[match("IBD_plus_IBE", m_names)] - r2_ibd
+  r2_ibd <- r2_vec[match("IBD_only", m_names)]
+  delta_r2_obs <- if (isTRUE(use_eco)) r2_vec[match("IBD_plus_IBE", m_names)] - r2_ibd else NA_real_
   perms_mm <- replicate(eff_perm, sample.int(m), simplify = FALSE)
   eval_mm_chunk <- function(idx_v) {
     gm <- integer(length(m_names)); gibd <- 0L; gibe <- 0L; gmp <- 0L; gpi <- 0L
@@ -188,15 +216,17 @@ if (grDevices::dev.cur() == 1L) {
         bp <- qr.coef(q_list[[j]], yp); bp[is.na(bp)] <- 0.0
         if (max(0.0, 1.0 - sum((yp - specs[[j]] %*% bp)^2) / sst_p) >= r2_vec[j]) gm[j] <- gm[j] + 1L
         if (m_names[j] == full_name) {
-          if (is.finite(b_ibd) && is.finite(bp["IBD"]) && abs(bp["IBD"]) >= abs(b_ibd)) gibd <- gibd + 1L
-          if (is.finite(b_ibe) && is.finite(bp["IBE"]) && abs(bp["IBE"]) >= abs(b_ibe)) gibe <- gibe + 1L
+          if (is.finite(b_ibd) && "IBD" %in% names(bp) && is.finite(bp["IBD"]) && abs(bp["IBD"]) >= abs(b_ibd)) gibd <- gibd + 1L
+          if (isTRUE(use_eco) && is.finite(b_ibe) && "IBE" %in% names(bp) && is.finite(bp["IBE"]) && abs(bp["IBE"]) >= abs(b_ibe)) gibe <- gibe + 1L
           if ("Morph" %in% names(bp) && is.finite(b_morph) && is.finite(bp["Morph"]) && abs(bp["Morph"]) >= abs(b_morph)) gmp <- gmp + 1L
         }
       }
-      x2_p <- .zscore_vec(d_eco[perm, perm][ut]); c_x2 <- qr.coef(q_ibd, x2_p); c_x2[is.na(c_x2)] <- 0.0
-      e_x2 <- x2_p - specs[["IBD_only"]] %*% c_x2; denom_x2 <- sum(e_x2^2)
-      dr2_p <- if (denom_x2 > 1e-12) ((sum(e_y * e_x2))^2 / (denom_x2 * ssr_y_ibd)) * (1.0 - r2_ibd) else 0.0
-      if (dr2_p >= max(0.0, delta_r2_obs) - 1e-12) gpi <- gpi + 1L
+      if (isTRUE(use_eco)) {
+        x2_p <- .zscore_vec(d_eco[perm, perm][ut]); c_x2 <- qr.coef(q_ibd, x2_p); c_x2[is.na(c_x2)] <- 0.0
+        e_x2 <- x2_p - specs[["IBD_only"]] %*% c_x2; denom_x2 <- sum(e_x2^2)
+        dr2_p <- if (denom_x2 > 1e-12) ((sum(e_y * e_x2))^2 / (denom_x2 * ssr_y_ibd)) * (1.0 - r2_ibd) else 0.0
+        if (dr2_p >= max(0.0, delta_r2_obs) - 1e-12) gpi <- gpi + 1L
+      }
     }
     c(gm, gibd, gibe, gmp, gpi)
   }
@@ -205,19 +235,21 @@ if (grDevices::dev.cur() == 1L) {
   nk <- length(m_names); ge_mod <- mm_tot[seq_len(nk)]; ge_ibd <- mm_tot[nk + 1L]; ge_ibe <- mm_tot[nk + 2L]; ge_morph <- mm_tot[nk + 3L]; ge_part_ibe <- mm_tot[nk + 4L]
 
   perm_p <- vapply(seq_along(m_names), function(j) if (j == 1L) 1.0 else (ge_mod[j] + 1.0) / (eff_perm + 1.0), numeric(1))
-  p_part_ibe <- (ge_part_ibe + 1.0) / (eff_perm + 1.0)
+  p_part_ibe <- if (isTRUE(use_eco)) (ge_part_ibe + 1.0) / (eff_perm + 1.0) else NA_real_
   models_df <- data.frame(
     model_name = m_names, n_samples = rep(as.integer(m), length(m_names)), n_pairs = rep(as.integer(n_pairs), length(m_names)),
     k_params = as.integer(k_vec), r2 = round(r2_vec, 4), adj_r2 = round(adj_r2_vec, 4), aicc = round(aicc_vec, 4),
     delta_aicc = round(delta_aicc, 4), akaike_weight = round(w_aicc, 4),
-    delta_r2_ibe_given_ibd = ifelse(m_names == "IBD_plus_IBE", round(delta_r2_obs, 4), NA_real_),
-    perm_p_value = round(perm_p, 4), partial_ibe_p_value = ifelse(m_names == "IBD_plus_IBE", round(p_part_ibe, 4), NA_real_),
+    delta_r2_ibe_given_ibd = if (isTRUE(use_eco)) ifelse(m_names == "IBD_plus_IBE", round(delta_r2_obs, 4), NA_real_) else rep(NA_real_, length(m_names)),
+    perm_p_value = round(perm_p, 4),
+    partial_ibe_p_value = if (isTRUE(use_eco)) ifelse(m_names == "IBD_plus_IBE", round(p_part_ibe, 4), NA_real_) else rep(NA_real_, length(m_names)),
     is_selected_model = seq_along(m_names) == which.min(aicc_vec), stringsAsFactors = FALSE
   )
   list(
     models_df = models_df, r2_full = r2_vec[length(m_names)], p_full = perm_p[length(m_names)],
     b_ibd = b_ibd, p_ibd = if (is.finite(b_ibd)) (ge_ibd + 1.0) / (eff_perm + 1.0) else NA_real_,
-    b_ibe = b_ibe, p_ibe = if (is.finite(b_ibe)) (ge_ibe + 1.0) / (eff_perm + 1.0) else NA_real_,
+    b_ibe = if (isTRUE(use_eco)) b_ibe else NA_real_,
+    p_ibe = if (isTRUE(use_eco) && is.finite(b_ibe)) (ge_ibe + 1.0) / (eff_perm + 1.0) else NA_real_,
     b_morph = b_morph, p_morph = if (is.finite(b_morph)) (ge_morph + 1.0) / (eff_perm + 1.0) else NA_real_
   )
 }
@@ -268,8 +300,9 @@ if (grDevices::dev.cur() == 1L) {
 run_step06_landscape_genomics <- function(pass_df, d_geno_mat, db_path = "", run_id = "", demo = FALSE, seed = 202611L, n_perm = 999L, out_dir = "") {
   old_seed <- if (exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)) get(".Random.seed", envir = .GlobalEnv, inherits = FALSE) else NULL
   on.exit({
-    if (is.null(old_seed)) { if (exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)) rm(".Random.seed", envir = .GlobalEnv) }
-    else assign(".Random.seed", old_seed, envir = .GlobalEnv)
+    if (is.null(old_seed)) {
+      if (exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)) rm(".Random.seed", envir = .GlobalEnv)
+    } else assign(".Random.seed", old_seed, envir = .GlobalEnv)
   }, add = TRUE)
   set.seed(as.integer(seed))
 
@@ -296,21 +329,24 @@ run_step06_landscape_genomics <- function(pass_df, d_geno_mat, db_path = "", run
   d_geo <- .haversine_km_mat(lat[geo_idx], lon[geo_idx]); d_geo_log <- log1p(d_geo)
   dg_sub <- d_geno_mat[geo_idx, geo_idx, drop = FALSE]; ut <- upper.tri(dg_sub)
   covs <- .fetch_posthoc_step04_step05_covariates(pass_df[geo_idx, , drop = FALSE], db_path, run_id, demo)
-  eco_mat <- covs$eco; miss_eco <- rowSums(is.finite(eco_mat)) == 0L
-  if (any(miss_eco)) { eco_mat[miss_eco, 1L] <- abs(lat[geo_idx][miss_eco]); eco_mat[miss_eco, 2L] <- lon[geo_idx][miss_eco] }
-  d_eco <- .scale_feature_dist(eco_mat)
+  eco_mat <- covs$eco; ncol_valid <- ncol(eco_mat)
+  has_eco_rows <- ncol_valid > 0L && sum(rowSums(is.finite(eco_mat)) > 0L) >= 4L
+  d_eco <- if (has_eco_rows) .scale_feature_dist(eco_mat) else matrix(0.0, nrow = length(geo_idx), ncol = length(geo_idx))
+  sd_eco <- if (has_eco_rows) stats::sd(d_eco[ut], na.rm = TRUE) else 0.0
+  cor_ge <- if (has_eco_rows && is.finite(sd_eco) && sd_eco > 1e-8) suppressWarnings(stats::cor(d_geo_log[ut], d_eco[ut], use = "complete.obs")) else NA_real_
+  use_eco <- has_eco_rows && is.finite(sd_eco) && sd_eco > 1e-8 && (!is.finite(cor_ge) || abs(cor_ge) < 0.95)
 
-  morph_mat <- covs$morph; has_morph <- sum(rowSums(is.finite(morph_mat)) > 0L) >= 4L
+  morph_mat <- covs$morph; has_morph <- ncol(morph_mat) > 0L && sum(rowSums(is.finite(morph_mat)) > 0L) >= 4L
   d_morph <- if (has_morph) .scale_feature_dist(morph_mat) else matrix(0.0, nrow = length(geo_idx), ncol = length(geo_idx))
   use_morph <- has_morph && stats::sd(d_morph[ut], na.rm = TRUE) > 1e-8
   eff_perm <- min(max(1L, as.integer(n_perm)), 9999L); if (nrow(dg_sub) <= 6L) eff_perm <- min(eff_perm, 719L)
-  mmrr_res <- .fit_mmrr_model_table(dg_sub, d_geo_log, d_eco, d_morph, use_morph, eff_perm)
+  mmrr_res <- .fit_mmrr_model_table(dg_sub, d_geo_log, d_eco, d_morph, use_morph, eff_perm, use_eco = use_eco)
   if (nzchar(out_dir)) { dir.create(out_dir, recursive = TRUE, showWarnings = FALSE); utils::write.csv(mmrr_res$models_df, file.path(out_dir, "mmrr_model_selection.csv"), row.names = FALSE) }
 
   sim_geno <- pmax(0.0, 1.0 - dg_sub[ut]); d_km_v <- d_geo[ut]; decay_scale <- max(25.0, stats::median(d_km_v, na.rm = TRUE))
   r2_sp <- suppressWarnings(stats::cor(sim_geno, exp(-d_km_v / decay_scale), use = "complete.obs")^2)
-  r2_nonsp <- suppressWarnings(stats::cor(sim_geno, .zscore_vec(d_eco[ut]), use = "complete.obs")^2)
-  r2_sp <- if (is.finite(r2_sp)) max(0.0, r2_sp) else 0.0; r2_nonsp <- if (is.finite(r2_nonsp)) max(0.0, r2_nonsp) else 0.0
+  r2_nonsp <- if (use_eco) suppressWarnings(stats::cor(sim_geno, .zscore_vec(d_eco[ut]), use = "complete.obs")^2) else NA_real_
+  r2_sp <- if (is.finite(r2_sp)) max(0.0, r2_sp) else 0.0; r2_nonsp <- if (is.finite(r2_nonsp)) max(0.0, r2_nonsp) else NA_real_
   feems_res <- .select_feems_lambda_and_edges(pass_df, geo_idx, lat, lon, dg_sub, d_geo, d_geo_log)
   summary_df <- .build_landscape_summary_df(
     length(geo_idx), median_n_pop, small_n_guard, excl_str, mmrr_res$r2_full, mmrr_res$p_full,

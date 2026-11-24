@@ -70,6 +70,12 @@ class TestPublicCytologyIntegration(unittest.TestCase):
         res = dl_cyto.resolve_packera_cytology_taxon("Senecio tomentosus", sporophytic_2n=44)
         self.assertIsNotNone(res)
         self.assertEqual((res["species_standardized"], res["basionym_name"]), ("Packera dubia", "Senecio tomentosus"))
+        with tempfile.TemporaryDirectory() as tmp_miss:
+            miss_db = str(Path(tmp_miss) / "nonexistent_plantmatics.sqlite")
+            with patch.dict(os.environ, {"PLANTMATICS_DB_PATH": miss_db, "PACKERA_DB_PATH": miss_db}):
+                res_nodb = dl_cyto.resolve_packera_cytology_taxon("Senecio tomentosus", sporophytic_2n=44)
+        self.assertIsNotNone(res_nodb)
+        self.assertEqual((res_nodb["species_standardized"], res_nodb["basionym_name"]), ("Packera dubia", "Senecio tomentosus"))
 
     def test_extract_label_cytology_mentions(self) -> None:
         m1 = dl_cyto.extract_label_cytology_mentions("Chromosome voucher: n = 22 (Kowal 1975)")
@@ -178,8 +184,7 @@ class TestPublicCytologyIntegration(unittest.TestCase):
             root = Path(tmp)
             cyto_dir, log_f, spy = root / "cytology", root / "calls.log", root / "spy_py.sh"
             cyto_dir.mkdir()
-            spy.write_text(f"#!/usr/bin/env bash\necho \"$*\" >> {json.dumps(str(log_f))}\n", encoding="utf-8")
-            spy.chmod(0o755)
+            spy.write_text(f'echo "$*" >> {json.dumps(str(log_f))}\n', encoding="utf-8")
             fn_lines = []
             in_fn = False
             for line in rp_txt.splitlines():
@@ -190,8 +195,8 @@ class TestPublicCytologyIntegration(unittest.TestCase):
                     if line.strip() == "}":
                         break
             self.assertTrue(fn_lines, "Missing run_preflight_public_cytology in run_pipeline.sh")
-            harness = "\n".join(fn_lines) + "\nrun_preflight_public_cytology\n"
-            env_base = {"PATH": os.environ.get("PATH", ""), "PROJECT_ROOT": str(PROJECT_ROOT), "PYTHON_MAIN": str(spy), "PLANTMATICS_CYTOLOGY_DIR": str(cyto_dir), "CUSTOM_DB_PATH": ""}
+            harness = 'spy_py() { bash "${SPY_SCRIPT}" "$@"; }\n' + "\n".join(fn_lines) + "\nrun_preflight_public_cytology\n"
+            env_base = {"PATH": os.environ.get("PATH", ""), "PROJECT_ROOT": str(PROJECT_ROOT), "PYTHON_MAIN": "spy_py", "SPY_SCRIPT": str(spy), "PLANTMATICS_CYTOLOGY_DIR": str(cyto_dir), "CUSTOM_DB_PATH": ""}
             subprocess.run(["bash", "-c", f"DEMO_FLAG=(); SKIP_CYTOLOGY_DOWNLOAD=false; FORCE_CYTOLOGY_DOWNLOAD=false; DOWNLOAD_PUBLIC_CYTOLOGY=0\n{harness}"], env=env_base, check=True)
             (cyto_dir / "public_packera_cytology_records.csv").write_text("cytology_id\nc1\n", encoding="utf-8")
             subprocess.run(["bash", "-c", f"DEMO_FLAG=(); SKIP_CYTOLOGY_DOWNLOAD=false; FORCE_CYTOLOGY_DOWNLOAD=false; DOWNLOAD_PUBLIC_CYTOLOGY=0\n{harness}"], env=env_base, check=True)

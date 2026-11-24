@@ -157,7 +157,7 @@ compute_microhaplotype_coancestry <- function(pass_ids, dos_mat, raw_genomics_di
   list(ll = best_ll, h = best_h, q12 = best_q)
 }
 
-compute_hybrid_index_q12 <- function(pass_df, dos_mat, q_mat = NULL, p1_vec = NULL, p2_vec = NULL, d_mat = NULL, assign_df = NULL) {
+compute_hybrid_index_q12 <- function(pass_df, dos_mat, q_mat = NULL, p1_vec = NULL, p2_vec = NULL, d_mat = NULL, assign_df = NULL, locus_weights = NULL) {
   if (is.matrix(pass_df) && is.data.frame(dos_mat)) { tmp_m <- pass_df; pass_df <- dos_mat; dos_mat <- tmp_m }
   if (is.null(assign_df) && is.data.frame(q_mat)) { assign_df <- q_mat; q_mat <- NULL }
   n <- if (is.data.frame(pass_df)) nrow(pass_df) else 0L
@@ -178,17 +178,48 @@ compute_hybrid_index_q12 <- function(pass_df, dos_mat, q_mat = NULL, p1_vec = NU
   }
   if (n == 0L || is.null(dos_mat) || ncol(dos_mat) == 0L) return(empty_fallback(character(0), character(0), character(0)))
 
+  w_loci <- rep(1.0, ncol(dos_mat))
+  if (!is.null(locus_weights)) {
+    cn_d <- colnames(dos_mat)
+    if (!is.null(names(locus_weights)) && !is.null(cn_d)) {
+      mt <- match(cn_d, names(locus_weights)); ok_w <- !is.na(mt)
+      w_loci[ok_w] <- suppressWarnings(as.numeric(locus_weights[mt[ok_w]]))
+    } else if (length(locus_weights) == ncol(dos_mat)) {
+      w_loci <- suppressWarnings(as.numeric(locus_weights))
+    }
+    w_loci[!is.finite(w_loci) | w_loci < 0.0] <- 1.0
+  }
+
   is_query <- if ("is_putative_novel_or_hybrid_query" %in% names(pass_df)) !is.na(pass_df$is_putative_novel_or_hybrid_query) & as.integer(pass_df$is_putative_novel_or_hybrid_query) == 1L else rep(FALSE, n)
+  is_holdout <- if (exists(".is_step06_concept_or_heterotypic_holdout", mode = "function")) {
+    .is_step06_concept_or_heterotypic_holdout(pass_df)
+  } else {
+    io <- if ("is_open_or_hybrid_concept" %in% names(pass_df)) {
+      v <- pass_df$is_open_or_hybrid_concept
+      if (is.logical(v)) !is.na(v) & v else tolower(trimws(as.character(v))) %in% c("1", "true", "t", "yes")
+    } else rep(FALSE, n)
+    ih <- if ("concept_synonymy_status" %in% names(pass_df) && "type_status" %in% names(pass_df)) {
+      cs <- tolower(trimws(as.character(pass_df$concept_synonymy_status)))
+      ts <- tolower(trimws(as.character(pass_df$type_status)))
+      !is.na(cs) & cs == "heterotypic_synonym" & !is.na(ts) & nzchar(ts) & !(ts %in% c("none", "na", "null", "false", "0", "not_a_type"))
+    } else rep(FALSE, n)
+    io | ih
+  }
+  is_nonref <- is_query | is_holdout
   valid_sp <- unique(species_vec[!is.na(species_vec) & nzchar(species_vec)])
+  nonref_ok_sp <- sort(unique(species_vec[!is_nonref & !is.na(species_vec) & nzchar(species_vec)]))
   q_has_taxa <- !is.null(q_mat) && !is.null(colnames(q_mat)) && sum(colnames(q_mat) %in% valid_sp) >= 2L
-  ref_taxa <- if (q_has_taxa) unique(colnames(q_mat)[colnames(q_mat) %in% valid_sp]) else {
-    tx_ref <- sort(unique(species_vec[!is_query & !is.na(species_vec) & nzchar(species_vec)])); if (length(tx_ref) < 2L) sort(valid_sp) else tx_ref
+  ref_taxa <- if (q_has_taxa) {
+    qt_ref <- unique(colnames(q_mat)[colnames(q_mat) %in% nonref_ok_sp])
+    if (length(qt_ref) >= 2L) qt_ref else unique(colnames(q_mat)[colnames(q_mat) %in% valid_sp])
+  } else {
+    if (length(nonref_ok_sp) >= 2L) nonref_ok_sp else sort(valid_sp)
   }
   if (length(ref_taxa) < 2L) return(empty_fallback("Undetermined", if (length(ref_taxa) == 1L) ref_taxa[1L] else NA_character_, NA_character_))
 
   q_cols <- if (q_has_taxa) colnames(q_mat) else ref_taxa
   taxa_freq <- stats::setNames(lapply(ref_taxa, function(tx) {
-    idx <- which(!is_query & species_vec == tx); if (length(idx) == 0L) idx <- which(species_vec == tx)
+    idx <- which(!is_nonref & species_vec == tx); if (length(idx) == 0L) idx <- which(species_vec == tx)
     if (length(idx) == 0L) rep(NA_real_, ncol(dos_mat)) else colMeans(dos_mat[idx, , drop = FALSE], na.rm = TRUE)
   }), ref_taxa)
 
@@ -209,9 +240,10 @@ compute_hybrid_index_q12 <- function(pass_df, dos_mat, q_mat = NULL, p1_vec = NU
   }, logical(1))
 
   med_ref_d <- 0.10; mad_ref_d <- 0.05; div_dist_cut <- 0.225
-  if (!is.null(d_mat)) {
-    ref_min_dists <- vapply(which(!is_query), function(i) {
-      mates <- setdiff(which(!is_query), i); if (length(mates) == 0L) NA_real_ else min(d_mat[i, mates], na.rm = TRUE)
+  ref_pool <- which(!is_nonref)
+  if (!is.null(d_mat) && length(ref_pool) >= 2L) {
+    ref_min_dists <- vapply(ref_pool, function(i) {
+      mates <- setdiff(ref_pool, i); if (length(mates) == 0L) NA_real_ else min(d_mat[i, mates], na.rm = TRUE)
     }, numeric(1))
     ref_fin <- ref_min_dists[is.finite(ref_min_dists)]
     if (length(ref_fin) > 0L) med_ref_d <- stats::median(ref_fin)
@@ -231,10 +263,15 @@ compute_hybrid_index_q12 <- function(pass_df, dos_mat, q_mat = NULL, p1_vec = NU
       ordered_ref <- intersect(q_cols[order(q_mat[i, ], decreasing = TRUE)], ref_taxa)
       cand_taxa <- c(ordered_ref, setdiff(ref_taxa, ordered_ref))
     } else {
-      d_ref <- vapply(ref_taxa, function(tx) { tf <- taxa_freq[[tx]]; ok_t <- is.finite(y) & is.finite(tf); if (any(ok_t)) mean(abs(y[ok_t] - tf[ok_t])) else Inf }, numeric(1))
+      d_ref <- vapply(ref_taxa, function(tx) {
+        tf <- taxa_freq[[tx]]; ok_t <- is.finite(y) & is.finite(tf)
+        if (!any(ok_t)) return(Inf)
+        wt <- w_loci[ok_t]; swt <- sum(wt)
+        if (swt > 0.0) sum(wt * abs(y[ok_t] - tf[ok_t])) / swt else mean(abs(y[ok_t] - tf[ok_t]))
+      }, numeric(1))
       cand_taxa <- ref_taxa[order(d_ref, decreasing = FALSE)]
     }
-    pa <- if (!is.na(p1_vec[i]) && nzchar(p1_vec[i]) && p1_vec[i] %in% ref_taxa) p1_vec[i] else if (!is_query[i] && !is.na(species_vec[i]) && species_vec[i] %in% ref_taxa) species_vec[i] else cand_taxa[1L]
+    pa <- if (!is.na(p1_vec[i]) && nzchar(p1_vec[i]) && p1_vec[i] %in% ref_taxa) p1_vec[i] else if (!is_nonref[i] && !is.na(species_vec[i]) && species_vec[i] %in% ref_taxa) species_vec[i] else cand_taxa[1L]
     pb_pool <- setdiff(cand_taxa, pa)
     pb <- if (!is.na(p2_vec[i]) && nzchar(p2_vec[i]) && p2_vec[i] %in% ref_taxa && p2_vec[i] != pa) p2_vec[i] else if (length(pb_pool) >= 1L) pb_pool[1L] else pa
     fa <- taxa_freq[[pa]]; fb <- taxa_freq[[pb]]
@@ -243,21 +280,31 @@ compute_hybrid_index_q12 <- function(pass_df, dos_mat, q_mat = NULL, p1_vec = NU
     if (n_diag == 0L) return(list(pa = pa, pb = pb, n_diag = 0L, h = NA_real_, q12 = NA_real_, cls = "Undetermined", is_div = FALSE, cand_idx = 0L, pure_idx = 0L, aicc = NA_real_, wt = NA_real_, delta = NA_real_, raw_p = NA_real_))
 
     conserved_m <- ok & (delta_p <= 0.15)
-    priv_div <- if (sum(conserved_m) >= 10L) mean(abs(y[conserved_m] - 0.5 * (fa[conserved_m] + fb[conserved_m]))) else 0.0
-    nearest_ref_d <- if (!is.null(d_mat) && any(!is_query)) min(d_mat[i, setdiff(which(!is_query), i)], na.rm = TRUE) else NA_real_
-    x_pol <- ifelse(fb[diag_m] >= fa[diag_m], y[diag_m], 1.0 - y[diag_m]); h_val <- mean(x_pol); q12_val <- mean(1.0 - abs(2.0 * x_pol - 1.0))
+    priv_div <- if (sum(conserved_m) >= 10L) {
+      wc <- w_loci[conserved_m]; swc <- sum(wc)
+      diff_c <- abs(y[conserved_m] - 0.5 * (fa[conserved_m] + fb[conserved_m]))
+      if (swc > 0.0) sum(wc * diff_c) / swc else mean(diff_c)
+    } else 0.0
+    nearest_ref_d <- if (!is.null(d_mat) && length(ref_pool) > 0L) min(d_mat[i, setdiff(ref_pool, i)], na.rm = TRUE) else NA_real_
+    x_pol <- ifelse(fb[diag_m] >= fa[diag_m], y[diag_m], 1.0 - y[diag_m])
+    w_diag <- w_loci[diag_m]; sw_d <- sum(w_diag)
+    h_val <- if (sw_d > 0.0) sum(w_diag * x_pol) / sw_d else mean(x_pol)
+    q12_val <- if (sw_d > 0.0) sum(w_diag * (1.0 - abs(2.0 * x_pol - 1.0))) / sw_d else mean(1.0 - abs(2.0 * x_pol - 1.0))
 
     is_div_assign <- !is.na(geno_sp_vec[i]) && nzchar(geno_sp_vec[i]) && !(geno_sp_vec[i] %in% c(pa, pb)) && is.finite(geno_prob_vec[i]) && geno_prob_vec[i] >= 0.70 && !isTRUE(geno_adm_vec[i]) && q12_val < 0.20
-    is_div_dist <- !is.null(d_mat) && ((is_query[i] && is.finite(nearest_ref_d) && nearest_ref_d > div_dist_cut && q12_val < 0.72) || (priv_div >= 0.14 && q12_val < 0.65) || (n_diag < 8L && is.finite(nearest_ref_d) && nearest_ref_d > med_ref_d + 1.5 * mad_ref_d))
+    is_div_dist <- !is.null(d_mat) && ((is_nonref[i] && is.finite(nearest_ref_d) && nearest_ref_d > div_dist_cut && q12_val < 0.72) || (priv_div >= 0.14 && q12_val < 0.65) || (n_diag < 8L && is.finite(nearest_ref_d) && nearest_ref_d > med_ref_d + 1.5 * mad_ref_d))
     is_div_i <- is_div_assign || is_div_dist
     if (n_diag < 6L) {
       c_low <- if (is_div_i) "Divergent_NonHybrid_Lineage" else if (h_val <= 0.10 && q12_val < 0.20) "Pure_Parent_1" else if (h_val >= 0.90 && q12_val < 0.20) "Pure_Parent_2" else if (h_val >= 0.35 && h_val <= 0.65 && q12_val >= 0.70) "F1_Hybrid" else if (h_val >= 0.30 && h_val <= 0.70 && q12_val >= 0.35) "F2_Hybrid" else if (h_val < 0.35 && q12_val >= 0.25) "BC1_Parent_1" else if (h_val > 0.65 && q12_val >= 0.25) "BC1_Parent_2" else if (q12_val < 0.25 && h_val > 0.10 && h_val < 0.90) "Advanced_Introgressant" else "Pure_Parent_1"
       return(list(pa = pa, pb = pb, n_diag = n_diag, h = round(h_val, 4), q12 = round(q12_val, 4), cls = c_low, is_div = is_div_i, cand_idx = 0L, pure_idx = 0L, aicc = NA_real_, wt = NA_real_, delta = NA_real_, raw_p = NA_real_))
     }
-    n11 <- sum(x_pol < 0.25); n12 <- sum(x_pol >= 0.25 & x_pol <= 0.75); n22 <- sum(x_pol > 0.75)
+    sw2_d <- sum(w_diag^2)
+    n_eff <- if (sw_d > 0.0 && sw2_d > 0.0) (sw_d^2) / sw2_d else as.numeric(n_diag)
+    w_eff <- if (sw_d > 0.0) w_diag * (n_eff / sw_d) else rep(1.0, length(x_pol))
+    n11 <- sum(w_eff[x_pol < 0.25]); n12 <- sum(w_eff[x_pol >= 0.25 & x_pol <= 0.75]); n22 <- sum(w_eff[x_pol > 0.75])
     adv_fit <- .fit_advanced_introgressant_mle(n11, n12, n22, h_val, q12_val, eps = 0.015)
     ll_vec <- c(.eval_hybrid_multinomial_ll(n11, n12, n22, 0.0, 0.0), .eval_hybrid_multinomial_ll(n11, n12, n22, 1.0, 0.0), .eval_hybrid_multinomial_ll(n11, n12, n22, 0.5, 1.0), .eval_hybrid_multinomial_ll(n11, n12, n22, 0.5, 0.5), .eval_hybrid_multinomial_ll(n11, n12, n22, 0.25, 0.5), .eval_hybrid_multinomial_ll(n11, n12, n22, 0.75, 0.5), adv_fit$ll)
-    aicc_vec <- vapply(seq_along(ll_vec), function(m) -2.0 * ll_vec[m] + 2.0 * k_vec[m] + (2.0 * k_vec[m] * (k_vec[m] + 1.0)) / max(1.0, n_diag - k_vec[m] - 1.0), numeric(1))
+    aicc_vec <- vapply(seq_along(ll_vec), function(m) -2.0 * ll_vec[m] + 2.0 * k_vec[m] + (2.0 * k_vec[m] * (k_vec[m] + 1.0)) / max(1.0, n_eff - k_vec[m] - 1.0), numeric(1))
     w_vec <- exp(-0.5 * (aicc_vec - min(aicc_vec))); w_vec <- w_vec / sum(w_vec); best_idx <- which.min(aicc_vec)
     list(pa = pa, pb = pb, n_diag = n_diag, h = round(h_val, 4), q12 = round(q12_val, 4), cls = "Pending", is_div = is_div_i,
          cand_idx = best_idx, pure_idx = if (aicc_vec[1L] <= aicc_vec[2L]) 1L else 2L,

@@ -19,7 +19,7 @@ import numpy as np
 
 from scripts.data_prep.step06_sample_metadata_utils import (
     _NON_TYPE_STATUS_TOKENS, _canonical_taxon_equiv_key, _normalize_event_date_part,
-    _normalize_exsiccatae_key, _safe_text, sanitize_step06_sample_coordinates, strip_smart_quotes,
+    _normalize_exsiccatae_key, _safe_text, evaluate_step06_sample_coordinates, strip_smart_quotes,
 )
 
 
@@ -32,7 +32,14 @@ def _load_db_vouchers(conn: Optional[sqlite3.Connection]) -> List[Dict[str, Any]
         return []
     if not cols:
         return []
-    select_cols = [c for c in ("catalogNumber", "recordNumber", "recordedBy", "scientificName", "species_standardized", "decimalLatitude", "decimalLongitude", "stateProvince", "county", "eventDate", "determiner_tier", "type_status", "image_path", "exsiccatae_key", "is_primary_duplicate") if c in cols]
+    select_cols = [c for c in (
+        "catalogNumber", "recordNumber", "recordedBy", "scientificName", "species_standardized",
+        "decimalLatitude", "decimalLongitude", "coordinateUncertainty", "stateProvince", "county",
+        "locality", "eventDate", "determiner_tier", "type_status", "image_path", "exsiccatae_key",
+        "is_primary_duplicate", "is_centroid_or_inst_coord", "coord_quarantine_reason",
+        "typified_basionym", "verbatim_taxon_concept", "concept_synonymy_status",
+        "identification_year", "is_open_or_hybrid_concept",
+    ) if c in cols]
     return [{c: r[idx] for idx, c in enumerate(select_cols)} for r in conn.execute(f"SELECT {', '.join(select_cols)} FROM vouchers;").fetchall()]
 
 
@@ -302,12 +309,44 @@ def _link_sample_to_voucher(
         imaged = [s for s in sibs if _safe_text(s.get("image_path"))]
         return min(imaged, key=_duplicate_rank_key) if imaged else pv
 
+    def _opt_float(val: Any) -> Optional[float]:
+        if val is None or isinstance(val, bool):
+            return None
+        try:
+            f = float(val)
+            return f if np.isfinite(f) else None
+        except (TypeError, ValueError):
+            return None
+
+    def _opt_int(val: Any) -> Optional[int]:
+        if val is None or isinstance(val, bool):
+            return None
+        try:
+            f = float(val)
+            return int(round(f)) if np.isfinite(f) else None
+        except (TypeError, ValueError):
+            return None
+
     def _ret_g1(v: Mapping[str, Any], tier: str = "G1_Direct_Voucher") -> Dict[str, Any]:
-        return {"catalogNumber": str(v.get("catalogNumber")), "voucher": v, "linkage_tier": tier, "exsiccatae_key": _resolve_output_exsiccatae_key(v, user_meta, field_row)}
+        return {
+            "catalogNumber": str(v.get("catalogNumber")),
+            "voucher": v,
+            "linkage_tier": tier,
+            "exsiccatae_key": _resolve_output_exsiccatae_key(v, user_meta, field_row),
+            "coordinateUncertainty": _opt_float(v.get("coordinateUncertainty")),
+            "is_centroid_or_inst_coord": _coerce_flag_int(v.get("is_centroid_or_inst_coord")),
+            "coord_quarantine_reason": _safe_text(v.get("coord_quarantine_reason")) or None,
+            "typified_basionym": _safe_text(v.get("typified_basionym")) or None,
+            "verbatim_taxon_concept": _safe_text(v.get("verbatim_taxon_concept")) or None,
+            "concept_synonymy_status": _safe_text(v.get("concept_synonymy_status")) or None,
+            "identification_year": _opt_int(v.get("identification_year")),
+            "is_open_or_hybrid_concept": _coerce_flag_int(v.get("is_open_or_hybrid_concept")),
+        }
 
     valid_tiers = {"G1_Direct_Voucher", "G1_Exsiccatae_Isoduplicate", "G2_Population_Voucher_Proxy", "G3_Georeferenced_Unvouchered", "G4_Ungeoreferenced_Tip"}
     u_tier = str(user_meta.get("linkage_tier") or "").strip() if user_meta else ""
     u_tier = u_tier if u_tier in valid_tiers else ""
+    eff_g1_tier = u_tier if u_tier in ("G1_Direct_Voucher", "G1_Exsiccatae_Isoduplicate") else "G1_Direct_Voucher"
     if user_meta and user_meta.get("catalogNumber"):
         u_cat = str(user_meta["catalogNumber"]).strip()
         if matched := voucher_by_cat.get(u_cat) or voucher_by_cat_ci.get(u_cat.upper()):
@@ -316,13 +355,13 @@ def _link_sample_to_voucher(
     u_exp, u_norm, u_dl = _extract_meta_exsiccatae_keys(user_meta)
     if (u_exp or u_norm) and u_tier not in ("G3_Georeferenced_Unvouchered", "G4_Ungeoreferenced_Tip"):
         if u_cands := _lookup_exsiccatae_candidates(u_exp, u_norm, u_dl, eff_index):
-            return _ret_g1(min(u_cands, key=_duplicate_rank_key))
+            return _ret_g1(min(u_cands, key=_duplicate_rank_key), eff_g1_tier)
 
     if u_tier not in ("G3_Georeferenced_Unvouchered", "G4_Ungeoreferenced_Tip"):
         if field_row and field_row.get("project_id") and strip_smart_quotes(field_row["project_id"]).upper() == sample_id.upper():
             f_exp, f_norm, f_dl = _extract_meta_exsiccatae_keys(field_row)
             if (f_exp or f_norm) and (f_cands := _lookup_exsiccatae_candidates(f_exp, f_norm, f_dl, eff_index)):
-                return _ret_g1(min(f_cands, key=_duplicate_rank_key))
+                return _ret_g1(min(f_cands, key=_duplicate_rank_key), eff_g1_tier)
         sp_eq_main = _canonical_taxon_equiv_key(parsed.get("species_standardized"))
         probe_ids = [sample_id] + ([str(user_meta["project_id"])] if user_meta and user_meta.get("project_id") else [])
         if field_row and field_row.get("project_id"):
@@ -340,7 +379,7 @@ def _link_sample_to_voucher(
                 if pid_c == cat_c: cat_hits.append(v)
                 elif rec_c and (pid_c == rec_c or pid_c.startswith(rec_c + "-")) and not (sp_eq_main and vsp_eq and sp_eq_main != vsp_eq): rec_hits.append(v)
             if cat_hits:
-                return _ret_g1(_upgrade(cat_hits[0]))
+                return _ret_g1(_upgrade(cat_hits[0]), eff_g1_tier)
             if rec_hits:
                 exp_v: List[Mapping[str, Any]] = []; seen_c: set = set()
                 for rv in rec_hits:
@@ -349,7 +388,7 @@ def _link_sample_to_voucher(
                         if cid_v and cid_v in seen_c: continue
                         if cid_v: seen_c.add(cid_v)
                         exp_v.append(cand)
-                return _ret_g1(min(exp_v, key=_duplicate_rank_key))
+                return _ret_g1(min(exp_v, key=_duplicate_rank_key), eff_g1_tier)
 
         pop, code, sp_std = (parsed.get("population_id") or "").upper(), (parsed.get("taxon_code") or "").upper(), parsed.get("species_standardized")
         if pop and vouchers:
@@ -363,17 +402,33 @@ def _link_sample_to_voucher(
                 return _ret_g1(scored[0][1], "G2_Population_Voucher_Proxy")
 
     out_ex = _resolve_output_exsiccatae_key(None, user_meta, field_row)
-    c_lat = (user_meta or {}).get("decimalLatitude") if (user_meta and user_meta.get("decimalLatitude") is not None) else (field_row or {}).get("decimalLatitude")
-    c_lon = (user_meta or {}).get("decimalLongitude") if (user_meta and user_meta.get("decimalLongitude") is not None) else (field_row or {}).get("decimalLongitude")
-    c_state = (user_meta or {}).get("stateProvince") or (field_row or {}).get("stateProvince") or ""
-    c_county = (user_meta or {}).get("county") or (field_row or {}).get("county") or ""
-    c_loc = (user_meta or {}).get("locality") or (field_row or {}).get("notes") or ""
-    s_lat, s_lon, was_nullified = sanitize_step06_sample_coordinates(c_lat, c_lon, c_state, county=c_county, locality=c_loc, is_vouchered=False)
+    um, fr = (user_meta or {}), (field_row or {})
+    c_lat = um.get("decimalLatitude") if um.get("decimalLatitude") is not None else fr.get("decimalLatitude")
+    c_lon = um.get("decimalLongitude") if um.get("decimalLongitude") is not None else fr.get("decimalLongitude")
+    c_state, c_county = um.get("stateProvince") or fr.get("stateProvince") or "", um.get("county") or fr.get("county") or ""
+    c_loc = um.get("locality") or fr.get("notes") or ""
+    u_unc = um.get("coordinateUncertainty") if um.get("coordinateUncertainty") is not None else (um.get("coordinateUncertaintyInMeters") if um.get("coordinateUncertaintyInMeters") is not None else fr.get("coordinateUncertainty"))
+    unc_val = _opt_float(u_unc)
+    s_lat, s_lon, was_nullified, cent_flag, cent_reason = evaluate_step06_sample_coordinates(
+        c_lat, c_lon, state_prov=c_state, county=c_county, locality=c_loc, uncertainty_m=unc_val,
+        voucher_flagged=(_coerce_flag_int(um.get("is_centroid_or_inst_coord")) == 1),
+        voucher_reason=_safe_text(um.get("coord_quarantine_reason")),
+    )
     if u_tier == "G4_Ungeoreferenced_Tip" or was_nullified:
         tier_out = "G4_Ungeoreferenced_Tip"
     elif u_tier == "G3_Georeferenced_Unvouchered":
         tier_out = "G3_Georeferenced_Unvouchered"
     else:
         tier_out = "G3_Georeferenced_Unvouchered" if (s_lat is not None and s_lon is not None) else "G4_Ungeoreferenced_Tip"
-    return {"catalogNumber": None, "voucher": None, "linkage_tier": tier_out, "exsiccatae_key": out_ex}
+    return {
+        "catalogNumber": None, "voucher": None, "linkage_tier": tier_out, "exsiccatae_key": out_ex,
+        "coordinateUncertainty": unc_val,
+        "is_centroid_or_inst_coord": cent_flag,
+        "coord_quarantine_reason": cent_reason,
+        "typified_basionym": _safe_text(um.get("typified_basionym")) or None,
+        "verbatim_taxon_concept": _safe_text(um.get("verbatim_taxon_concept")) or None,
+        "concept_synonymy_status": _safe_text(um.get("concept_synonymy_status")) or None,
+        "identification_year": _opt_int(um.get("identification_year")),
+        "is_open_or_hybrid_concept": _coerce_flag_int(um.get("is_open_or_hybrid_concept")),
+    }
 

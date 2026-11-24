@@ -3,20 +3,25 @@
 # Project: Plantmatics
 # Affiliation: University of North Carolina at Chapel Hill Herbarium (NCU)
 # Purpose: Public Packera nuclear species-tree backbone (MO, ASTRAL-Pro, wASTRAL),
-#   PhyTop ILS/IH reticulation tables, and 11-mer organellar/ITS/waxy placement.
+#   PhyTop ILS/IH reticulation tables, and gated 11-mer organellar placement.
 # ==============================================================================
 
-if (!exists("screen_public_tree_rogue_tips", mode = "function") || !exists(".screen_public_backbone_trees_bundle", mode = "function")) {
-  .qc_srcs <- c("scripts/analysis/step06_rogue_sequence_qc.R", "step06_rogue_sequence_qc.R",
-                file.path(dirname(as.character(c(sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE)),
-                                                 unlist(lapply(sys.frames(), function(fr) fr$ofile))))), "step06_rogue_sequence_qc.R"))
-  for (.qc_p in .qc_srcs) if (!is.na(.qc_p) && nzchar(.qc_p) && file.exists(.qc_p)) { source(.qc_p); break }
+if (grDevices::dev.cur() == 1L) grDevices::pdf(NULL)
+
+.src_step06_bb_dep <- function(fname) {
+  cands <- c(file.path("scripts/analysis", fname), fname, file.path(dirname(as.character(c(
+    sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE)),
+    unlist(lapply(sys.frames(), function(fr) fr$ofile))
+  ))), fname))
+  for (p in cands) if (!is.na(p) && nzchar(p) && file.exists(p)) { source(p); return(invisible(TRUE)) }
+  invisible(FALSE)
 }
+if (!exists("screen_public_tree_rogue_tips", mode = "function") || !exists(".screen_public_backbone_trees_bundle", mode = "function")) .src_step06_bb_dep("step06_rogue_sequence_qc.R")
+if (!exists(".match_skimmed_organellar_11mers", mode = "function")) .src_step06_bb_dep("step06_organellar_containment.R")
 
 .write_csv_safe <- function(df, path) {
   dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
-  if (requireNamespace("readr", quietly = TRUE)) readr::write_csv(df, path)
-  else utils::write.csv(df, path, row.names = FALSE)
+  if (requireNamespace("readr", quietly = TRUE)) readr::write_csv(df, path) else utils::write.csv(df, path, row.names = FALSE)
 }
 
 .read_delim_safe <- function(path) {
@@ -25,9 +30,7 @@ if (!exists("screen_public_tree_rogue_tips", mode = "function") || !exists(".scr
   tryCatch({
     if (requireNamespace("readr", quietly = TRUE)) {
       if (is_tsv) readr::read_tsv(path, show_col_types = FALSE) else readr::read_csv(path, show_col_types = FALSE)
-    } else {
-      utils::read.delim(path, sep = if (is_tsv) "\t" else ",", stringsAsFactors = FALSE, check.names = FALSE)
-    }
+    } else utils::read.delim(path, sep = if (is_tsv) "\t" else ",", stringsAsFactors = FALSE, check.names = FALSE)
   }, error = function(e) NULL)
 }
 
@@ -43,16 +46,16 @@ if (!exists("screen_public_tree_rogue_tips", mode = "function") || !exists(".scr
       s <- if (length(hit) > 0L) hit[1L] else if (length(parts) >= 2L) parts[2L] else parts[1L]
     }
     s <- trimws(gsub("[[:space:]]+", " ", gsub("_+", " ", s)))
-    s <- gsub("(?i)\\b(Packera|Senecio|P\\.)\\s+(?:x\\s+|×\\s*)memmingeri\\b", "\\1 xmemmingeri", s, perl = TRUE)
-    s <- sub("^(?i)(?:Packera|P\\.)\\s+sp\\.?(?=\\s+(?:Packera|Senecio|P\\.)\\s+[A-Za-z])\\s+", "", s, perl = TRUE)
-    s <- sub("^([A-Za-z]+)\\s+[0-9]+([A-Za-z][A-Za-z-]*)$", "\\1 \\2", s, perl = TRUE)
-    if (grepl("(?i)\\b(Packera|P\\.)\\s+sp\\.?\\s*nov\\b", s, perl = TRUE)) return("Packera sp. nov.")
-    if (grepl("(?i)^(?:sp\\.?|cf\\.?|aff\\.?|unk|unknown)$", s, perl = TRUE)) return("")
-    m <- regexec("(?i)\\b(Packera|Senecio|P\\.)\\s+[0-9]*([A-Za-z][A-Za-z0-9.-]*)", s, perl = TRUE)
+    s <- gsub("(^|[^[:alnum:]_])(Packera|Senecio|P\\.)[[:space:]]+(x[[:space:]]+|\u00d7[[:space:]]*)memmingeri($|[^[:alnum:]_])", "\\1\\2 xmemmingeri\\4", s, ignore.case = TRUE)
+    s <- sub("^(Packera|P\\.)[[:space:]]+sp\\.?[[:space:]]+((Packera|Senecio|P\\.)[[:space:]]+[A-Za-z])", "\\2", s, ignore.case = TRUE)
+    s <- sub("^([A-Za-z]+)[[:space:]]+[0-9]+([A-Za-z][A-Za-z-]*)$", "\\1 \\2", s)
+    if (grepl("(^|[^[:alnum:]_])(Packera|P\\.)[[:space:]]+sp\\.?[[:space:]]*nov($|[^[:alnum:]_])", s, ignore.case = TRUE)) return("Packera sp. nov.")
+    if (grepl("^(sp\\.?|cf\\.?|aff\\.?|unk|unknown)$", s, ignore.case = TRUE)) return("")
+    m <- regexec("(^|[^[:alnum:]_])(Packera|Senecio|P\\.)[[:space:]]+[0-9]*([A-Za-z][A-Za-z0-9.-]*)", s, ignore.case = TRUE)
     reg <- regmatches(s, m)[[1L]]
-    if (length(reg) >= 3L) {
-      gen_low <- tolower(reg[2L])
-      ep_raw <- sub("[-.].*$", "", reg[3L])
+    if (length(reg) >= 4L) {
+      gen_low <- tolower(reg[3L])
+      ep_raw <- sub("[-.].*$", "", reg[4L])
       ep_low <- tolower(ep_raw)
       if (ep_low %in% c("sp", "cf", "aff", "unk", "unknown")) return("")
       sen_map <- c(
@@ -274,116 +277,6 @@ select_backbone_guided_outgroup <- function(uniq_taxa, p_dist, backbone = NULL) 
   )
 }
 
-.read_fasta_named <- function(path) {
-  if (!nzchar(path) || !file.exists(path)) return(data.frame(header = character(0), seq = character(0), stringsAsFactors = FALSE))
-  lns <- readLines(path, warn = FALSE)
-  hdr_idx <- grep("^>", lns)
-  if (length(hdr_idx) == 0L) return(data.frame(header = character(0), seq = character(0), stringsAsFactors = FALSE))
-  ends <- c(hdr_idx[-1L] - 1L, length(lns))
-  hdrs <- sub("^>", "", trimws(lns[hdr_idx]))
-  seqs <- vapply(seq_along(hdr_idx), function(i) {
-    if (hdr_idx[i] + 1L > ends[i]) return("")
-    gsub("[^A-Z]", "", toupper(paste(lns[(hdr_idx[i] + 1L):ends[i]], collapse = "")))
-  }, character(1L))
-  keep <- nzchar(hdrs) & nchar(seqs) >= 11L
-  data.frame(header = hdrs[keep], seq = seqs[keep], stringsAsFactors = FALSE)
-}
-
-.kmers_11 <- function(s) {
-  n <- nchar(s)
-  if (is.na(n) || n < 11L) return(character(0))
-  st <- seq_len(n - 10L)
-  k <- substring(s, st, st + 10L)
-  unique(k[!grepl("[^ACGT]", k)])
-}
-
-.revcomp_seq <- function(s) {
-  ch <- rev(strsplit(s, "", fixed = TRUE)[[1L]])
-  chartr("ACGTU", "TGCAA", paste(ch, collapse = ""))
-}
-
-.place_organellar_loci <- function(raw_geno_dir, out_dir, sample_ids) {
-  search_dirs <- unique(Filter(function(d) nzchar(d) && dir.exists(d),
-                               c(raw_geno_dir, out_dir, dirname(out_dir), file.path(dirname(out_dir), "genomics"))))
-  locus_specs <- list(
-    list(locus = "plastid", qfile = "skimmed_plastid_consensus.fasta",
-         refs = c("public_packera_111mapping_plastomes.fasta", "public_packera_18complete_plastomes.fasta", "public_packera_plastomes_and_cpdna.fasta")),
-    list(locus = "its", qfile = "skimmed_its_consensus.fasta",
-         refs = c("public_packera_its_ets.fasta", "public_packera_bold_barcodes.fasta", "bain_jansen_sequences.fasta")),
-    list(locus = "waxy", qfile = "skimmed_waxy_consensus.fasta",
-         refs = c("public_packera_waxy_nuclear.fasta"))
-  )
-  rows <- list()
-  audit_list <- list()
-  for (sp in locus_specs) {
-    ref_list <- list()
-    for (rf in sp$refs) {
-      rp <- .find_geno_file(search_dirs, rf)
-      rdf <- .read_fasta_named(rp)
-      if (nrow(rdf) > 0L) {
-        rdf$taxon <- .normalize_public_packera_taxon(rdf$header)
-        rdf <- rdf[!is.na(rdf$taxon) & nzchar(rdf$taxon), , drop = FALSE]
-        if (nrow(rdf) > 0L) {
-          rdf$ref_source <- rf
-          ref_list[[length(ref_list) + 1L]] <- rdf
-        }
-      }
-    }
-    if (length(ref_list) == 0L) next
-    refs <- do.call(rbind, ref_list)
-    r_km <- lapply(refs$seq, .kmers_11)
-    qc_fa <- screen_public_fasta_outliers(refs, sp$locus, kmers_list = r_km)
-    if (!is.null(qc_fa$audit_df) && nrow(qc_fa$audit_df) > 0L) audit_list[[length(audit_list) + 1L]] <- qc_fa$audit_df
-    refs <- qc_fa$clean_refs; r_km <- qc_fa$clean_kmers
-    qp <- .find_geno_file(search_dirs, sp$qfile)
-    qdf <- .read_fasta_named(qp)
-    if (nrow(qdf) == 0L || nrow(refs) == 0L) next
-    r_len <- vapply(r_km, length, integer(1L))
-    valid_r <- which(r_len > 0L)
-    if (length(valid_r) == 0L) next
-    r_sk <- lapply(seq_along(r_km), function(ri) if (r_len[ri] > 6000L) r_km[[ri]][endsWith(r_km[[ri]], "AA")] else r_km[[ri]])
-    r_sk_len <- vapply(r_sk, length, integer(1L))
-    for (qi in seq_len(nrow(qdf))) {
-      sid <- sub("\\|.*$", "", sub("\\s.*$", "", qdf$header[qi]))
-      if (length(sample_ids) > 0L && !(sid %in% sample_ids)) next
-      qf <- .kmers_11(qdf$seq[qi]); qr <- .kmers_11(.revcomp_seq(qdf$seq[qi]))
-      q_len <- length(qf)
-      if (q_len < 3L) next
-      use_q_sk <- q_len > 6000L
-      qf_u <- if (use_q_sk) qf[endsWith(qf, "AA")] else qf
-      qr_u <- if (use_q_sk) qr[endsWith(qr, "AA")] else qr
-      q_eff <- length(qf_u); if (q_eff < 3L) { qf_u <- qf; qr_u <- qr; q_eff <- q_len; use_q_sk <- FALSE }
-      best <- list(score = -1, sh = 0L, cont = 0, jac = 0, ri = NA_integer_)
-      for (ri in valid_r) {
-        rk <- if (use_q_sk) r_sk[[ri]] else r_km[[ri]]; rl <- if (use_q_sk) r_sk_len[ri] else r_len[ri]
-        if (rl < 3L) next
-        sh <- max(sum(qf_u %in% rk), sum(qr_u %in% rk))
-        if (sh < 3L) next
-        cont <- sh / q_eff
-        if (cont < 0.05) next
-        jac <- sh / (q_eff + rl - sh)
-        sc <- cont + 1e-4 * jac
-        if (sc > best$score) best <- list(score = sc, sh = sh, cont = cont, jac = jac, ri = ri)
-      }
-      if (!is.na(best$ri)) {
-        rows[[length(rows) + 1L]] <- data.frame(
-          genetic_sample_id = sid, locus = sp$locus,
-          best_match_taxon = refs$taxon[best$ri], best_ref_header = refs$header[best$ri],
-          ref_source_file = refs$ref_source[best$ri], n_shared_11mers = as.integer(best$sh),
-          kmer_containment = round(best$cont, 4), kmer_jaccard = round(best$jac, 4), stringsAsFactors = FALSE
-        )
-      }
-    }
-  }
-  res_df <- if (length(rows) > 0L) do.call(rbind, rows) else data.frame(
-    genetic_sample_id = character(0), locus = character(0), best_match_taxon = character(0),
-    best_ref_header = character(0), ref_source_file = character(0), n_shared_11mers = integer(0),
-    kmer_containment = numeric(0), kmer_jaccard = numeric(0), stringsAsFactors = FALSE
-  )
-  attr(res_df, "fasta_rogue_audit") <- if (length(audit_list) > 0L) do.call(rbind, audit_list) else .empty_rogue_audit_df()
-  res_df
-}
-
 evaluate_public_backbone_and_organellar <- function(pass_df, raw_geno_dir, out_dir, extra_taxa = character(0)) {
   dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
   bb <- load_public_packera_backbone(raw_geno_dir)
@@ -437,32 +330,23 @@ evaluate_public_backbone_and_organellar <- function(pass_df, raw_geno_dir, out_d
   )
   .write_csv_safe(conc_df, file.path(out_dir, "public_backbone_concordance.csv"))
 
-  sids <- if (n > 0L && "genetic_sample_id" %in% names(pass_df)) as.character(pass_df$genetic_sample_id) else character(0)
-  place_df <- .place_organellar_loci(raw_geno_dir, out_dir, sids)
+  org_res <- .match_skimmed_organellar_11mers(raw_geno_dir, pass_df, min_containment = 0.80, min_shared_11mers = 80L, out_dir = out_dir)
+  place_df <- org_res$placement_df
   .write_csv_safe(place_df, file.path(out_dir, "public_organellar_placement.csv"))
   rogue_audit_df <- .write_public_genbank_rogue_audit(
-    bb$tree_rogue_audit_df, attr(place_df, "fasta_rogue_audit"),
+    bb$tree_rogue_audit_df, org_res$fasta_rogue_audit,
     file.path(out_dir, "public_genbank_rogue_audit.csv")
   )
 
   idx_tx <- match(sp_raw, conc_df$taxon)
-  locus_vec <- function(loc) {
-    out <- rep(NA_character_, n)
-    sub <- place_df[place_df$locus == loc, , drop = FALSE]
-    if (nrow(sub) > 0L && length(sids) > 0L) {
-      m <- match(sids, sub$genetic_sample_id)
-      ok <- !is.na(m)
-      out[ok] <- sub$best_match_taxon[m[ok]]
-    }
-    out
-  }
   list(
     public_backbone_clade = if (n > 0L) conc_df$public_backbone_clade[idx_tx] else character(0),
     public_phytop_ils_index = if (n > 0L) conc_df$public_phytop_ils_index[idx_tx] else numeric(0),
     public_phytop_ih_index = if (n > 0L) conc_df$public_phytop_ih_index[idx_tx] else numeric(0),
-    public_plastome_match = locus_vec("plastid"),
-    public_its_match = locus_vec("its"),
-    waxy_lineage_match = locus_vec("waxy"),
+    public_plastome_match = if (n > 0L) org_res$public_plastome_match else character(0),
+    public_its_match = if (n > 0L) org_res$public_its_match else character(0),
+    waxy_lineage_match = if (n > 0L) org_res$waxy_lineage_match else character(0),
+    combined_its_waxy_concordant = if (n > 0L) org_res$combined_its_waxy_concordant else logical(0),
     backbone = bb, concordance_df = conc_df, placement_df = place_df, rogue_audit_df = rogue_audit_df
   )
 }

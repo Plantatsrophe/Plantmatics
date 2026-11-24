@@ -149,8 +149,8 @@ def compute_svdquartets_support(
     a1: np.ndarray, a2: np.ndarray, taxa_labels: Sequence[str], sample_ids: Sequence[str],
     max_quartets: int = 120, seed: int = 202611, n_boot: int = 200,
 ) -> pd.DataFrame:
-    """Compute Chifman & Kubatko (2014) 16x16 SVDquartets scores and block-bootstrap p-values."""
-    _ = (a2, sample_ids)
+    """Compute Chifman & Kubatko (2014) 16x16 SVDquartets scores pooling diploid (a1, a2) across up to 16 individual quartets."""
+    _ = sample_ids
     empty_cols = ["quartet_id", "best_split", "svd_score_best", "svd_score_second", "quartet_support", "quartet_boot_support", "quartet_p_value", "n_sites_used"]
     taxon_groups: Dict[str, List[int]] = defaultdict(list)
     for idx, tx in enumerate(taxa_labels):
@@ -166,34 +166,57 @@ def compute_svdquartets_support(
         all_q = [all_q[int(k)] for k in sorted(sel)]
 
     rows: List[Dict[str, Any]] = []
-    rep_idx = {tx: max(idxs, key=lambda i: int(np.sum(a1[i] >= 0))) for tx, idxs in taxon_groups.items()}
+    ok_all = (a1 >= 0) & (a2 >= 0)
+    ranked_groups = {tx: sorted(idxs, key=lambda i: (-int(np.sum(ok_all[i])), i)) for tx, idxs in taxon_groups.items()}
     n_sites = a1.shape[1]
 
     def _svd_residual(mats: np.ndarray) -> np.ndarray:
         sv = np.linalg.svd(mats, compute_uv=False)
         return np.sqrt(np.sum(sv[..., 10:] ** 2, axis=-1))
 
-    q_jobs: List[Tuple[str, str, str, str, int, int, int, int, np.ndarray, int, np.ndarray]] = []
+    def _allele_probs(s_idx: int, cols: np.ndarray) -> np.ndarray:
+        out = np.zeros((cols.size, 4), dtype=np.float64)
+        r_idx = np.arange(cols.size)
+        out[r_idx, a1[s_idx, cols]] += 0.5
+        out[r_idx, a2[s_idx, cols]] += 0.5
+        return out
+
+    q_jobs: List[Tuple[str, str, str, str, List[Tuple[int, int, int, int]], np.ndarray, int, np.ndarray]] = []
     for t1, t2, t3, t4 in all_q:
-        i1, i2, i3, i4 = rep_idx[t1], rep_idx[t2], rep_idx[t3], rep_idx[t4]
-        valid = (a1[i1] >= 0) & (a1[i2] >= 0) & (a1[i3] >= 0) & (a1[i4] >= 0)
-        if (nv := int(np.sum(valid))) < 20:
+        g1, g2, g3, g4 = ranked_groups[t1], ranked_groups[t2], ranked_groups[t3], ranked_groups[t4]
+        if len(g1) * len(g2) * len(g3) * len(g4) <= 16:
+            ind_quartets = [(i1, i2, i3, i4) for i1 in g1 for i2 in g2 for i3 in g3 for i4 in g4]
+        else:
+            cands = [(i1, i2, i3, i4) for i1 in g1[:6] for i2 in g2[:6] for i3 in g3[:6] for i4 in g4[:6]]
+            sel_q = sorted(int(k) for k in rng.choice(len(cands), size=16, replace=False))
+            ind_quartets = [cands[k] for k in sel_q]
+        any_valid = np.zeros(n_sites, dtype=bool)
+        for i1, i2, i3, i4 in ind_quartets:
+            any_valid |= ok_all[i1] & ok_all[i2] & ok_all[i3] & ok_all[i4]
+        valid_cols = np.flatnonzero(any_valid)
+        if (nv := int(valid_cols.size)) < 20:
             continue
         n_b = max(4, min(40, nv // (2 if nv < 40 else 10)))
         draws = rng.integers(0, n_b, size=(max(1, n_boot), n_b))
-        q_jobs.append((t1, t2, t3, t4, i1, i2, i3, i4, valid, n_b, draws))
+        q_jobs.append((t1, t2, t3, t4, ind_quartets, valid_cols, n_b, draws))
 
-    def _eval_quartet_svd(job: Tuple[str, str, str, str, int, int, int, int, np.ndarray, int, np.ndarray]) -> Dict[str, Any]:
-        t1, t2, t3, t4, i1, i2, i3, i4, valid, n_b, draws = job
-        nv = int(np.sum(valid))
-        b1, b2, b3, b4 = a1[i1, valid], a1[i2, valid], a1[i3, valid], a1[i4, valid]
-        blk_splits = np.array_split(np.arange(nv), n_b)
+    def _eval_quartet_svd(job: Tuple[str, str, str, str, List[Tuple[int, int, int, int]], np.ndarray, int, np.ndarray]) -> Dict[str, Any]:
+        t1, t2, t3, t4, ind_quartets, valid_cols, n_b, draws = job
+        nv = int(valid_cols.size)
+        blk_splits = np.array_split(valid_cols, n_b)
         blk_tensors = np.zeros((n_b, 256), dtype=np.float64)
-        idx_256 = b1.astype(np.int32) * 64 + b2.astype(np.int32) * 16 + b3.astype(np.int32) * 4 + b4.astype(np.int32)
-        for bi, b_idx in enumerate(blk_splits):
-            np.add.at(blk_tensors[bi], idx_256[b_idx], 1.0)
+        for i1, i2, i3, i4 in ind_quartets:
+            vq_all = ok_all[i1] & ok_all[i2] & ok_all[i3] & ok_all[i4]
+            for bi, b_cols in enumerate(blk_splits):
+                c_use = b_cols[vq_all[b_cols]]
+                if c_use.size == 0:
+                    continue
+                p1, p2, p3, p4 = _allele_probs(i1, c_use), _allele_probs(i2, c_use), _allele_probs(i3, c_use), _allele_probs(i4, c_use)
+                p12 = (p1[:, :, None] * p2[:, None, :]).reshape(c_use.size, 16)
+                p34 = (p3[:, :, None] * p4[:, None, :]).reshape(c_use.size, 16)
+                blk_tensors[bi] += (p12.T @ p34).ravel()
 
-        obs_t4 = np.sum(blk_tensors, axis=0).reshape(4, 4, 4, 4) / float(nv)
+        obs_t4 = np.sum(blk_tensors, axis=0).reshape(4, 4, 4, 4) / max(1e-12, float(np.sum(blk_tensors)))
         obs_mats = np.stack([obs_t4.reshape(16, 16), obs_t4.transpose(0, 2, 1, 3).reshape(16, 16), obs_t4.transpose(0, 3, 1, 2).reshape(16, 16)], axis=0)
         obs_scores = _svd_residual(obs_mats)
         split_labels = [f"{t1},{t2}|{t3},{t4}", f"{t1},{t3}|{t2},{t4}", f"{t1},{t4}|{t2},{t3}"]
@@ -208,7 +231,7 @@ def compute_svdquartets_support(
         for bi in range(n_b):
             bw[:, bi] = np.sum(draws == bi, axis=1)
         boot_raw = (bw @ blk_tensors).reshape(-1, 4, 4, 4, 4)
-        boot_t4 = boot_raw / np.maximum(1.0, np.sum(boot_raw, axis=(1, 2, 3, 4), keepdims=True))
+        boot_t4 = boot_raw / np.maximum(1e-12, np.sum(boot_raw, axis=(1, 2, 3, 4), keepdims=True))
         b_s0 = _svd_residual(boot_t4.reshape(-1, 16, 16))
         b_s1 = _svd_residual(boot_t4.transpose(0, 1, 3, 2, 4).reshape(-1, 16, 16))
         b_s2 = _svd_residual(boot_t4.transpose(0, 1, 4, 2, 3).reshape(-1, 16, 16))

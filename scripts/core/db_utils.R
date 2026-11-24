@@ -684,7 +684,15 @@ PACKERA_DB_SRF_COLS <- c(
       cytonuclear_discordant = "INTEGER",
       public_plastome_match = "TEXT",
       public_its_match = "TEXT",
-      waxy_lineage_match = "TEXT"
+      waxy_lineage_match = "TEXT",
+      exsiccatae_key = "TEXT",
+      genbank_accession = "TEXT",
+      coordinateUncertainty = "REAL",
+      is_centroid_or_inst_coord = "INTEGER DEFAULT 0",
+      coord_quarantine_reason = "TEXT",
+      typified_basionym = "TEXT",
+      concept_synonymy_status = "TEXT",
+      is_open_or_hybrid_concept = "INTEGER DEFAULT 0"
     ))
   }
   if (identical(table_name, "genetic_lineage_assignments")) {
@@ -1019,6 +1027,11 @@ connect_packera_db <- function(
     "allochronic_bimodality_delta_bic", "nearest_type_niche_basionym", "nearest_type_basionym_edaphic_z",
     "env_mahal_d2", "env_mcd_outlier_flag"
   )
+  gs_fields_chk <- if (db_table_exists_safe(conn, "genomic_samples")) tryCatch(DBI::dbListFields(conn, "genomic_samples"), error = function(e) character(0)) else c(
+    "exsiccatae_key", "genbank_accession", "coordinateUncertainty",
+    "is_centroid_or_inst_coord", "coord_quarantine_reason",
+    "typified_basionym", "concept_synonymy_status", "is_open_or_hybrid_concept"
+  )
   mv_fields_chk <- if (db_table_exists_safe(conn, "v_integrative_triage_master")) tryCatch(DBI::dbListFields(conn, "v_integrative_triage_master"), error = function(e) character(0)) else character(0)
   v_has_concept <- all(c("typified_basionym", "verbatim_taxon_concept", "concept_synonymy_status", "identification_year", "is_open_or_hybrid_concept") %in% v_fields_chk)
   el_has_zone <- all(c("leaf_zone", "ect_path", "bbox_x1", "basal_cordate_index", "blade_cie_l_q85_sheet_delta", "is_abaxial_pressed_leaf") %in% el_fields_chk)
@@ -1032,6 +1045,11 @@ connect_packera_db <- function(
     "allochronic_bimodality_delta_bic", "nearest_type_niche_basionym", "nearest_type_basionym_edaphic_z",
     "env_mahal_d2", "env_mcd_outlier_flag"
   ) %in% srf_fields_chk)
+  gs_has_latest <- all(c(
+    "exsiccatae_key", "genbank_accession", "coordinateUncertainty",
+    "is_centroid_or_inst_coord", "coord_quarantine_reason",
+    "typified_basionym", "concept_synonymy_status", "is_open_or_hybrid_concept"
+  ) %in% gs_fields_chk)
   mv_has_latest <- identical(eff_path, ":memory:") || all(c(
     "is_passive", "scale_source", "AR_inv_std", "reproductive_trait_status",
     "corymb_head_count_est", "radiate_head_fraction",
@@ -1060,7 +1078,7 @@ connect_packera_db <- function(
   ) %in% mv_fields_chk)
   if (cur_ver >= PLANTMATICS_SCHEMA_USER_VERSION &&
     v_has_concept && el_has_zone && vrp_has_latest && leh_has_latest && om_has_cauline &&
-    ec_has_latest && srf_has_latest && mv_has_latest &&
+    ec_has_latest && srf_has_latest && gs_has_latest && mv_has_latest &&
     (identical(eff_path, ":memory:") || (
       db_table_exists_safe(conn, "v_integrative_triage_master") &&
         db_table_exists_safe(conn, "genomic_samples") &&
@@ -3721,5 +3739,77 @@ persist_step06_genomics_to_sqlite <- function(
       )
     )
   }
+
+  if (db_table_exists_safe(conn, "genomic_samples") && ("genetic_sample_id" %in% names(gla_df))) {
+    gs_sync_cols <- intersect(
+      c(
+        "cytonuclear_discordant",
+        "public_plastome_match",
+        "public_its_match",
+        "waxy_lineage_match",
+        "exsiccatae_key",
+        "genbank_accession",
+        "coordinateUncertainty",
+        "is_centroid_or_inst_coord",
+        "coord_quarantine_reason",
+        "typified_basionym",
+        "concept_synonymy_status",
+        "is_open_or_hybrid_concept"
+      ),
+      names(gla_df)
+    )
+    if (length(gs_sync_cols) > 0L) {
+      gs_id_raw <- trimws(as.character(gla_df$genetic_sample_id))
+      keep_gs <- !is.na(gs_id_raw) & nzchar(gs_id_raw)
+      if (any(keep_gs)) {
+        gs_df <- gla_df[keep_gs, c("genetic_sample_id", gs_sync_cols), drop = FALSE]
+        gs_df$genetic_sample_id <- gs_id_raw[keep_gs]
+        for (.bcol in intersect(
+          c("cytonuclear_discordant", "is_centroid_or_inst_coord", "is_open_or_hybrid_concept"),
+          names(gs_df)
+        )) {
+          .bv <- gs_df[[.bcol]]
+          if (is.logical(.bv)) {
+            gs_df[[.bcol]] <- ifelse(is.na(.bv), NA_integer_, ifelse(.bv, 1L, 0L))
+          } else if (is.numeric(.bv) || is.integer(.bv)) {
+            gs_df[[.bcol]] <- ifelse(is.na(.bv) | is.nan(.bv) | is.infinite(.bv), NA_integer_, ifelse(.bv != 0, 1L, 0L))
+          } else {
+            .bs <- toupper(trimws(as.character(.bv)))
+            .bo <- rep(NA_integer_, length(.bs))
+            .bo[.bs %in% c("TRUE", "T", "1", "1.0", "YES", "Y")] <- 1L
+            .bo[.bs %in% c("FALSE", "F", "0", "0.0", "NO", "N")] <- 0L
+            gs_df[[.bcol]] <- .bo
+          }
+        }
+        if ("coordinateUncertainty" %in% names(gs_df)) {
+          gs_df$coordinateUncertainty <- suppressWarnings(as.numeric(gs_df$coordinateUncertainty))
+        }
+        for (.scol in intersect(
+          c(
+            "public_plastome_match",
+            "public_its_match",
+            "waxy_lineage_match",
+            "exsiccatae_key",
+            "genbank_accession",
+            "coord_quarantine_reason",
+            "typified_basionym",
+            "concept_synonymy_status"
+          ),
+          names(gs_df)
+        )) {
+          gs_df[[.scol]] <- as.character(gs_df[[.scol]])
+        }
+        db_upsert_dataframe(
+          conn,
+          table_name = "genomic_samples",
+          df = gs_df,
+          pk_cols = c("genetic_sample_id"),
+          preserve_existing_on_null = TRUE
+        )
+      }
+    }
+  }
   invisible(TRUE)
 }
+
+persist_step06_to_sqlite <- persist_step06_genomics_to_sqlite

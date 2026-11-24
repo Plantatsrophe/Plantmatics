@@ -142,7 +142,8 @@ if (grDevices::dev.cur() == 1L) grDevices::pdf(NULL)
   str_cols <- c("genetic_sample_id", "catalogNumber", "population_id", "geno_predicted_taxon", "genetic_cluster", "q_admixture_json",
                 "geno_parent_1", "geno_parent_2", "nearest_tree_sister_taxon", "hybrid_generation_class", "coancestry_cluster",
                 "f_branch_donor_taxon", "public_backbone_clade", "linkage_tier", "geno_linkage_tier", "marker_platform",
-                "species_standardized", "public_plastome_match", "public_its_match", "waxy_lineage_match")
+                "species_standardized", "public_plastome_match", "public_its_match", "waxy_lineage_match",
+                "typified_basionym", "concept_synonymy_status")
   num_cols <- c("geno_posterior_prob", "geno_margin", "q_max", "patristic_dist_to_dubia", "replicate_pair_concordance",
                 "hybrid_index_h", "interspecific_ancestry_q12", "f_branch_max", "snaq_gamma_minor", "coalescent_gdi",
                 "bpp_introgression_bf", "mmrr_beta_ibd", "mmrr_beta_ibe", "mmrr_p_ibe", "public_phytop_ils_index", "public_phytop_ih_index")
@@ -248,8 +249,9 @@ run_step06_dynamic_public_tier <- function(tier_manifest, opts, raw_geno_dir, pa
         mg <- match(assign_df$species_standardized, gdi_df$taxon)
         assign_df$coalescent_gdi[!is.na(mg)] <- gdi_df$coalescent_gdi[mg[!is.na(mg)]]
       }
-      if (!isTRUE(opts$demo) && exists("persist_step06_genomics_to_sqlite", mode = "function")) {
-        tryCatch(persist_step06_genomics_to_sqlite(assign_df, run_id = opts[["run-id"]], db_path = if (nzchar(eff_db_ro)) eff_db_ro else NULL, demo = FALSE), error = function(e) NULL)
+      persist_fn <- if (exists("persist_step06_to_sqlite", mode = "function")) persist_step06_to_sqlite else if (exists("persist_step06_genomics_to_sqlite", mode = "function")) persist_step06_genomics_to_sqlite else NULL
+      if (!isTRUE(opts$demo) && !is.null(persist_fn)) {
+        tryCatch(persist_fn(assign_df, run_id = opts[["run-id"]], db_path = if (nzchar(eff_db_ro)) eff_db_ro else NULL, demo = FALSE), error = function(e) NULL)
       }
     }
     payload$tree_primary <- tr_nuc; payload$tree_secondary <- tr_pl; payload$reltime_tree <- tr_rt
@@ -304,14 +306,16 @@ run_step06_dynamic_public_tier <- function(tier_manifest, opts, raw_geno_dir, pa
           genetic_sample_id = assign_df$genetic_sample_id[sb_i],
           locus = ifelse(!is.na(assign_df$public_its_match[sb_i]), "its", ifelse(!is.na(assign_df$public_plastome_match[sb_i]), "plastid", "waxy")),
           best_match_taxon = assign_df$species_standardized[sb_i], best_ref_header = assign_df$genetic_sample_id[sb_i],
-          ref_source_file = "public_packera_multilocus", n_shared_11mers = 150L, kmer_containment = 0.92, kmer_jaccard = 0.85, stringsAsFactors = FALSE
+          ref_source_file = "public_packera_multilocus", n_shared_11mers = 150L, kmer_containment = 0.92, kmer_jaccard = 0.85,
+          containment_gate_pass = 1L, stringsAsFactors = FALSE
         )
         pub_eval$placement_df <- unique(rbind(pub_eval$placement_df, pl_new))
         readr::write_csv(pub_eval$placement_df, file.path(out_dir, "public_organellar_placement.csv"), na = "")
       }
-      g1_keep <- assign_df[assign_df$linkage_tier %in% c("G1_Direct_Voucher", "G2_Population_Voucher_Proxy"), , drop = FALSE]
-      if (!isTRUE(opts$demo) && nrow(g1_keep) > 0L && exists("persist_step06_genomics_to_sqlite", mode = "function")) {
-        tryCatch(persist_step06_genomics_to_sqlite(g1_keep, run_id = opts[["run-id"]], db_path = if (nzchar(eff_db_ro)) eff_db_ro else NULL, demo = FALSE), error = function(e) NULL)
+      g1_keep <- assign_df[assign_df$linkage_tier %in% c("G1_Direct_Voucher", "G1_Exsiccatae_Isoduplicate", "G2_Population_Voucher_Proxy"), , drop = FALSE]
+      persist_fn3 <- if (exists("persist_step06_to_sqlite", mode = "function")) persist_step06_to_sqlite else if (exists("persist_step06_genomics_to_sqlite", mode = "function")) persist_step06_genomics_to_sqlite else NULL
+      if (!isTRUE(opts$demo) && nrow(g1_keep) > 0L && !is.null(persist_fn3)) {
+        tryCatch(persist_fn3(g1_keep, run_id = opts[["run-id"]], db_path = if (nzchar(eff_db_ro)) eff_db_ro else NULL, demo = FALSE), error = function(e) NULL)
       }
     }
     if (file.exists(file.path(out_dir, "substitution_model_selection.csv"))) model_sel_df <- utils::read.csv(file.path(out_dir, "substitution_model_selection.csv"), stringsAsFactors = FALSE)
@@ -330,7 +334,17 @@ run_step06_dynamic_public_tier <- function(tier_manifest, opts, raw_geno_dir, pa
       yr <- if ("year" %in% names(v_df)) suppressWarnings(as.integer(v_df$year)) else rep(2000L, nrow(v_df))
       det <- if ("determiner_tier" %in% names(v_df)) as.character(v_df$determiner_tier) else rep("Tier_2_Silver", nrow(v_df))
       sp_v <- if ("species_standardized" %in% names(v_df)) as.character(v_df$species_standardized) else rep(focal_std, nrow(v_df))
-      ok_v <- (det %in% c("Tier_1_Gold", "Tier_2_Silver")) & (is.na(yr) | yr >= 1995L) & (!nzchar(focal_std) | tolower(sp_v) == tolower(focal_std))
+      is_cent <- if ("is_centroid_or_inst_coord" %in% names(v_df)) {
+        cf <- v_df$is_centroid_or_inst_coord
+        if (is.logical(cf)) !is.na(cf) & cf else tolower(trimws(as.character(cf))) %in% c("1", "true", "t", "yes")
+      } else rep(FALSE, nrow(v_df))
+      is_open <- if ("is_open_or_hybrid_concept" %in% names(v_df)) {
+        of <- v_df$is_open_or_hybrid_concept
+        if (is.logical(of)) !is.na(of) & of else tolower(trimws(as.character(of))) %in% c("1", "true", "t", "yes")
+      } else rep(FALSE, nrow(v_df))
+      unc_v <- if ("coordinateUncertainty" %in% names(v_df)) suppressWarnings(as.numeric(v_df$coordinateUncertainty)) else if ("coordinateUncertaintyInMeters" %in% names(v_df)) suppressWarnings(as.numeric(v_df$coordinateUncertaintyInMeters)) else rep(NA_real_, nrow(v_df))
+      ok_unc <- is.na(unc_v) | !is.finite(unc_v) | unc_v <= 10000.0
+      ok_v <- (det %in% c("Tier_1_Gold", "Tier_2_Silver")) & (is.na(yr) | yr >= 1995L) & (!nzchar(focal_std) | tolower(sp_v) == tolower(focal_std)) & !is_cent & ok_unc & !is_open
       if (any(ok_v)) {
         sub <- v_df[ok_v, , drop = FALSE]
         b_del <- if (nrow(sql_ctx$morph) > 0L && "catalogNumber" %in% names(sub)) sql_ctx$morph$blade_cie_a_delta[match(sub$catalogNumber, sql_ctx$morph$catalogNumber)] else rep(0.0, nrow(sub))

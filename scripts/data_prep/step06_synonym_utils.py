@@ -27,11 +27,11 @@ CANONICAL_SENECIO_PACKERA_SYNONYMS: Dict[str, str] = {
     "senecio robbinsii": "Packera schweinitziana",
     "senecio millefolium": "Packera millefolium",
     "packera millefolia": "Packera millefolium",
-    "packera memmingeri": "Packera x memmingeri",
-    "packera xmemmingeri": "Packera x memmingeri",
-    "packera x memmingeri": "Packera x memmingeri",
-    "packera \u00d7memmingeri": "Packera x memmingeri",
-    "packera \u00d7 memmingeri": "Packera x memmingeri",
+    "packera memmingeri": "Packera memmingeri",
+    "packera xmemmingeri": "Packera memmingeri",
+    "packera x memmingeri": "Packera memmingeri",
+    "packera \u00d7memmingeri": "Packera memmingeri",
+    "packera \u00d7 memmingeri": "Packera memmingeri",
     "senecio obovatus": "Packera obovata",
     "senecio plattensis": "Packera plattensis",
     "senecio antennariifolius": "Packera antennariifolia",
@@ -84,8 +84,15 @@ def canonical_taxon_equiv_key(taxon: Any) -> str:
         return _CANON_EQUIV_OVERRIDES[raw]
     if raw in CANONICAL_SENECIO_PACKERA_SYNONYMS:
         canon = CANONICAL_SENECIO_PACKERA_SYNONYMS[raw].lower()
-        return "packera xmemmingeri" if canon == "packera x memmingeri" else canon
+        return "packera xmemmingeri" if canon in ("packera x memmingeri", "packera memmingeri") else canon
     return raw
+
+
+_OPEN_NOM_RE = re.compile(
+    r"(?i:\bspp?\.?(?=\s|$)|\b(?:cf|aff)(?:\.(?=\s|$|[a-z])|(?=\s|$))|\?|\bsensu\s+lato\b|\bhyb(?:rid)?\.?(?=\s|$))"
+    r"|\bs\.\s*l\.?(?=\s|$|[,;)])|(?i:\bs\.\s*l\.?)(?=\s|$|[,;)])(?!\s+[A-Z][a-z])"
+)
+_SINGLE_EPITHET_NOTHO_RE = re.compile(r"^([A-Za-z]+)\s*(?:\u00d7\s*|[xX]\s+)([a-z][a-z-]+)(.*)$")
 
 
 def normalize_step06_taxon_name(raw_taxon: Optional[str]) -> Tuple[Optional[str], Optional[str], bool]:
@@ -96,20 +103,23 @@ def normalize_step06_taxon_name(raw_taxon: Optional[str]) -> Tuple[Optional[str]
     if not t_raw:
         return None, None, False
 
-    low = t_raw.lower()
-    is_query = bool(
-        re.search(r"\bsp\.\s*nov\b", low)
-        or re.search(r"\bcf\.", low)
-        or re.search(r"\baff\.", low)
-        or re.search(r"\bhybrid\b", low)
-        or " x " in low
-        or "\u00d7" in low
-    )
-    if is_query:
+    if _OPEN_NOM_RE.search(t_raw):
         return t_raw, t_raw, True
 
+    low = t_raw.lower()
     if low in CANONICAL_SENECIO_PACKERA_SYNONYMS:
         return t_raw, CANONICAL_SENECIO_PACKERA_SYNONYMS[low], False
+
+    m_notho = _SINGLE_EPITHET_NOTHO_RE.match(t_raw)
+    if m_notho and " x " not in m_notho.group(3).lower() and "\u00d7" not in m_notho.group(3):
+        notho_bin = f"{m_notho.group(1).capitalize()} {m_notho.group(2).lower()}"
+        if notho_bin.lower() in CANONICAL_SENECIO_PACKERA_SYNONYMS:
+            return t_raw, CANONICAL_SENECIO_PACKERA_SYNONYMS[notho_bin.lower()], False
+        if notho_bin.startswith("Packera "):
+            return t_raw, notho_bin, False
+
+    if " x " in low or "\u00d7" in low:
+        return t_raw, t_raw, True
 
     try:
         from scripts.core.harvester import standardize_packera_taxon
@@ -127,7 +137,7 @@ def normalize_public_header_binomial(text: str) -> str:
     hay = str(text or "").replace("_", " ").lower()
     for syn, canon in CANONICAL_SENECIO_PACKERA_SYNONYMS.items():
         if syn in hay:
-            return "Packera_xmemmingeri" if canon == "Packera x memmingeri" else canon.replace(" ", "_")
+            return "Packera_xmemmingeri" if canon in ("Packera x memmingeri", "Packera memmingeri") else canon.replace(" ", "_")
     if m := re.search(r"\bpackera\s+[0-9]*([a-z-]+)\b", hay):
         ep = m.group(1).strip("-")
         if ep == "tomentosa":
@@ -154,7 +164,7 @@ def extract_species_from_seed_key(seed_key: str) -> str:
             if ep == "millefolia":
                 return "Packera millefolium"
             if ep in ("memmingeri", "xmemmingeri"):
-                return "Packera x memmingeri"
+                return "Packera memmingeri"
             return f"Packera {ep}"
     return ""
 

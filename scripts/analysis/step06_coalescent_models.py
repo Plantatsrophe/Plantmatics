@@ -2,23 +2,22 @@
 
 from __future__ import annotations
 
-import importlib
-import math
-import os
-import re
-import shutil
-import subprocess
-import tempfile
+import importlib, math, os, re, shutil, subprocess, tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
-_BASE_MAP: Dict[str, int] = {
-    "A": 0, "C": 1, "G": 2, "T": 3, "U": 3,
-    "R": 0, "Y": 1, "M": 0, "K": 2, "S": 1, "W": 0,
+_IUPAC_BITMASK: Dict[str, int] = {
+    "A": 1, "C": 2, "G": 4, "T": 8, "U": 8,
+    "R": 5, "Y": 10, "M": 3, "K": 12, "S": 6, "W": 9,
+    "B": 14, "D": 13, "H": 11, "V": 7, "N": 15, "-": 15, "?": 15,
 }
+_MASK_TABLE = np.array([[float((c >> b) & 1) for b in range(4)] for c in range(16)], dtype=np.float64)
+_PI_WEIGHTS = np.zeros((16, 4), dtype=np.float64)
+for _c in range(1, 15):
+    _PI_WEIGHTS[_c] = _MASK_TABLE[_c] / float(np.sum(_MASK_TABLE[_c]))
 _LAG_X, _LAG_W = np.polynomial.laguerre.laggauss(16)
 _LAG_LOG_W = np.log(np.maximum(1e-300, _LAG_W))
 
@@ -81,15 +80,16 @@ def _encode_aln(seqs: Dict[str, str], sample_ids: Sequence[str]) -> Tuple[List[s
     if len(present) < 3:
         return present, np.empty((len(present), 0), dtype=np.int8), np.full(4, 0.25, dtype=np.float64)
     n_len = min(len(seqs[sid]) for sid in present)
-    raw = np.full((len(present), n_len), -1, dtype=np.int8)
+    raw = np.full((len(present), n_len), 15, dtype=np.int8)
     for i, sid in enumerate(present):
         arr = np.frombuffer(seqs[sid][:n_len].upper().encode("ascii", errors="replace"), dtype=np.uint8)
-        for ch, idx in _BASE_MAP.items():
-            raw[i, arr == ord(ch)] = idx
-    mat = raw[:, np.sum(raw >= 0, axis=0) >= 3]
+        for ch, code in _IUPAC_BITMASK.items():
+            if code != 15:
+                raw[i, arr == ord(ch)] = code
+    mat = raw[:, np.sum(raw < 15, axis=0) >= 3]
     if mat.shape[1] == 0:
         return present, mat, np.full(4, 0.25, dtype=np.float64)
-    counts = np.bincount(mat[mat >= 0], minlength=4).astype(np.float64) + 1.0
+    counts = np.sum(_PI_WEIGHTS[mat], axis=(0, 1)) + 1.0
     pi = np.maximum(0.01, counts / float(np.sum(counts)))
     return present, mat, pi / float(np.sum(pi))
 
@@ -97,11 +97,12 @@ def _encode_aln(seqs: Dict[str, str], sample_ids: Sequence[str]) -> Tuple[List[s
 def _build_nj_tree(mat: np.ndarray) -> List[Tuple[int, int, float, int, float]]:
     n_t = int(mat.shape[0])
     dist = np.zeros((2 * n_t - 1, 2 * n_t - 1), dtype=np.float64)
-    ok = mat >= 0
+    ok, w_mat = mat < 15, _PI_WEIGHTS[mat]
     for i in range(n_t - 1):
         ov = ok[i][None, :] & ok[i + 1 :]
         n_ov = np.sum(ov, axis=1)
-        p_diff = np.where(n_ov > 0, np.sum(ov & (mat[i][None, :] != mat[i + 1 :]), axis=1) / np.maximum(1, n_ov), 0.25)
+        match = np.einsum("sb,jsb->js", w_mat[i], w_mat[i + 1 :])
+        p_diff = np.where(n_ov > 0, np.sum(np.where(ov, 1.0 - match, 0.0), axis=1) / np.maximum(1, n_ov), 0.25)
         dist[i, i + 1 : n_t] = dist[i + 1 : n_t, i] = np.maximum(1e-4, -0.75 * np.log(np.maximum(0.05, 1.0 - (4.0 / 3.0) * np.minimum(0.74, p_diff))))
     active, next_id, nodes = list(range(n_t)), n_t, []
     while len(active) > 2:
@@ -206,7 +207,8 @@ def select_nucleotide_substitution_model(
         row0 = {"alignment_name": alignment_name, "model_name": "JC69", "base_model": "JC69", "has_gamma": False, "asc_applied": False, "k_params": 0, "logL": 0.0, "AICc": 0.0, "BIC": 0.0, "delta_BIC": 0.0, "bic_weight": 1.0, "ti_tv_kappa": 1.0, "gamma_alpha": None, "prop_invariant": 1.0, "n_sites": n_sites, "n_var_sites": 0}
         return {"alignment_name": alignment_name, "best_model": "JC69", "base_model": "JC69", "has_gamma": False, "asc_applied": False, "bic_weight": 1.0, "ti_tv_kappa": 1.0, "kappa_purine": 1.0, "kappa_pyrimidine": 1.0, "gamma_alpha": None, "prop_invariant": 1.0, "n_sites": n_sites, "n_var_sites": 0, "pi_freqs": [0.25] * 4, "iqtree2_model": None, "table_rows": [row0]}
 
-    var_mask = np.max(mat, axis=0) != np.min(np.where(mat < 0, 9, mat), axis=0)
+    has_het = np.any((mat < 15) & ((mat & (mat - 1)) != 0), axis=0)
+    var_mask = has_het | (np.bitwise_and.reduce(mat, axis=0) == 0)
     n_var = int(np.sum(var_mask))
     prop_inv = float((n_sites - n_var) / max(1, n_sites))
     asc_applied = bool(prop_inv < 0.05 and n_sites >= 30)
@@ -214,13 +216,9 @@ def select_nucleotide_substitution_model(
     n_eff = int(active.shape[1])
     pats, counts = np.unique(active, axis=1, return_counts=True)
     n_pat = int(pats.shape[1])
-    pat_tot = np.hstack([pats, np.tile(np.arange(4, dtype=np.int8)[None, :], (len(present), 1))]) if asc_applied else pats
-    tip_masks = np.ones((len(present), pat_tot.shape[1], 4), dtype=np.float64)
-    for t in range(len(present)):
-        called = pat_tot[t] >= 0
-        if np.any(called):
-            tip_masks[t, called, :] = 0.0
-            tip_masks[t, called, pat_tot[t, called]] = 1.0
+    inv_pats = np.tile(np.array([1, 2, 4, 8], dtype=np.int8)[None, :], (len(present), 1))
+    pat_tot = np.hstack([pats, inv_pats]) if asc_applied else pats
+    tip_masks = _MASK_TABLE[pat_tot]
     tree_nodes, pi_eq = _build_nj_tree(mat), np.full(4, 0.25, dtype=np.float64)
     warm, results = {"s": 1.0, "k": 2.0, "kr": 2.0, "ky": 2.0}, []
     for base, use_k, k_base in [("JC69", False, 0), ("K80", True, 1), ("F81", False, 3), ("HKY85", True, 4), ("TN93", True, 5)]:

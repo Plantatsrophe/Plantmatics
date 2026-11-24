@@ -5,6 +5,8 @@
 #   sub-marker-partitioned strand-aware FASTA outlier quarantine for Step 06.
 # ==============================================================================
 
+if (grDevices::dev.cur() == 1L) grDevices::pdf(NULL)
+
 .empty_rogue_audit_df <- function() {
   data.frame(
     source_file = character(0), locus_or_tree = character(0), accession_or_tip = character(0),

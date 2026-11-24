@@ -11,7 +11,7 @@ Description:
 
 from __future__ import annotations
 
-import gzip, re
+import gzip, math, re
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
@@ -19,6 +19,28 @@ import numpy as np
 import pandas as pd
 
 from scripts.data_prep.step06_sample_metadata_utils import clean_sample_id
+
+
+def _gt_allele_ploidy(gt_token: str) -> Optional[int]:
+    """Infer allele ploidy from a VCF GT string (`>= 2`); return `None` for missing/ambiguous `./.`."""
+    if not gt_token or gt_token == ".":
+        return None
+    alleles = [a for a in re.split(r"[/|]", gt_token) if a != ""]
+    if not alleles or not all(a == "." or a.isdigit() for a in alleles):
+        return None
+    if all(a == "." for a in alleles):
+        return len(alleles) if len(alleles) > 2 else None
+    return max(2, len(alleles))
+
+
+def _vcf_ds_ploidy_ceiling(val: float) -> float:
+    if val <= 2.0 + 1e-6:
+        return 2.0
+    if val <= 4.0 + 1e-6:
+        return 4.0
+    if val <= 6.0 + 1e-6:
+        return 6.0
+    return float(int(math.ceil(val)))
 
 
 def _gt_to_dosage(gt_token: str) -> float:
@@ -79,6 +101,8 @@ def _parse_vcf_with_depths(vcf_path: Path) -> Tuple[List[str], List[str], np.nda
     rows_loci: List[np.ndarray] = []
     rows_ref: List[np.ndarray] = []
     rows_alt: List[np.ndarray] = []
+    sample_ds_max: List[float] = []
+    raw_ds_no_gt: List[Tuple[int, int, float]] = []
 
     with opener(vcf_path, "rt", encoding="utf-8-sig", errors="replace") as fh:
         for line in fh:
@@ -86,6 +110,7 @@ def _parse_vcf_with_depths(vcf_path: Path) -> Tuple[List[str], List[str], np.nda
                 continue
             if line.startswith("#CHROM"):
                 sample_ids = [clean_sample_id(s) for s in line.rstrip("\r\n").split("\t")[9:]]
+                sample_ds_max = [0.0] * len(sample_ids)
                 continue
             parts = line.rstrip("\r\n").split("\t")
             if len(parts) < 10 or not sample_ids:
@@ -96,18 +121,33 @@ def _parse_vcf_with_depths(vcf_path: Path) -> Tuple[List[str], List[str], np.nda
                 locus_id = f"{chrom}_{pos}_{len(locus_ids)}"
             fmt = parts[8].split(":") if len(parts) > 8 else ["GT"]
             fmt_idx = {tag: i for i, tag in enumerate(fmt)}
-            gt_idx, dos_idx = fmt_idx.get("GT", 0), fmt_idx.get("DS", -1)
+            gt_idx, dos_idx = fmt_idx.get("GT", -1), fmt_idx.get("DS", -1)
 
             vec = np.full(len(sample_ids), np.nan, dtype=np.float32)
             rvec = np.full(len(sample_ids), np.nan, dtype=np.float32)
             avec = np.full(len(sample_ids), np.nan, dtype=np.float32)
+            loc_row_idx = len(rows_loci)
             for idx, cell in enumerate(parts[9 : 9 + len(sample_ids)]):
                 fields = cell.split(":")
-                gt_d = _gt_to_dosage(fields[gt_idx] if gt_idx < len(fields) else ".")
+                gt_tok = fields[gt_idx] if 0 <= gt_idx < len(fields) else "."
+                gt_d = _gt_to_dosage(gt_tok)
+                gt_ploidy = _gt_allele_ploidy(gt_tok)
                 if 0 <= dos_idx < len(fields) and fields[dos_idx] not in ("", "."):
                     try:
                         dv = float(fields[dos_idx])
-                        vec[idx] = np.float32(dv if dv <= 1.0 else dv / 2.0)
+                        if not math.isfinite(dv) or dv < 0.0:
+                            vec[idx] = np.float32(gt_d)
+                        elif dv > 1.0:
+                            denom = float(gt_ploidy) if (gt_ploidy is not None and dv <= float(gt_ploidy) + 1e-6) else _vcf_ds_ploidy_ceiling(dv)
+                            vec[idx] = np.float32(min(1.0, max(0.0, dv / denom)))
+                        elif gt_ploidy is not None and gt_ploidy >= 2 and np.isfinite(gt_d) and abs((dv / float(gt_ploidy)) - gt_d) + 0.05 < abs(dv - gt_d):
+                            vec[idx] = np.float32(min(1.0, max(0.0, dv / float(gt_ploidy))))
+                        else:
+                            vec[idx] = np.float32(min(1.0, max(0.0, dv)))
+                        if gt_ploidy is None and math.isfinite(dv) and dv >= 0.0:
+                            raw_ds_no_gt.append((loc_row_idx, idx, dv))
+                            if dv > sample_ds_max[idx]:
+                                sample_ds_max[idx] = dv
                     except ValueError:
                         vec[idx] = np.float32(gt_d)
                 else:
@@ -117,6 +157,11 @@ def _parse_vcf_with_depths(vcf_path: Path) -> Tuple[List[str], List[str], np.nda
                     rvec[idx], avec[idx] = np.float32(nr), np.float32(na)
             locus_ids.append(locus_id)
             rows_loci.append(vec); rows_ref.append(rvec); rows_alt.append(avec)
+
+    for loc_i, s_i, dv in raw_ds_no_gt:
+        if sample_ds_max[s_i] > 1.0 + 1e-6:
+            denom = _vcf_ds_ploidy_ceiling(sample_ds_max[s_i])
+            rows_loci[loc_i][s_i] = np.float32(min(1.0, max(0.0, dv / denom)))
 
     if not sample_ids or not rows_loci:
         empty = np.empty((len(sample_ids), 0), dtype=np.float32)
@@ -136,11 +181,16 @@ def _parse_dosage_table(dosage_path: Path) -> Tuple[List[str], List[str], np.nda
         return [], [], np.empty((0, 0), dtype=np.float32)
     sample_ids = [clean_sample_id(s) for s in df[df.columns[0]].tolist()]
     locus_cols = [str(c) for c in df.columns[1:]]
-    mat = df[locus_cols].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=np.float32)
-    finite = mat[np.isfinite(mat)]
-    if finite.size > 0 and float(np.max(finite)) > 1.05:
-        max_p = 2.0 if float(np.max(finite)) <= 2.05 else float(np.max(finite))
-        mat = mat / np.float32(max_p)
+    mat = df[locus_cols].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=np.float32, copy=True)
+    for i in range(mat.shape[0]):
+        row = mat[i, :]
+        fin = row[np.isfinite(row)]
+        if fin.size == 0:
+            continue
+        rmax = float(np.max(fin))
+        if rmax > 1.0 + 1e-6:
+            ceil_p = 2.0 if rmax <= 2.0 + 1e-6 else (3.0 if rmax <= 3.0 + 1e-6 else (4.0 if rmax <= 4.0 + 1e-6 else (6.0 if rmax <= 6.0 + 1e-6 else rmax)))
+            mat[i, :] = np.clip(row / np.float32(ceil_p), np.float32(0.0), np.float32(1.0))
     return sample_ids, locus_cols, mat
 
 

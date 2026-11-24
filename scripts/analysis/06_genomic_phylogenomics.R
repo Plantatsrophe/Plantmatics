@@ -130,13 +130,14 @@ run_step06_genomic_phylogenomics <- function(opts) {
   pass_df <- pass_df[match(common_ids, pass_df$genetic_sample_id), , drop = FALSE]
   dos_mat <- as.matrix(dos_df[match(common_ids, dos_df$genetic_sample_id), setdiff(names(dos_df), "genetic_sample_id"), drop = FALSE])
   storage.mode(dos_mat) <- "numeric"; rownames(dos_mat) <- common_ids
+  locus_w <- .load_locus_weights_tsv(parsed_dir, colnames(dos_mat))
 
   is_intra_pol <- isTRUE(opts[["intraspecific-mode"]]) && ("role_in_run" %in% names(pass_df)) && any(pass_df$role_in_run == "polarizing_sister", na.rm = TRUE)
   ord_idx <- if (is_intra_pol) which(is.na(pass_df$role_in_run) | pass_df$role_in_run != "polarizing_sister") else seq_len(nrow(pass_df))
   if (length(ord_idx) < 3L) ord_idx <- seq_len(nrow(pass_df))
   dos_ord <- dos_mat[ord_idx, , drop = FALSE]; pass_ord <- pass_df[ord_idx, , drop = FALSE]
 
-  dist_res <- .compute_allele_sharing_distance(dos_mat); d_mat <- dist_res$dist; d_raw <- dist_res$raw_dist
+  dist_res <- .compute_allele_sharing_distance(dos_mat, locus_weights = locus_w); d_mat <- dist_res$dist; d_raw <- dist_res$raw_dist
   d_ord <- d_mat[ord_idx, ord_idx, drop = FALSE]
   rep_conc <- rep(NA_real_, nrow(pass_df)); rep_ids <- as.character(pass_df$replicate_pair_id)
   for (i in seq_len(nrow(pass_df))) {
@@ -156,7 +157,7 @@ run_step06_genomic_phylogenomics <- function(opts) {
   if (nc_copy > 0L) pco_coords[ord_idx, seq_len(nc_copy)] <- pts_mat[, seq_len(nc_copy), drop = FALSE]
   pass_df$PCo1 <- pco_coords[, 1L]; pass_df$PCo2 <- pco_coords[, 2L]
 
-  ce_res <- select_admixture_k_cross_entropy(dos_ord, d_mat = d_ord, k_max = min(8L, max(1L, nrow(dos_ord) - 1L)), n_folds = 5L, seed = 202611L)
+  ce_res <- select_admixture_k_cross_entropy(dos_ord, d_mat = d_ord, k_max = min(8L, max(1L, nrow(dos_ord) - 1L)), n_folds = 5L, seed = 202611L, locus_weights = locus_w)
   best_k <- as.integer(ce_res$best_k)
   sel_ce_row <- ce_res$table_df[ce_res$table_df$K == best_k, , drop = FALSE]
   best_sil <- if (nrow(sel_ce_row) > 0L && is.finite(sel_ce_row$pam_silhouette[1L])) as.numeric(sel_ce_row$pam_silhouette[1L]) else NA_real_
@@ -168,14 +169,25 @@ run_step06_genomic_phylogenomics <- function(opts) {
   gen_cluster <- rep("Polarizing_Sister", nrow(pass_df))
   gen_cluster[ord_idx] <- sprintf("Geno_Cluster_%d", as.integer(clus_ord))
 
+  is_holdout <- .is_step06_concept_or_heterotypic_holdout(pass_df)
   is_ref_anchor <- (is.na(pass_df$is_putative_novel_or_hybrid_query) | as.integer(pass_df$is_putative_novel_or_hybrid_query) == 0L) &
-    !is.na(pass_df$species_standardized) & nzchar(pass_df$species_standardized)
+    !is_holdout & !is.na(pass_df$species_standardized) & nzchar(pass_df$species_standardized)
   if (is_intra_pol) is_ref_anchor <- is_ref_anchor & (is.na(pass_df$role_in_run) | pass_df$role_in_run != "polarizing_sister")
   ref_idx <- which(is_ref_anchor); ref_tbl <- table(pass_df$species_standardized[ref_idx]); keep_taxa <- names(ref_tbl[ref_tbl >= 1L])
   if (length(keep_taxa) >= 2L) ref_idx <- ref_idx[pass_df$species_standardized[ref_idx] %in% keep_taxa] else keep_taxa <- names(ref_tbl)
 
   m_dapc <- min(5L, ncol(pco_coords), max(2L, length(ref_idx) - length(keep_taxa)))
-  X_dapc <- pco_coords[, seq_len(m_dapc), drop = FALSE]; y_ref <- pass_df$species_standardized[ref_idx]
+  y_ref <- pass_df$species_standardized[ref_idx]
+  non_ref_idx <- setdiff(seq_len(nrow(pass_df)), ref_idx)
+  if (length(ref_idx) >= 3L) {
+    oos_full <- .project_pcoa_gower_oos(d_mat[ref_idx, ref_idx, drop = FALSE], d_mat[non_ref_idx, ref_idx, drop = FALSE], k_max = m_dapc)
+    k_f <- ncol(oos_full$X_train)
+    X_dapc <- matrix(0.0, nrow = nrow(pass_df), ncol = k_f, dimnames = list(common_ids, paste0("PCo", seq_len(k_f))))
+    X_dapc[ref_idx, ] <- oos_full$X_train
+    if (length(non_ref_idx) > 0L) X_dapc[non_ref_idx, ] <- oos_full$X_test
+  } else {
+    X_dapc <- pco_coords[, seq_len(min(ncol(pco_coords), max(1L, m_dapc))), drop = FALSE]
+  }
   full_model <- .fit_shrinkage_dapc(X_dapc[ref_idx, , drop = FALSE], y_ref, X_dapc)
   pred_taxon <- full_model$pred; post_prob <- full_model$max_p; margin_vec <- full_model$margin; probs_mat <- full_model$probs
   if (is_intra_pol) {
@@ -187,9 +199,14 @@ run_step06_genomic_phylogenomics <- function(opts) {
     i_global <- ref_idx[ri]; rep_i <- rep_ids[i_global]
     hold_mask <- if (!is.na(rep_i) && nzchar(rep_i)) (rep_ids[ref_idx] == rep_i) else (seq_along(ref_idx) == ri)
     tr_sub <- which(!hold_mask)
-    if (sum(y_ref[tr_sub] == y_ref[i_global], na.rm = TRUE) < 1L || length(unique(y_ref[tr_sub])) < 2L) return(NULL)
-    cv_fit <- .fit_shrinkage_dapc(X_dapc[ref_idx[tr_sub], , drop = FALSE], y_ref[tr_sub], X_dapc[i_global, , drop = FALSE])
-    p_true <- if (as.character(y_ref[i_global]) %in% colnames(cv_fit$probs)) as.numeric(cv_fit$probs[1L, as.character(y_ref[i_global])]) else 1e-6
+    if (length(tr_sub) < 3L || sum(y_ref[tr_sub] == y_ref[ri], na.rm = TRUE) < 1L || length(unique(y_ref[tr_sub])) < 2L) return(NULL)
+    tr_idx <- match(ref_idx[tr_sub], ord_idx); te_idx <- match(i_global, ord_idx)
+    if (any(is.na(tr_idx)) || is.na(te_idx)) return(NULL)
+    k_fold <- min(5L, max(2L, length(tr_idx) - length(unique(y_ref[tr_sub]))), max(1L, length(tr_idx) - 1L))
+    oos_cv <- .project_pcoa_gower_oos(d_ord[tr_idx, tr_idx, drop = FALSE], d_ord[te_idx, tr_idx, drop = FALSE], k_max = k_fold)
+    if (ncol(oos_cv$X_train) < 1L) return(NULL)
+    cv_fit <- .fit_shrinkage_dapc(oos_cv$X_train, y_ref[tr_sub], oos_cv$X_test)
+    p_true <- if (as.character(y_ref[ri]) %in% colnames(cv_fit$probs)) as.numeric(cv_fit$probs[1L, as.character(y_ref[ri])]) else 1e-6
     list(ri = ri, ig = i_global, pred = cv_fit$pred[1L], max_p = cv_fit$max_p[1L], margin = cv_fit$margin[1L],
          probs = cv_fit$probs, ll = -log(min(1.0 - 1e-6, max(1e-6, p_true))))
   }
@@ -211,7 +228,7 @@ run_step06_genomic_phylogenomics <- function(opts) {
   if (file.exists(manifest_json)) {
     m_txt <- gsub("[\r\n]+", " ", paste(readLines(manifest_json, warn = FALSE), collapse = " "))
     ext_paths <- function(key) {
-      m <- regexec(sprintf('"%s"[[:space:]]*:[[:space:]]*\\[(.*?)\\]', key), m_txt); hit <- regmatches(m_txt, m)[[1L]]
+      m <- regexec(sprintf('"%s"[[:space:]]*:[[:space:]]*\\[([^]]*)\\]', key), m_txt); hit <- regmatches(m_txt, m)[[1L]]
       if (length(hit) < 2L) character(0) else gsub('^"|"$', "", regmatches(hit[2L], gregexpr('"([^"]+)"', hit[2L]))[[1L]])
     }
     tree_files <- ext_paths("tree_files"); q_files <- ext_paths("admixture_q_files")
@@ -227,7 +244,7 @@ run_step06_genomic_phylogenomics <- function(opts) {
     q_out <- ce_res$Q_opt
     if (length(unique(y_ref[!is.na(y_ref) & nzchar(y_ref)])) >= 2L && nrow(full_model$centroids) >= 2L) {
       q_sup <- .solve_admixture_simplex(X_dapc[ord_idx, , drop = FALSE], full_model$centroids, rownames(full_model$centroids)); rownames(q_sup) <- pass_ord$genetic_sample_id
-      ce_sup <- evaluate_q_reconstruction_ce(dos_ord, q_sup, n_folds = 5L, seed = 202611L); ce_opt <- ce_res$selected_k_cross_entropy
+      ce_sup <- evaluate_q_reconstruction_ce(dos_ord, q_sup, n_folds = 5L, seed = 202611L, locus_weights = locus_w); ce_opt <- ce_res$selected_k_cross_entropy
       if (ncol(q_out) == 1L || (is.finite(ce_sup) && length(ce_opt) == 1L && is.finite(ce_opt) && ce_sup <= 1.05 * ce_opt)) q_out <- q_sup
     }
     q_out
@@ -265,9 +282,9 @@ run_step06_genomic_phylogenomics <- function(opts) {
   pub_bb <- load_public_packera_backbone(raw_geno_dir)
   coanc_res <- compute_microhaplotype_coancestry(pass_ord$genetic_sample_id, dos_ord, raw_geno_dir)
   coanc_full_cl <- rep("Polarizing_Sister", nrow(pass_df)); coanc_full_cl[ord_idx] <- coanc_res$cluster
-  tri_res <- compute_hybrid_index_q12(pass_df, dos_mat, q_mat, p1, p2, d_mat)
+  tri_res <- compute_hybrid_index_q12(pass_df, dos_mat, q_mat, p1, p2, d_mat, locus_weights = locus_w)
   fb_res <- compute_tree_guided_fbranch(pass_df, dos_mat, raw_geno_dir, backbone = pub_bb)
-  cf_res <- compute_quartet_concordance_snps2cf(pass_df, dos_mat)
+  cf_res <- compute_quartet_concordance_snps2cf(pass_df, dos_mat, locus_weights = locus_w)
   pub_eval <- evaluate_public_backbone_and_organellar(pass_df, raw_geno_dir, out_dir)
   is_admixed[tri_res$hybrid_class == "Divergent_NonHybrid_Lineage"] <- 0L
 
@@ -309,8 +326,17 @@ run_step06_genomic_phylogenomics <- function(opts) {
     public_phytop_ih_index = pub_eval$public_phytop_ih_index, stringsAsFactors = FALSE
   )
 
-  if (!isTRUE(opts$demo) && exists("persist_step06_genomics_to_sqlite", mode = "function")) {
-    tryCatch(persist_step06_genomics_to_sqlite(assign_df, run_id = opts[["run-id"]], db_path = if (nzchar(eff_db_in)) eff_db_in else NULL, demo = FALSE),
+  extra_meta_cols <- c("typified_basionym", "concept_synonymy_status", "exsiccatae_key", "genbank_accession",
+                       "coordinateUncertainty", "is_centroid_or_inst_coord", "coord_quarantine_reason", "is_open_or_hybrid_concept")
+  assign_df$typified_basionym <- if ("typified_basionym" %in% names(pass_df)) as.character(pass_df$typified_basionym) else NA_character_
+  assign_df$concept_synonymy_status <- if ("concept_synonymy_status" %in% names(pass_df)) as.character(pass_df$concept_synonymy_status) else NA_character_
+  for (ec in setdiff(extra_meta_cols, c("typified_basionym", "concept_synonymy_status"))) {
+    if (ec %in% names(pass_df)) assign_df[[ec]] <- pass_df[[ec]]
+  }
+
+  persist_fn <- if (exists("persist_step06_to_sqlite", mode = "function")) persist_step06_to_sqlite else if (exists("persist_step06_genomics_to_sqlite", mode = "function")) persist_step06_genomics_to_sqlite else NULL
+  if (!isTRUE(opts$demo) && !is.null(persist_fn)) {
+    tryCatch(persist_fn(assign_df, run_id = opts[["run-id"]], db_path = if (nzchar(eff_db_in)) eff_db_in else NULL, demo = FALSE),
              error = function(e) warning("[Step 06] SQLite persistence warning: ", e$message))
   }
   land_res <- if ("out_dir" %in% names(formals(run_step06_landscape_genomics))) {
@@ -318,13 +344,13 @@ run_step06_genomic_phylogenomics <- function(opts) {
   } else run_step06_landscape_genomics(pass_ord, d_ord, db_path = eff_db_ro, run_id = opts[["run-id"]], demo = opts$demo)
   if (nrow(land_res$summary_df) > 0L) {
     assign_df$mmrr_beta_ibd <- land_res$summary_df$mmrr_beta_ibd[1L]; assign_df$mmrr_beta_ibe <- land_res$summary_df$mmrr_beta_ibe[1L]; assign_df$mmrr_p_ibe <- land_res$summary_df$mmrr_p_ibe[1L]
-    if (!isTRUE(opts$demo) && exists("persist_step06_genomics_to_sqlite", mode = "function")) {
-      tryCatch(persist_step06_genomics_to_sqlite(assign_df, run_id = opts[["run-id"]], db_path = if (nzchar(eff_db_in)) eff_db_in else NULL, demo = FALSE), error = function(e) NULL)
-    }
   }
   congr_df <- .compute_posthoc_congruence(pass_df, d_mat, pco_coords, eff_db_ro, opts[["run-id"]], opts$demo)
 
-  full_audit <- dplyr::left_join(samples_df, assign_df[, setdiff(names(assign_df), c("catalogNumber", "population_id")), drop = FALSE], by = "genetic_sample_id")
+  drop_dup_cols <- intersect(c("catalogNumber", "population_id", extra_meta_cols), names(samples_df))
+  full_audit <- dplyr::left_join(samples_df, assign_df[, setdiff(names(assign_df), drop_dup_cols), drop = FALSE], by = "genetic_sample_id")
+  if (!("typified_basionym" %in% names(full_audit))) full_audit$typified_basionym <- NA_character_
+  if (!("concept_synonymy_status" %in% names(full_audit))) full_audit$concept_synonymy_status <- NA_character_
   m_pass <- match(full_audit$genetic_sample_id, pass_df$genetic_sample_id)
   for (mcol in c("public_plastome_match", "public_its_match", "waxy_lineage_match")) {
     if (!(mcol %in% names(full_audit))) full_audit[[mcol]] <- NA_character_
@@ -332,17 +358,14 @@ run_step06_genomic_phylogenomics <- function(opts) {
     if (any(need_fill)) full_audit[[mcol]][need_fill] <- pub_eval[[mcol]][m_pass[need_fill]]
   }
   full_audit <- reconcile_step06_cytonuclear_discordance(full_audit, assign_df = assign_df, placement_df = pub_eval$placement_df)
-  if (!isTRUE(opts$demo) && nzchar(eff_db_ro) && file.exists(eff_db_ro) && "cytonuclear_discordant" %in% names(full_audit)) {
-    conn_up <- tryCatch(DBI::dbConnect(RSQLite::SQLite(), dbname = eff_db_ro), error = function(e) NULL)
-    if (!is.null(conn_up)) {
-      tryCatch({
-        if (DBI::dbExistsTable(conn_up, "genomic_samples")) {
-          up_rows <- full_audit[!is.na(full_audit$cytonuclear_discordant), c("genetic_sample_id", "cytonuclear_discordant"), drop = FALSE]
-          for (ri in seq_len(nrow(up_rows))) DBI::dbExecute(conn_up, "UPDATE genomic_samples SET cytonuclear_discordant = ? WHERE genetic_sample_id = ?", params = list(as.integer(up_rows$cytonuclear_discordant[ri]), as.character(up_rows$genetic_sample_id[ri])))
-        }
-      }, error = function(e) NULL)
-      tryCatch(DBI::dbDisconnect(conn_up), error = function(e) NULL)
-    }
+  persist_df <- assign_df
+  m_fa <- match(persist_df$genetic_sample_id, full_audit$genetic_sample_id)
+  for (pcol in intersect(c("cytonuclear_discordant", "public_plastome_match", "public_its_match", "waxy_lineage_match", extra_meta_cols), names(full_audit))) {
+    persist_df[[pcol]] <- full_audit[[pcol]][m_fa]
+  }
+  if (!isTRUE(opts$demo) && !is.null(persist_fn)) {
+    tryCatch(persist_fn(persist_df, run_id = opts[["run-id"]], db_path = if (nzchar(eff_db_in)) eff_db_in else NULL, demo = FALSE),
+             error = function(e) warning("[Step 06] SQLite persistence warning: ", e$message))
   }
 
   foc_sc <- trimws(as.character(opts[["focal-taxon"]]))

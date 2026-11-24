@@ -18,6 +18,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from scripts.core.db import get_db_connection
 from scripts.tests._r_session import run_warm_r_cmd
 
 SKIP_R_REASON = "Skipping batched R Step 06 model selection tests under fast audit or missing Rscript."
@@ -197,6 +198,20 @@ class TestStep06ModelSelection(unittest.TestCase):
         """Verify R admixture K CV, Ledoit-Wolf shrinkage, hybrid AICc/BH-LRT, SNPs2CF G-test, and MMRR/FEEMS CV."""
         with tempfile.TemporaryDirectory(prefix="step06_ms_r_") as tmp_dir:
             tmp_posix = Path(tmp_dir).as_posix()
+            eco_db_path = Path(tmp_dir) / "step06_mmrr_eco.sqlite"
+            lats_5 = [35.20123, 35.40234, 36.10345, 36.30456, 37.50567, 37.70678, 38.80789, 39.00891, 40.10912, 40.30135]
+            lons_5 = [-83.50456, -83.20567, -81.80678, -81.50789, -80.20891, -79.90912, -78.90123, -78.60234, -77.30345, -77.00456]
+            ph_vals = [4.8, 7.6, 5.0, 7.5, 4.9, 7.7, 5.1, 7.4, 4.7, 7.8]
+            conn = get_db_connection(db_path=eco_db_path, init_schema=True, workspace_root=Path(tmp_dir))
+            try:
+                conn.executemany(
+                    "INSERT INTO environmental_cache (lat_lon_key, latitude, longitude, fine_soil_ph) VALUES (?, ?, ?, ?);",
+                    [(f"{la:.5f}_{lo:.5f}", la, lo, ph) for la, lo, ph in zip(lats_5, lons_5, ph_vals)],
+                )
+                conn.commit()
+            finally:
+                conn.close()
+            eco_db_posix = eco_db_path.as_posix()
             r_script = f"""
 grDevices::pdf(NULL)
 Sys.setenv(PLANTMATICS_FORCE_NMF_CE = "1")
@@ -290,13 +305,13 @@ rownames(dos_q) <- pass_q$genetic_sample_id
 cf_res <- compute_quartet_concordance_snps2cf(pass_q, dos_q)
 stopifnot(nrow(cf_res$cf_df) == 1L, cf_res$cf_df$snaq_gamma_minor[1L] == 0.0, cf_res$cf_df$g_test_p[1L] >= 0.05)
 
-# 5. Nested MMRR selection and leave-one-node-out FEEMS CV
+# 5. Nested MMRR selection (honest IBD-only when zero eco covariates; 5-decimal environmental_cache & smooth lithic/wetland IBE) and FEEMS CV
 ls_pass <- data.frame(
   genetic_sample_id = sprintf("LS_%02d", 1:10),
   species_standardized = rep("P_dubia", 10L),
   population_id = sprintf("POP_%d", rep(1:5, each = 2L)),
-  decimalLatitude = c(35.2, 35.4, 36.1, 36.3, 37.5, 37.7, 38.8, 39.0, 40.1, 40.3),
-  decimalLongitude = c(-83.5, -83.2, -81.8, -81.5, -80.2, -79.9, -78.9, -78.6, -77.3, -77.0),
+  decimalLatitude = c(35.20123, 35.40234, 36.10345, 36.30456, 37.50567, 37.70678, 38.80789, 39.00891, 40.10912, 40.30135),
+  decimalLongitude = c(-83.50456, -83.20567, -81.80678, -81.50789, -80.20891, -79.90912, -78.90123, -78.60234, -77.30345, -77.00456),
   stringsAsFactors = FALSE
 )
 coord_mat <- cbind(ls_pass$decimalLatitude, ls_pass$decimalLongitude)
@@ -306,17 +321,44 @@ jitter_m <- matrix(stats::rnorm(100L, 0.0, 0.05), nrow = 10L, ncol = 10L)
 d_geno_ls <- pmax(d_geno_ls + 0.5 * (jitter_m + t(jitter_m)), 0.0)
 diag(d_geno_ls) <- 0.0
 dimnames(d_geno_ls) <- list(ls_pass$genetic_sample_id, ls_pass$genetic_sample_id)
-ls_out_dir <- "{tmp_posix}/landscape_out"
-ls_res <- run_step06_landscape_genomics(
+
+# 5a. Zero ecological covariates -> honest IBD_only fallback with mmrr_beta_ibe = NA (never fake abs(lat)/lon)
+ls_out_no <- "{tmp_posix}/landscape_no_eco"
+ls_res_no <- run_step06_landscape_genomics(
   pass_df = ls_pass, d_geno_mat = d_geno_ls,
-  db_path = "", run_id = "test_step06_ms", demo = FALSE,
-  n_perm = 99L, out_dir = ls_out_dir
+  db_path = "", run_id = "test_step06_ms_no_eco", demo = FALSE,
+  n_perm = 99L, out_dir = ls_out_no
 )
-mmrr_csv <- file.path(ls_out_dir, "mmrr_model_selection.csv")
-stopifnot(file.exists(mmrr_csv))
-mmrr_df <- utils::read.csv(mmrr_csv, stringsAsFactors = FALSE)
-stopifnot(nrow(mmrr_df) >= 4L, "IBD_only" %in% mmrr_df$model_name, "IBD_plus_IBE" %in% mmrr_df$model_name)
-stopifnot("feems_cv_lambda" %in% names(ls_res$summary_df), is.finite(ls_res$summary_df$feems_cv_lambda[1L]))
+mmrr_no_csv <- file.path(ls_out_no, "mmrr_model_selection.csv")
+stopifnot(file.exists(mmrr_no_csv))
+mmrr_no_df <- utils::read.csv(mmrr_no_csv, stringsAsFactors = FALSE)
+stopifnot("IBD_only" %in% mmrr_no_df$model_name, !("IBD_plus_IBE" %in% mmrr_no_df$model_name))
+stopifnot(is.na(ls_res_no$summary_df$mmrr_beta_ibe[1L]), is.finite(ls_res_no$summary_df$feems_cv_lambda[1L]))
+
+# 5b. 5-decimal environmental_cache lookup (%.5f_%.5f) enables IBD_plus_IBE with finite mmrr_beta_ibe
+ls_out_ec <- "{tmp_posix}/landscape_env_cache"
+ls_res_ec <- run_step06_landscape_genomics(
+  pass_df = ls_pass, d_geno_mat = d_geno_ls,
+  db_path = "{eco_db_posix}", run_id = "test_step06_ms_ec", demo = FALSE,
+  n_perm = 99L, out_dir = ls_out_ec
+)
+mmrr_ec_df <- utils::read.csv(file.path(ls_out_ec, "mmrr_model_selection.csv"), stringsAsFactors = FALSE)
+stopifnot(nrow(mmrr_ec_df) >= 4L, "IBD_only" %in% mmrr_ec_df$model_name, "IBD_plus_IBE" %in% mmrr_ec_df$model_name)
+stopifnot(is.finite(ls_res_ec$summary_df$mmrr_beta_ibe[1L]), is.finite(ls_res_ec$summary_df$feems_cv_lambda[1L]))
+
+# 5c. Smooth lithic_outcrop_index and wetland_seepage_index covariates enable IBD_plus_IBE
+ls_pass_sm <- ls_pass
+ls_pass_sm$lithic_outcrop_index <- c(0.08, 0.92, 0.14, 0.88, 0.10, 0.95, 0.16, 0.85, 0.12, 0.90)
+ls_pass_sm$wetland_seepage_index <- c(0.85, 0.10, 0.80, 0.15, 0.88, 0.08, 0.82, 0.12, 0.86, 0.11)
+ls_out_sm <- "{tmp_posix}/landscape_smooth_ibe"
+ls_res_sm <- run_step06_landscape_genomics(
+  pass_df = ls_pass_sm, d_geno_mat = d_geno_ls,
+  db_path = "", run_id = "test_step06_ms_sm", demo = FALSE,
+  n_perm = 99L, out_dir = ls_out_sm
+)
+mmrr_sm_df <- utils::read.csv(file.path(ls_out_sm, "mmrr_model_selection.csv"), stringsAsFactors = FALSE)
+stopifnot(nrow(mmrr_sm_df) >= 4L, "IBD_only" %in% mmrr_sm_df$model_name, "IBD_plus_IBE" %in% mmrr_sm_df$model_name)
+stopifnot(is.finite(ls_res_sm$summary_df$mmrr_beta_ibe[1L]), "feems_cv_lambda" %in% names(ls_res_sm$summary_df), is.finite(ls_res_sm$summary_df$feems_cv_lambda[1L]))
 cat("ALL_STEP06_MS_R_CHECKS_OK\\n")
 """
             proc = run_warm_r_cmd(

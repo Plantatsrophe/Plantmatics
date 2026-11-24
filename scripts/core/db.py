@@ -2955,10 +2955,26 @@ def upsert_genomic_samples(
         "stateProvince", "county", "eventDate", "linkage_tier",
         "inferred_cytotype", "plastid_clade", "its_ribotype",
         "public_plastome_match", "public_its_match", "waxy_lineage_match",
+        "exsiccatae_key", "genbank_accession", "coord_quarantine_reason",
+        "typified_basionym", "concept_synonymy_status",
     )
     int_cols = ("ploidy_level", "hq_reads", "mapped_reads", "n_called_loci", "hdplot_retained_loci")
-    bool_cols = ("is_putative_novel_or_hybrid_query", "geno_quality_pass", "cytonuclear_discordant")
-    float_cols = ("pct_repetitive", "decimalLatitude", "decimalLongitude", "missing_genotype_rate", "observed_het", "nquire_delta_logl")
+    bool_cols = (
+        "is_putative_novel_or_hybrid_query",
+        "geno_quality_pass",
+        "cytonuclear_discordant",
+        "is_centroid_or_inst_coord",
+        "is_open_or_hybrid_concept",
+    )
+    zero_default_bool_cols = {
+        "is_putative_novel_or_hybrid_query",
+        "is_centroid_or_inst_coord",
+        "is_open_or_hybrid_concept",
+    }
+    float_cols = (
+        "pct_repetitive", "decimalLatitude", "decimalLongitude", "coordinateUncertainty",
+        "missing_genotype_rate", "observed_het", "nquire_delta_logl",
+    )
 
     norm_rows: List[Dict[str, Any]] = []
     for raw in rows:
@@ -2973,7 +2989,7 @@ def upsert_genomic_samples(
             item[col] = _to_int(raw.get(col))
         for col in bool_cols:
             bval = _to_bool_int(raw.get(col))
-            item[col] = 0 if (col == "is_putative_novel_or_hybrid_query" and bval is None) else bval
+            item[col] = 0 if (col in zero_default_bool_cols and bval is None) else bval
         for col in float_cols:
             item[col] = _to_float(raw.get(col))
         norm_rows.append(item)

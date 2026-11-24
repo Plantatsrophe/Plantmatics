@@ -9,7 +9,7 @@ Description: Retrieves public Packera sequences, phylogenomic trees, PhyTop
 
 from __future__ import annotations
 
-import argparse, csv, gzip, hashlib, importlib, importlib.util, json, os, re, shutil, sys, tempfile, time, zipfile
+import argparse, csv, gzip, importlib, json, os, re, shutil, sys, tempfile, time
 import urllib.error, urllib.parse, urllib.request
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
@@ -19,75 +19,52 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from scripts.core.io_utils import atomic_write_bytes, ensure_flat_filename
-from scripts.data_prep.step06_synonym_utils import (
-    CANONICAL_SENECIO_PACKERA_SYNONYMS,
-    canonical_taxon_equiv_key,
-    normalize_public_header_binomial,
-)
+from scripts.data_prep.step06_synonym_utils import CANONICAL_SENECIO_PACKERA_SYNONYMS, canonical_taxon_equiv_key, normalize_public_header_binomial
 
 _UA = "Plantmatics/1.0 (https://github.com/plantmatics; mailto:plantmatics@users.noreply.github.com)"
-_DRYAD_DOI = "doi%3A10.5061%2Fdryad.bg79cnppn"
-_DRYAD_ZIPS = ("speciestree_files.zip", "PhyTop_results.zip", "RelTime_trees.zip", "alignment_files.zip")
 _SRA_BIOPROJECTS = ("PRJNA907383", "PRJNA978568", "PRJNA540287", "PRJNA516161", "PRJNA1046046")
 
 try:
     from scripts.data_prep.ena_paraloss_discovery import SRA_MANIFEST_COLS, fetch_compositae_paraloss1272_catalog, fetch_ena_tax_tree_sra_rows
+    from scripts.data_prep.step06_dryad_backbone_utils import (
+        _DRYAD_DOI, _DRYAD_EXACT_MAP, _DRYAD_ZIPS, _CrossHostAuthStripRedirectHandler,
+        _fetch_dryad_packera_files, _load_dotenv_defaults, _resolve_dryad_bearer_token, _route_dryad_file,
+    )
 except ImportError:
     from ena_paraloss_discovery import SRA_MANIFEST_COLS, fetch_compositae_paraloss1272_catalog, fetch_ena_tax_tree_sra_rows  # type: ignore[no-redef]
+    from step06_dryad_backbone_utils import (  # type: ignore[no-redef]
+        _DRYAD_DOI, _DRYAD_EXACT_MAP, _DRYAD_ZIPS, _CrossHostAuthStripRedirectHandler,
+        _fetch_dryad_packera_files, _load_dotenv_defaults, _resolve_dryad_bearer_token, _route_dryad_file,
+    )
+
+_obtain_dryad_token = _resolve_dryad_bearer_token
+_fetch_dryad = _fetch_dryad_packera_files
 
 
 def _resolve_target_meta(attr: str, env_key: str, default: str) -> str:
     try:
         from scripts.core import config as _cfg
-        fn = getattr(_cfg, attr, None)
-        if callable(fn) and (val := str(fn()).strip()):
-            return val
-    except Exception:
-        pass
+        if callable(fn := getattr(_cfg, attr, None)) and (val := str(fn()).strip()): return val
+    except Exception: pass
     return (os.environ.get(f"PLANTMATICS_{env_key}") or os.environ.get(f"PACKERA_{env_key}") or default).strip() or default
 
 
 def _build_ncbi_nuccore_term(target_genus: str = "Packera") -> str:
     genus = str(target_genus or "Packera").strip() or "Packera"
-    if genus.lower() != "packera":
-        return f'"{genus}"[Organism] AND 120:200000[SLEN]'
+    if genus.lower() != "packera": return f'"{genus}"[Organism] AND 120:200000[SLEN]'
     target_keys: set[str] = set()
     try:
         from scripts.core.step01_biogeography_utils import resolve_eastern_resident_whitelist, resolve_transcontinental_taxa
-        for tx in (*resolve_eastern_resident_whitelist(), *resolve_transcontinental_taxa()):
-            if key := canonical_taxon_equiv_key(tx):
-                target_keys.add(key)
-    except Exception:
-        target_keys = set()
-    senecio_syns = sorted({
-        syn.capitalize()
-        for syn, canon in CANONICAL_SENECIO_PACKERA_SYNONYMS.items()
-        if syn.startswith("senecio ") and (not target_keys or canonical_taxon_equiv_key(canon) in target_keys)
-    })
+        target_keys = {key for tx in (*resolve_eastern_resident_whitelist(), *resolve_transcontinental_taxa()) if (key := canonical_taxon_equiv_key(tx))}
+    except Exception: target_keys = set()
+    senecio_syns = sorted({syn.capitalize() for syn, canon in CANONICAL_SENECIO_PACKERA_SYNONYMS.items() if syn.startswith("senecio ") and (not target_keys or canonical_taxon_equiv_key(canon) in target_keys)})
     terms = ['"Packera"[Organism]', *(f'"{s}"[Organism]' for s in senecio_syns)]
     return f"({' OR '.join(terms)}) AND 120:200000[SLEN]"
 
 
 _NCBI_TERM = _build_ncbi_nuccore_term("Packera")
 _normalize_taxon_binomial = normalize_public_header_binomial
-_DRYAD_EXACT_MAP: Dict[str, str] = {
-    "18complete_packera_plastomes.fasta": "public_packera_18complete_plastomes.fasta", "111mapping_packera_plastomes.fasta": "public_packera_111mapping_plastomes.fasta",
-    "mo_astral_lpp.tre": "public_packera_MO_Astral_lpp.tre", "astralpro_astral_lpp.tre": "public_packera_ASTRALPro_Astral_lpp.tre",
-    "wastral_astral_lpp.tre": "public_packera_wASTRAL_Astral_lpp.tre", "111mapping_packera_plastomes.tre": "public_packera_111mapping_plastomes.tre",
-    "mo_concat_best.fasta": "public_packera_MO_concat_best.fasta", "1-to-1_concat_best.fasta": "public_packera_1to1_concat_best.fasta",
-}
 _LAST_NCBI_CALL = [0.0]
-
-
-class _CrossHostAuthStripRedirectHandler(urllib.request.HTTPRedirectHandler):
-    """Strip Authorization headers on redirects across domains (e.g. Dryad -> S3)."""
-    def redirect_request(self, req: Any, fp: Any, code: int, msg: str, headers: Any, newurl: str) -> Any:
-        new_req = super().redirect_request(req, fp, code, msg, headers, newurl)
-        if new_req is not None and urllib.parse.urlparse(req.full_url).netloc.lower() != urllib.parse.urlparse(newurl).netloc.lower():
-            for hdrs in (new_req.headers, new_req.unredirected_hdrs):
-                for k in [k for k in hdrs if k.lower() == "authorization"]:
-                    hdrs.pop(k, None)
-        return new_req
 
 
 _PUBLIC_NUCLEAR_BACKBONE_FILES = frozenset({
@@ -249,129 +226,6 @@ def _skim_sra_accessions(accessions: Sequence[str], sra_rows: Sequence[Dict[str,
     return downloaded
 
 
-def _load_dotenv_defaults(paths: Optional[Sequence[Path]] = None) -> None:
-    """Load missing KEY=VALUE secrets from `.env` files without overriding active environment variables."""
-    if os.environ.get("PLANTMATICS_SKIP_DOTENV", "").strip() == "1":
-        return
-    for env_path in (tuple(paths) if paths is not None else (Path(__file__).resolve().parents[2] / ".env", Path.home() / ".env")):
-        if not env_path.is_file():
-            continue
-        for raw in env_path.read_text(encoding="utf-8", errors="ignore").splitlines():
-            ln = raw.strip()
-            if not ln or ln.startswith("#"):
-                continue
-            ln = ln[7:].strip() if ln.startswith("export ") else ln
-            if "=" in ln:
-                k, v = (p.strip() for p in ln.split("=", 1))
-                v = v[1:-1] if len(v) >= 2 and v[0] == v[-1] and v[0] in ("'", '"') else v
-                if k and k not in os.environ:
-                    os.environ[k] = v
-
-
-def _obtain_dryad_token() -> str:
-    _load_dotenv_defaults()
-    if tok := os.environ.get("DRYAD_API_TOKEN", "").strip():
-        return tok
-    cid, csec = os.environ.get("DRYAD_CLIENT_ID", "").strip(), os.environ.get("DRYAD_CLIENT_SECRET", "").strip()
-    if cid and csec:
-        body = urllib.parse.urlencode({"client_id": cid, "client_secret": csec, "grant_type": "client_credentials"}).encode("utf-8")
-        return str(json.loads(_http_request("https://datadryad.org/oauth/token", headers={"Content-Type": "application/x-www-form-urlencoded"}, data=body).decode("utf-8")).get("access_token") or "").strip()
-    return ""
-
-
-def _route_dryad_file(src: Path, zip_name: str) -> Optional[str]:
-    low, zlow = src.name.lower(), zip_name.lower()
-    if "__macosx" in str(src).lower() or src.name.startswith("._"):
-        return None
-    if low in _DRYAD_EXACT_MAP:
-        return _DRYAD_EXACT_MAP[low]
-    if ("phytop" in zlow or "phytop" in low) and low.endswith((".tsv", ".csv", ".tree", ".tre", ".nwk")):
-        stem_clean = re.sub(r"_phytop(\.info)?$", "", src.stem, flags=re.IGNORECASE)
-        method = (
-            "ASTRALPro" if ("astralpro" in low or "astral-pro" in low)
-            else "wASTRAL" if "wastral" in low
-            else "HybPiper-df" if "hybpiper" in low
-            else "MO" if re.search(r"(^|[^a-z0-9])mo([^a-z0-9]|$)", low)
-            else (re.sub(r"[^A-Za-z0-9_-]+", "_", stem_clean).strip("_") or "table")
-        )
-        ext = ".tre" if low.endswith((".tree", ".tre", ".nwk")) else ".tsv"
-        return f"public_packera_PhyTop_{method}{ext}"
-    if ("reltime" in zlow or "reltime" in low) and low.endswith((".tre", ".nwk", ".tree")):
-        return f"public_packera_RelTime_{re.sub(r'[^A-Za-z0-9_.-]+', '_', src.stem).strip('_') or 'tree'}.tre"
-    return None
-
-
-def _fetch_dryad(genomics_dir: Path, tmpd: Path, dryad_zip_dir: Optional[Path], force: bool) -> Tuple[str, int]:
-    manifest_files: List[Dict[str, Any]] = []
-    manifest_path = next((p for p in (_resolve_public_dest(genomics_dir, "public_packera_dryad_manifest.json"), genomics_dir / "public_packera_dryad_manifest.json") if p.is_file()), _resolve_public_dest(genomics_dir, "public_packera_dryad_manifest.json"))
-    try:
-        v_raw = _http_request(f"https://datadryad.org/api/v2/datasets/{_DRYAD_DOI}/versions", timeout=45)
-        if v_list := json.loads(v_raw.decode("utf-8")).get("_embedded", {}).get("stash:versions", []):
-            v_href = v_list[-1]["_links"]["self"]["href"]
-            f_raw = _http_request(urllib.parse.urljoin("https://datadryad.org", v_href.rstrip("/") + "/files?per_page=100"), timeout=45)
-            for item in json.loads(f_raw.decode("utf-8")).get("_embedded", {}).get("stash:files", []):
-                dl_href = item.get("_links", {}).get("stash:download", {}).get("href") or (f"/api/v2/files/{item['id']}/download" if item.get("id") is not None else "")
-                manifest_files.append({k: item.get(k, "") for k in ("id", "path", "size", "digestType", "digest")} | {"download_href": dl_href})
-            _atomic_save(genomics_dir, "public_packera_dryad_manifest.json", json.dumps({"doi": "10.5061/dryad.bg79cnppn", "files": manifest_files}, indent=2).encode("utf-8"), force=force)
-    except Exception as exc:
-        print(f"[WARN] Dryad manifest fetch failed ({exc}).", file=sys.stderr)
-        if manifest_path.is_file():
-            try:
-                manifest_files = json.loads(manifest_path.read_text(encoding="utf-8")).get("files", [])
-            except Exception:
-                manifest_files = []
-
-    by_name = {Path(str(m.get("path", ""))).name: m for m in manifest_files if m.get("path")}
-    staged_zips, status = [], "manifest_only_auth_required"
-    if dryad_zip_dir is not None and dryad_zip_dir.is_dir():
-        for zname in _DRYAD_ZIPS:
-            cand = next((p for p in dryad_zip_dir.iterdir() if p.is_file() and p.name.lower() == zname.lower()), None)
-            if cand is not None:
-                shutil.copy2(cand, tmpd / zname)
-                staged_zips.append(tmpd / zname)
-        if staged_zips:
-            status = "local_zip_dir"
-
-    if not staged_zips:
-        try:
-            if token := _obtain_dryad_token():
-                opener = urllib.request.build_opener(_CrossHostAuthStripRedirectHandler())
-                for zname in _DRYAD_ZIPS:
-                    if (meta := by_name.get(zname)) and meta.get("download_href"):
-                        _http_request(urllib.parse.urljoin("https://datadryad.org", str(meta["download_href"])), headers={"Authorization": f"Bearer {token}"}, timeout=180, opener=opener, dest=tmpd / zname)
-                        staged_zips.append(tmpd / zname)
-                if staged_zips:
-                    status = "downloaded"
-        except urllib.error.HTTPError as exc:
-            if exc.code in (401, 403): staged_zips.clear()
-            else: raise
-
-    if not staged_zips:
-        pw_avail = importlib.util.find_spec("playwright") is not None
-        print(f'[INFO] Dryad archives require authentication (playwright_installed={pw_avail}). Set DRYAD_API_TOKEN and run: export DRYAD_API_TOKEN="<token>" && .venv/bin/python main.py download-public-genomics --genomics-dir data/genomics or pass --dryad-zip-dir <DIR>.')
-        return status, 0
-
-    n_extracted = 0
-    for zp in staged_zips:
-        meta = by_name.get(zp.name, {})
-        if str(meta.get("digestType", "")).lower() in ("sha-256", "sha256") and meta.get("digest"):
-            h = hashlib.sha256()
-            with open(zp, "rb") as fh:
-                for chunk in iter(lambda: fh.read(65536), b""): h.update(chunk)
-            if h.hexdigest().lower() != str(meta["digest"]).strip().lower():
-                raise ValueError(f"SHA-256 mismatch for {zp.name}: expected {meta['digest']}, got {h.hexdigest()}")
-        unpack_dir = tmpd / f"unpack_{zp.stem}"; unpack_dir.mkdir(parents=True, exist_ok=True); unpack_res = unpack_dir.resolve()
-        with zipfile.ZipFile(zp, "r") as zf:
-            for member in zf.infolist():
-                target = (unpack_dir / member.filename).resolve()
-                if target != unpack_res and unpack_res not in target.parents: raise ValueError(f"Unsafe zip-slip entry in {zp.name}: {member.filename!r}")
-            zf.extractall(unpack_dir)
-        for fp in sorted(unpack_dir.rglob("*")):
-            if fp.is_file() and (out_name := _route_dryad_file(fp, zp.name)):
-                _atomic_save(genomics_dir, out_name, fp, force=force); n_extracted += 1
-    return status, n_extracted
-
-
 def _format_bold_fasta(raw_text: str) -> Tuple[str, int]:
     if raw_text.lstrip().startswith(">"):
         out = []
@@ -459,7 +313,11 @@ def download_public_packera_sequences(
         if skim_sra_accessions:
             counts["sra_skimmed_fastqs"] = _skim_sra_accessions([a.strip() for raw in skim_sra_accessions for a in str(raw).split(",") if a.strip()], sra_rows, genomics_dir, tmpd)
         if "dryad" in src_list:
-            dryad_status, counts["dryad_files"] = _fetch_dryad(genomics_dir, tmpd, dryad_zip_dir=dryad_zip_dir, force=force)
+            dryad_status, counts["dryad_files"] = _fetch_dryad_packera_files(
+                genomics_dir, tmpd, dryad_zip_dir=dryad_zip_dir, force=force,
+                http_request_fn=_http_request, resolve_dest_fn=_resolve_public_dest,
+                atomic_save_fn=_atomic_save, token_fn=_resolve_dryad_bearer_token,
+            )
         if "bold" in src_list:
             counts["bold_records"] = _fetch_bold(genomics_dir, force=force)
     files_meta = {p.relative_to(genomics_dir).as_posix(): {"size_bytes": p.stat().st_size} for p in sorted(genomics_dir.rglob("public_packera_*")) if p.is_file() and p.name != "public_packera_sources_manifest.json"}

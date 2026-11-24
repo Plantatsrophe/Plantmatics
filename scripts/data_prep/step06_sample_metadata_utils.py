@@ -258,27 +258,49 @@ def _parse_lat_lon(val: Any) -> Tuple[Optional[float], Optional[float]]:
     return None, None
 
 
-def sanitize_step06_sample_coordinates(
-    lat: Any, lon: Any, state_prov: Any = "", county: Any = "", locality: Any = "", *, is_vouchered: bool = False,
-) -> Tuple[Optional[float], Optional[float], bool]:
-    """Nullify out-of-bounds, (0,0), US/CA sign-flipped, and unvouchered rooftop coordinates."""
+def evaluate_step06_sample_coordinates(
+    lat: Any, lon: Any, state_prov: Any = "", county: Any = "", locality: Any = "",
+    *, uncertainty_m: Any = None, is_type_specimen: bool = False,
+    voucher_flagged: bool = False, voucher_reason: str = "",
+) -> Tuple[Optional[float], Optional[float], bool, int, Optional[str]]:
+    """Screen coordinates for bounds, (0,0), sign-flip, rooftops, and Step 01 quarantine flags."""
+    v_reason = _safe_text(voucher_reason) or None
     if lat is None or lon is None or isinstance(lat, bool) or isinstance(lon, bool):
-        return None, None, False
+        return None, None, False, (1 if voucher_flagged else 0), ((v_reason or "step01_coord_quarantine") if voucher_flagged else None)
     try:
         lat_f, lon_f = float(lat), float(lon)
     except (TypeError, ValueError):
-        return None, None, True
+        return None, None, True, 1, "invalid_coordinate"
     if not (math.isfinite(lat_f) and math.isfinite(lon_f)) or not (-90.0 <= lat_f <= 90.0 and -180.0 <= lon_f <= 180.0):
-        return None, None, True
+        return None, None, True, 1, "out_of_bounds_coordinate"
     if abs(lat_f) < 1e-4 and abs(lon_f) < 1e-4:
-        return None, None, True
+        return None, None, True, 1, "zero_coordinate"
     if _normalize_state(state_prov) in _US_CA_STATE_SET and lat_f > 15.0 and lon_f > 40.0:
-        return None, None, True
-    if not is_vouchered:
-        flagged, reason = evaluate_coordinate_centroid_quarantine(lat_f, lon_f, locality=str(locality or ""), county=str(county or ""), state_prov=str(state_prov or ""))
-        if flagged and reason == "herbarium_institution_rooftop":
-            return None, None, True
-    return lat_f, lon_f, False
+        return None, None, True, 1, "sign_flipped_longitude"
+    flagged, reason = evaluate_coordinate_centroid_quarantine(
+        lat_f, lon_f, locality=str(locality or ""), county=str(county or ""),
+        state_prov=str(state_prov or ""), uncertainty_m=uncertainty_m, is_type_specimen=is_type_specimen,
+    )
+    if flagged and reason == "herbarium_institution_rooftop":
+        return None, None, True, 1, reason
+    if voucher_flagged:
+        if v_reason and ("rooftop" in v_reason.lower() or "institution" in v_reason.lower()):
+            return None, None, True, 1, v_reason
+        return lat_f, lon_f, False, 1, (v_reason or (reason if flagged else "step01_coord_quarantine"))
+    if flagged:
+        return lat_f, lon_f, False, 1, reason
+    return lat_f, lon_f, False, 0, None
+
+
+def sanitize_step06_sample_coordinates(
+    lat: Any, lon: Any, state_prov: Any = "", county: Any = "", locality: Any = "", *, is_vouchered: bool = False,
+) -> Tuple[Optional[float], Optional[float], bool]:
+    """Nullify out-of-bounds, (0,0), US/CA sign-flipped, and herbarium rooftop coordinates."""
+    _ = is_vouchered
+    lat_o, lon_o, was_null, _, _ = evaluate_step06_sample_coordinates(
+        lat, lon, state_prov=state_prov, county=county, locality=locality,
+    )
+    return lat_o, lon_o, was_null
 
 
 def _parse_field_metadata(metadata_csvs: Sequence[Path]) -> Tuple[List[Dict[str, Any]], Dict[str, Dict[str, Any]]]:
@@ -312,6 +334,8 @@ def _parse_field_metadata(metadata_csvs: Sequence[Path]) -> Tuple[List[Dict[str,
         rec_by_col = cols_low.get("recordedby") or cols_low.get("collector")
         rec_num_col = cols_low.get("recordnumber") or cols_low.get("record_number") or cols_low.get("collector_number") or cols_low.get("collection_number") or cols_low.get("collector_id")
         alias_col, q_col = cols_low.get("population_alias"), cols_low.get("is_putative_novel_or_hybrid_query")
+        gb_col = cols_low.get("genbank_accession") or cols_low.get("genbank")
+        unc_col = cols_low.get("coordinateuncertainty") or cols_low.get("coordinateuncertaintyinmeters")
 
         for _, row in df.iterrows():
             taxon_str = str(row.get(tax_col, "")).strip() if tax_col else ""
@@ -335,14 +359,21 @@ def _parse_field_metadata(metadata_csvs: Sequence[Path]) -> Tuple[List[Dict[str,
             rec_by = str(row.get(rec_by_col, "")).strip() or None if rec_by_col else None
             rec_num = str(row.get(rec_num_col, "")).strip() or None if rec_num_col else None
             ex_key = (str(row.get(ex_col, "")).strip() or None if ex_col else None) or (_normalize_exsiccatae_key(rec_by, rec_num, ev_date_str or "") or None if (rec_by and rec_num) else None)
+            coord_unc = None
+            if unc_col and str(row.get(unc_col, "")).strip():
+                try:
+                    coord_unc = float(row.get(unc_col, ""))
+                except (TypeError, ValueError):
+                    coord_unc = None
             field_rows.append({
                 "project_id": proj_clean or None, "taxon_code": parsed_proj["taxon_code"], "population_id": parsed_proj["population_id"],
                 "population_alias": str(row.get(alias_col, "")).strip() or None if alias_col else None,
                 "taxon_raw": t_raw, "species_standardized": sp_std, "is_putative_novel_or_hybrid_query": is_query,
-                "decimalLatitude": lat, "decimalLongitude": lon,
+                "decimalLatitude": lat, "decimalLongitude": lon, "coordinateUncertainty": coord_unc,
                 "stateProvince": str(row.get(state_col, "")).strip() or None if state_col else None,
                 "county": str(row.get(county_col, "")).strip() or None if county_col else None,
                 "eventDate": ev_date_str, "recordedBy": rec_by, "recordNumber": rec_num, "exsiccatae_key": ex_key,
+                "genbank_accession": (str(row.get(gb_col, "")).strip() or None) if gb_col else None,
                 "notes": (str(row.get(notes_col, "")).strip() or None) if notes_col else None,
             })
     return field_rows, direct_user_meta

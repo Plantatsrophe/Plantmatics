@@ -1,6 +1,8 @@
 # Step 06 Evolutionary Model Selection & Hypothesis Testing Utilities
 # Sources into 06_genomic_phylogenomics.R; preserves schema 20261127 (0 DDL changes).
 
+if (grDevices::dev.cur() == 1L) grDevices::pdf(NULL)
+
 .restore_rng_state <- function(had_seed, old_seed) {
   if (had_seed) assign(".Random.seed", old_seed, envir = .GlobalEnv)
   else if (exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)) rm(".Random.seed", envir = .GlobalEnv)
@@ -12,9 +14,21 @@
   if (requireNamespace("readr", quietly = TRUE)) readr::write_csv(df, path, na = "") else utils::write.csv(df, path, row.names = FALSE)
 }
 
-.clean_dosage_matrix <- function(dos_mat) {
+.clean_dosage_matrix <- function(dos_mat, locus_weights = NULL) {
   X <- as.matrix(dos_mat); storage.mode(X) <- "numeric"
-  if (nrow(X) == 0L || ncol(X) == 0L) return(X)
+  m_all <- ncol(X)
+  w_all <- rep(1.0, m_all)
+  if (!is.null(locus_weights) && m_all > 0L) {
+    cn <- colnames(X)
+    if (!is.null(names(locus_weights)) && !is.null(cn)) {
+      mt <- match(cn, names(locus_weights)); ok_w <- !is.na(mt)
+      w_all[ok_w] <- suppressWarnings(as.numeric(locus_weights[mt[ok_w]]))
+    } else if (length(locus_weights) == m_all) {
+      w_all <- suppressWarnings(as.numeric(locus_weights))
+    }
+    w_all[!is.finite(w_all) | w_all < 0.0] <- 1.0
+  }
+  if (nrow(X) == 0L || m_all == 0L) { attr(X, "locus_weights") <- w_all; return(X) }
   fin <- is.finite(X)
   if (any(fin)) {
     mx <- max(X[fin])
@@ -22,7 +36,11 @@
     X[fin] <- pmin(1.0, pmax(0.0, X[fin]))
   }
   keep <- apply(X, 2L, function(v) { fv <- v[is.finite(v)]; length(fv) >= 2L && stats::var(fv) > 1e-12 })
-  X[, keep, drop = FALSE]
+  X_out <- X[, keep, drop = FALSE]
+  w_out <- w_all[keep]
+  if (length(w_out) > 0L && sum(w_out) <= 0.0) w_out[] <- 1.0
+  attr(X_out, "locus_weights") <- w_out
+  X_out
 }
 
 .impute_col_means <- function(X_na) {
@@ -62,14 +80,18 @@
   folds
 }
 
-.fit_projected_nmf <- function(X_tr_na, k_val, n_iter = 35L) {
+.fit_projected_nmf <- function(X_tr_na, k_val, n_iter = 35L, locus_weights = NULL) {
   n <- nrow(X_tr_na); m <- ncol(X_tr_na); imp <- .impute_col_means(X_tr_na)
   if (k_val <= 1L) {
     return(list(Q = matrix(1.0, nrow = n, ncol = 1L, dimnames = list(rownames(X_tr_na), "Ancestry_K1")),
                 F = matrix(imp$col_mu, nrow = 1L, ncol = m)))
   }
+  w_eff <- if (!is.null(locus_weights) && length(locus_weights) == m && any(abs(locus_weights - 1.0) > 1e-6)) {
+    mu_w <- mean(locus_weights); if (is.finite(mu_w) && mu_w > 0.0) locus_weights / mu_w else rep(1.0, m)
+  } else NULL
   X_imp <- imp$X_imp; obs_mask <- imp$obs_mask
-  km <- if (nrow(unique(X_imp)) >= k_val) suppressWarnings(tryCatch(stats::kmeans(X_imp, centers = k_val, nstart = 5L, iter.max = 25L), error = function(e) NULL)) else NULL
+  X_km <- if (!is.null(w_eff)) sweep(X_imp, 2L, sqrt(w_eff), "*") else X_imp
+  km <- if (nrow(unique(X_km)) >= k_val) suppressWarnings(tryCatch(stats::kmeans(X_km, centers = k_val, nstart = 5L, iter.max = 25L), error = function(e) NULL)) else NULL
   Q0 <- if (!is.null(km)) {
     qi <- matrix(0.0, n, k_val); qi[cbind(seq_len(n), km$cluster)] <- 1.0
     qi + matrix(stats::runif(n * k_val, 0.0, 0.05), n, k_val)
@@ -79,7 +101,8 @@
   for (it in seq_len(n_iter)) {
     F_raw <- tryCatch(solve(crossprod(Q) + reg_k, crossprod(Q, X_imp)), error = function(e) F_mat)
     F_mat[] <- pmin(pmax(as.numeric(F_raw), 1e-4), 1.0 - 1e-4)
-    Q_new <- .simplex_rows(tryCatch(X_imp %*% t(F_mat) %*% solve(tcrossprod(F_mat) + reg_k), error = function(e) Q))
+    FW <- if (!is.null(w_eff)) sweep(F_mat, 2L, w_eff, "*") else F_mat
+    Q_new <- .simplex_rows(tryCatch(X_imp %*% t(FW) %*% solve(FW %*% t(F_mat) + reg_k), error = function(e) Q))
     if (any(!obs_mask)) X_imp[!obs_mask] <- pmin(pmax((Q_new %*% F_mat)[!obs_mask], 0.0), 1.0)
     if (it >= 8L && max(abs(Q_new - Q)) < 1e-5) { Q <- Q_new; break }
     Q <- Q_new
@@ -127,12 +150,14 @@
   }, error = function(e) NULL)
 }
 
-select_admixture_k_cross_entropy <- function(dos_mat, d_mat = NULL, k_max = 8L, n_folds = 5L, seed = 202611L, out_csv = NULL) {
+select_admixture_k_cross_entropy <- function(dos_mat, d_mat = NULL, k_max = 8L, n_folds = 5L, seed = 202611L, out_csv = NULL, locus_weights = NULL) {
   had_seed <- exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)
   old_seed <- if (had_seed) get(".Random.seed", envir = .GlobalEnv, inherits = FALSE) else NULL
   on.exit(.restore_rng_state(had_seed, old_seed), add = TRUE); set.seed(as.integer(seed))
 
-  X <- .clean_dosage_matrix(dos_mat); n <- nrow(X); m <- ncol(X)
+  X <- .clean_dosage_matrix(dos_mat, locus_weights = locus_weights); n <- nrow(X); m <- ncol(X)
+  w_vec <- attr(X, "locus_weights"); if (is.null(w_vec) || length(w_vec) != m) w_vec <- rep(1.0, m)
+  has_nonuniform_w <- m > 0L && any(abs(w_vec - 1.0) > 1e-6)
   if (n < 3L || m < 2L) {
     Q_opt <- matrix(1.0, nrow = n, ncol = 1L, dimnames = list(rownames(X), "Ancestry_K1"))
     tbl <- data.frame(K = 1L, masked_cross_entropy = NA_real_, masked_rmse = NA_real_,
@@ -141,7 +166,7 @@ select_admixture_k_cross_entropy <- function(dos_mat, d_mat = NULL, k_max = 8L, 
     return(list(best_k = 1L, Q_opt = Q_opt, table_df = tbl, selected_k_cross_entropy = NA_real_))
   }
   k_grid <- seq_len(max(1L, min(as.integer(k_max), n - 1L)))
-  lea_res <- .try_lea_snmf_ce(X, k_grid, d_mat, seed)
+  lea_res <- if (!has_nonuniform_w) .try_lea_snmf_ce(X, k_grid, d_mat, seed) else NULL
   if (!is.null(lea_res)) {
     best_k <- lea_res$best_k; Q_opt <- lea_res$Q_opt; ce_means <- lea_res$ce_means; rmse_means <- lea_res$rmse_means; sils <- lea_res$sils
   } else {
@@ -151,9 +176,11 @@ select_admixture_k_cross_entropy <- function(dos_mat, d_mat = NULL, k_max = 8L, 
       ce_f <- rep(NA_real_, length(folds)); rmse_f <- rep(NA_real_, length(folds))
       for (f in seq_along(folds)) {
         m_idx <- folds[[f]]; if (length(m_idx) == 0L) next
-        X_tr <- X; X_tr[m_idx] <- NA_real_; fit <- .fit_projected_nmf(X_tr, kv, n_iter = 35L)
+        X_tr <- X; X_tr[m_idx] <- NA_real_; fit <- .fit_projected_nmf(X_tr, kv, n_iter = 35L, locus_weights = w_vec)
         P_hat <- pmin(1.0 - 1e-5, pmax(1e-5, (fit$Q %*% fit$F)[m_idx])); x_obs <- X[m_idx]
-        ce_f[f] <- -mean(x_obs * log(P_hat) + (1.0 - x_obs) * log(1.0 - P_hat)); rmse_f[f] <- sqrt(mean((x_obs - P_hat)^2))
+        w_m <- w_vec[((m_idx - 1L) %/% n) + 1L]; sw <- sum(w_m); if (!is.finite(sw) || sw <= 0.0) { w_m[] <- 1.0; sw <- length(w_m) }
+        ce_f[f] <- -sum(w_m * (x_obs * log(P_hat) + (1.0 - x_obs) * log(1.0 - P_hat))) / sw
+        rmse_f[f] <- sqrt(sum(w_m * (x_obs - P_hat)^2) / sw)
       }
       vc <- is.finite(ce_f)
       list(ce_mean = if (any(vc)) mean(ce_f[vc]) else NA_real_, ce_se = if (sum(vc) >= 2L) stats::sd(ce_f[vc]) / sqrt(sum(vc)) else 0.0,
@@ -168,7 +195,7 @@ select_admixture_k_cross_entropy <- function(dos_mat, d_mat = NULL, k_max = 8L, 
       min(k_grid[is.finite(ce_means) & ce_means <= (ce_means[min_i] + ifelse(is.finite(ce_ses[min_i]), ce_ses[min_i], 0.0))])
     }
     set.seed(as.integer(seed) + as.integer(best_k) + 999L)
-    Q_opt <- .fit_projected_nmf(X, best_k, n_iter = 35L)$Q
+    Q_opt <- .fit_projected_nmf(X, best_k, n_iter = 35L, locus_weights = w_vec)$Q
   }
   min_ce <- if (any(is.finite(ce_means))) min(ce_means, na.rm = TRUE) else NA_real_
   tbl <- data.frame(K = as.integer(k_grid), masked_cross_entropy = round(ce_means, 6), masked_rmse = round(rmse_means, 6),
@@ -179,15 +206,17 @@ select_admixture_k_cross_entropy <- function(dos_mat, d_mat = NULL, k_max = 8L, 
        selected_k_cross_entropy = as.numeric(ce_means[which(k_grid == as.integer(best_k))[1L]]))
 }
 
-evaluate_q_reconstruction_ce <- function(dos_mat, q_mat, n_folds = 5L, seed = 202611L) {
+evaluate_q_reconstruction_ce <- function(dos_mat, q_mat, n_folds = 5L, seed = 202611L, locus_weights = NULL) {
   had_seed <- exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)
   old_seed <- if (had_seed) get(".Random.seed", envir = .GlobalEnv, inherits = FALSE) else NULL
   on.exit(.restore_rng_state(had_seed, old_seed), add = TRUE); set.seed(as.integer(seed))
-  X <- .clean_dosage_matrix(dos_mat); Q <- as.matrix(q_mat); storage.mode(Q) <- "numeric"
+  X <- .clean_dosage_matrix(dos_mat, locus_weights = locus_weights); Q <- as.matrix(q_mat); storage.mode(Q) <- "numeric"
+  w_vec <- attr(X, "locus_weights"); if (is.null(w_vec) || length(w_vec) != ncol(X)) w_vec <- rep(1.0, ncol(X))
   if (!is.null(rownames(X)) && !is.null(rownames(Q)) && all(rownames(X) %in% rownames(Q))) Q <- Q[rownames(X), , drop = FALSE]
   if (nrow(X) < 3L || ncol(X) < 2L || nrow(Q) != nrow(X) || ncol(Q) < 1L) return(NA_real_)
   Q[!is.finite(Q)] <- 0.0; Q <- .simplex_rows(Q)
   folds <- .build_speckled_folds(X, n_folds = n_folds); reg_k <- 1e-4 * diag(ncol(Q)); ce_f <- rep(NA_real_, length(folds))
+  n_x <- nrow(X)
   for (f in seq_along(folds)) {
     m_idx <- folds[[f]]; if (length(m_idx) == 0L) next
     X_tr <- X; X_tr[m_idx] <- NA_real_; X_imp <- .impute_col_means(X_tr)$X_imp
@@ -195,7 +224,8 @@ evaluate_q_reconstruction_ce <- function(dos_mat, q_mat, n_folds = 5L, seed = 20
     if (is.null(F_fit)) next
     F_fit[] <- pmin(pmax(as.numeric(F_fit), 1e-4), 1.0 - 1e-4)
     P_hat <- pmin(pmax((Q %*% F_fit)[m_idx], 1e-5), 1.0 - 1e-5); x_obs <- X[m_idx]
-    ce_f[f] <- -mean(x_obs * log(P_hat) + (1.0 - x_obs) * log(1.0 - P_hat))
+    w_m <- w_vec[((m_idx - 1L) %/% n_x) + 1L]; sw <- sum(w_m); if (!is.finite(sw) || sw <= 0.0) { w_m[] <- 1.0; sw <- length(w_m) }
+    ce_f[f] <- -sum(w_m * (x_obs * log(P_hat) + (1.0 - x_obs) * log(1.0 - P_hat))) / sw
   }
   if (any(is.finite(ce_f))) mean(ce_f, na.rm = TRUE) else NA_real_
 }

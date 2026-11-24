@@ -11,15 +11,17 @@
 #   and ICN italicized Packera binomials. Zero PDF outputs.
 # ==============================================================================
 
+if (grDevices::dev.cur() == 1L) grDevices::pdf(NULL)
+
 .format_tree_tip_expr <- function(sample_id, taxon_name) {
   tx <- ifelse(is.na(taxon_name) | !nzchar(taxon_name), "", as.character(taxon_name))
   sid <- gsub("'", "", as.character(sample_id))
   if (!nzchar(tx)) return(paste0("'", sid, "'"))
-  if (grepl("sp\\.\\s*nov", tx, ignore.case = TRUE)) {
-    rest <- trimws(sub("^Packera\\s+", "", tx))
+  if (grepl("sp\\.[[:space:]]*nov", tx, ignore.case = TRUE)) {
+    rest <- trimws(sub("^Packera[[:space:]]+", "", tx))
     return(sprintf("paste(italic('P.'), ' %s [', '%s', ']')", gsub("'", "", rest), sid))
   }
-  short_tx <- sub("^Packera\\s+", "P. ", tx)
+  short_tx <- sub("^Packera[[:space:]]+", "P. ", tx)
   sprintf("paste(italic('%s'), ' [', '%s', ']')", gsub("'", "", short_tx), sid)
 }
 
@@ -73,8 +75,7 @@
           queue <- nd; res_t <- integer(0)
           while (length(queue) > 0L) {
             cur <- queue[1L]; queue <- queue[-1L]
-            if (cur <= n_rt_tips) res_t <- c(res_t, cur)
-            else queue <- c(queue, rt$edge[rt$edge[, 1L] == cur, 2L])
+            if (cur <= n_rt_tips) res_t <- c(res_t, cur) else queue <- c(queue, rt$edge[rt$edge[, 1L] == cur, 2L])
           }
           res_t
         }
@@ -234,7 +235,8 @@ render_fig06a_genomic_pcoa_tree_png <- function(out_png, pass_df, assign_df, q_m
       identical(Sys.getenv("PACKERA_SKIP_FIGURES", unset = ""), "1")) return(invisible(""))
   if (!requireNamespace("ggplot2", quietly = TRUE) || !requireNamespace("patchwork", quietly = TRUE)) return(invisible(""))
 
-  plot_df <- dplyr::left_join(pass_df, assign_df[, setdiff(names(assign_df), c("catalogNumber", "population_id")), drop = FALSE], by = "genetic_sample_id")
+  join_cols <- c("genetic_sample_id", setdiff(names(assign_df), names(pass_df)))
+  plot_df <- dplyr::left_join(pass_df, assign_df[, join_cols, drop = FALSE], by = "genetic_sample_id")
   plot_df$display_taxon <- ifelse(!is.na(plot_df$species_standardized) & nzchar(plot_df$species_standardized), plot_df$species_standardized, ifelse(!is.na(plot_df$geno_predicted_taxon), plot_df$geno_predicted_taxon, "Unknown"))
   tx_levels <- sort(unique(plot_df$display_taxon))
   pal_vec <- get_combinatorial_palette_r(tx_levels)
@@ -250,6 +252,11 @@ render_fig06a_genomic_pcoa_tree_png <- function(out_png, pass_df, assign_df, q_m
   pair_key <- ifelse(!is.na(plot_df$replicate_pair_id) & nzchar(plot_df$replicate_pair_id), plot_df$replicate_pair_id, plot_df$genetic_sample_id)
   plot_df$rep_label <- ifelse(!duplicated(pair_key), plot_df$genetic_sample_id, "")
 
+  type_df <- if ("type_status" %in% names(plot_df)) {
+    ts_low <- tolower(trimws(as.character(plot_df$type_status)))
+    plot_df[!is.na(ts_low) & nzchar(ts_low) & !(ts_low %in% c("none", "na", "null", "false", "0", "not_a_type")), , drop = FALSE]
+  } else plot_df[0L, , drop = FALSE]
+
   p_a <- ggplot2::ggplot(plot_df, ggplot2::aes(x = .data$PCo1, y = .data$PCo2)) +
     ggplot2::geom_segment(data = rep_segs, ggplot2::aes(x = .data$x, y = .data$y, xend = .data$xend, yend = .data$yend), linetype = "dashed", color = "#64748b", linewidth = 0.45, inherit.aes = FALSE) +
     ggplot2::geom_point(ggplot2::aes(color = .data$display_taxon, shape = .data$display_taxon), size = 3.1, fill = NA, stroke = 1.05) +
@@ -258,6 +265,12 @@ render_fig06a_genomic_pcoa_tree_png <- function(out_png, pass_df, assign_df, q_m
     ggplot2::labs(title = "A. Polyploid-Dosage Genomic PCoA (M/P Pairs Dashed)", x = sprintf("PCo1 (%0.1f%%)", pco_eig_pct[1L]), y = sprintf("PCo2 (%0.1f%%)", pco_eig_pct[min(2L, length(pco_eig_pct))])) +
     theme_packera_pub(base_size = 9.5) +
     ggplot2::theme(legend.position = "right")
+
+  if (nrow(type_df) > 0L) {
+    p_a <- p_a +
+      ggplot2::geom_point(data = type_df, ggplot2::aes(x = .data$PCo1, y = .data$PCo2), shape = 23L, size = 5.4, stroke = 1.15, color = "#0f172a", fill = NA, inherit.aes = FALSE, show.legend = FALSE) +
+      ggplot2::geom_point(data = type_df, ggplot2::aes(x = .data$PCo1, y = .data$PCo2, color = .data$display_taxon), shape = 5L, size = 3.8, stroke = 1.05, fill = NA, inherit.aes = FALSE, show.legend = FALSE)
+  }
 
   if (requireNamespace("ggrepel", quietly = TRUE)) {
     p_a <- p_a + ggrepel::geom_text_repel(data = plot_df, ggplot2::aes(label = .data$rep_label, color = .data$display_taxon), size = 2.55, box.padding = 0.42, point.padding = 0.28, min.segment.length = 0.15, force = 5.0, max.overlaps = Inf, seed = 42, show.legend = FALSE)
@@ -367,7 +380,11 @@ render_fig06b_reticulation_gdi_png <- function(out_png, tri_df, fbranch_df, gdi_
   }
 
   mm_sub <- if (!is.null(mmrr_summary_df) && nrow(mmrr_summary_df) > 0L && is.finite(mmrr_summary_df$mmrr_beta_ibd[1L])) {
-    sprintf("MMRR: b_IBD=%.2f (p=%.3f), b_IBE=%.2f (p=%.3f)", mmrr_summary_df$mmrr_beta_ibd[1L], mmrr_summary_df$mmrr_p_ibd[1L], mmrr_summary_df$mmrr_beta_ibe[1L], mmrr_summary_df$mmrr_p_ibe[1L])
+    if (is.finite(mmrr_summary_df$mmrr_beta_ibe[1L])) {
+      sprintf("MMRR: b_IBD=%.2f (p=%.3f), b_IBE=%.2f (p=%.3f)", mmrr_summary_df$mmrr_beta_ibd[1L], mmrr_summary_df$mmrr_p_ibd[1L], mmrr_summary_df$mmrr_beta_ibe[1L], mmrr_summary_df$mmrr_p_ibe[1L])
+    } else {
+      sprintf("MMRR (IBD-only): b_IBD=%.2f (p=%.3f), IBE=NA", mmrr_summary_df$mmrr_beta_ibd[1L], mmrr_summary_df$mmrr_p_ibd[1L])
+    }
   } else {
     "Insufficient georeferenced samples for MMRR/FEEMS"
   }

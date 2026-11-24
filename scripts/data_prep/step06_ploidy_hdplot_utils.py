@@ -220,16 +220,34 @@ def _evaluate_hdplot_loci(
     sub_pass: np.ndarray, sub_ref: np.ndarray, ref_d_ref: np.ndarray, alt_d_ref: np.ndarray,
     locus_ids: Sequence[str], h_max: float = 0.60, d_max: float = 4.0,
     paraloss_catalog: Optional[Mapping[str, Tuple[int, float]]] = None, genomics_dir: Optional[Path] = None,
+    ref_cytotypes: Optional[Sequence[Optional[str]]] = None,
+    ref_ploidies: Optional[Sequence[Optional[int]]] = None,
 ) -> Tuple[np.ndarray, pd.DataFrame]:
-    """Apply McKinney et al. (2017) HDplot paralog filter (`H <= 0.60`, `|D| <= 4.0`) without MAF pruning."""
+    """Apply McKinney et al. (2017) polyploid-stratified HDplot filter (`H <= 0.60`, `|D| <= 4.0`) without MAF pruning."""
     cat = paraloss_catalog if paraloss_catalog is not None else _load_paraloss1272_catalog(genomics_dir)
     n_loci = len(locus_ids)
     keep_mask = np.ones(n_loci, dtype=bool)
     diag_rows: List[Dict[str, Any]] = []
-    has_ref_depths = ref_d_ref.size > 0 and alt_d_ref.size > 0
+
+    n_ref = int(sub_ref.shape[0]) if sub_ref.ndim == 2 else 0
+    diploid_ref_idx: List[int] = []
+    if ref_cytotypes is not None or ref_ploidies is not None:
+        for i in range(n_ref):
+            cy = str(ref_cytotypes[i] or "").strip().lower() if (ref_cytotypes is not None and i < len(ref_cytotypes)) else ""
+            pl = _parse_int_ploidy(ref_ploidies[i]) if (ref_ploidies is not None and i < len(ref_ploidies)) else None
+            if cy == "2x" or (cy in ("", "mixed/uncertain") and pl == 2):
+                diploid_ref_idx.append(i)
+    use_diploid_subset = len(diploid_ref_idx) >= 4
+    if use_diploid_subset:
+        eval_ref = sub_ref[diploid_ref_idx, :]
+        eval_rd = ref_d_ref[diploid_ref_idx, :] if ref_d_ref.size > 0 else ref_d_ref
+        eval_ad = alt_d_ref[diploid_ref_idx, :] if alt_d_ref.size > 0 else alt_d_ref
+    else:
+        eval_ref, eval_rd, eval_ad = sub_ref, ref_d_ref, alt_d_ref
+    has_ref_depths = eval_rd.size > 0 and eval_ad.size > 0
 
     for j in range(n_loci):
-        col_p, col_r = sub_pass[:, j], sub_ref[:, j]
+        col_p, col_r = sub_pass[:, j], eval_ref[:, j]
         fin_p, fin_mask_r = col_p[np.isfinite(col_p)], np.isfinite(col_r)
         n_called_r = int(np.sum(fin_mask_r))
         het_mask_r = fin_mask_r & (col_r > 0.05) & (col_r < 0.95)
@@ -237,24 +255,34 @@ def _evaluate_hdplot_loci(
         h_obs = float(n_hets_r / float(n_called_r)) if n_called_r > 0 else 0.0
         na_sum = nb_sum = d_stat = 0.0
         if has_ref_depths and n_hets_r > 0:
-            rr, aa = ref_d_ref[het_mask_r, j], alt_d_ref[het_mask_r, j]
+            rr, aa = eval_rd[het_mask_r, j], eval_ad[het_mask_r, j]
             if np.any(ok_d := np.isfinite(rr) & np.isfinite(aa)):
                 na_sum, nb_sum = float(np.sum(rr[ok_d])), float(np.sum(aa[ok_d]))
                 if (n_tot := na_sum + nb_sum) >= 10.0:
                     d_stat = float((na_sum - 0.5 * n_tot) / np.sqrt(0.25 * n_tot))
+        matched_pl, is_sc, p_wt = _lookup_paraloss1272_locus(locus_ids[j], cat)
+        if matched_pl and (is_sc == 1 or p_wt >= 1.25):
+            pl_status = "single_copy"
+        elif matched_pl and p_wt <= 0.75:
+            pl_status = "multi_copy"
+        elif matched_pl:
+            pl_status = "neutral"
+        else:
+            pl_status = "unannotated"
+        eff_h_max = max(float(h_max), 0.65) if (not use_diploid_subset and matched_pl and is_sc == 1) else float(h_max)
         reason = "PASS"
         if fin_p.size < 2: keep_mask[j] = False; reason = "monomorphic_or_sparse"
-        elif n_called_r >= 4 and h_obs > float(h_max): keep_mask[j] = False; reason = f"HDplot_H>{h_max:.2f}"
+        elif n_called_r >= 4 and h_obs > eff_h_max: keep_mask[j] = False; reason = f"HDplot_H>{eff_h_max:.2f}"
         elif (na_sum + nb_sum) >= 10.0 and abs(d_stat) > float(d_max): keep_mask[j] = False; reason = f"HDplot_|D|>{d_max:.1f}"
         elif float(np.std(fin_p)) <= 1e-8: keep_mask[j] = False; reason = "monomorphic_or_sparse"
-        matched_pl, is_sc, p_wt = _lookup_paraloss1272_locus(locus_ids[j], cat)
         diag_rows.append({
             "locus_id": locus_ids[j], "n_called_ref": n_called_r, "n_hets_ref": n_hets_r,
             "H_obs": round(h_obs, 4) if n_called_r > 0 else np.nan,
             "het_ref_reads": round(na_sum, 1), "het_alt_reads": round(nb_sum, 1),
             "het_total_reads": round(na_sum + nb_sum, 1), "D_read_ratio": round(d_stat, 4),
             "hdplot_keep": 1 if keep_mask[j] else 0, "filter_reason": reason,
-            "is_paraloss1272_single_copy": int(is_sc), "locus_paralogy_weight": round(float(p_wt if matched_pl else 1.0), 3),
+            "paraloss_status": pl_status, "is_paraloss1272_single_copy": int(is_sc),
+            "locus_paralogy_weight": round(float(p_wt if matched_pl else 1.0), 3),
         })
     return keep_mask, pd.DataFrame(diag_rows)
 

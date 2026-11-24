@@ -4,6 +4,8 @@
 # 300-DPI PNG-only 4-panel Step 06 audit plate (`fig06c_cytonuclear_paralog_cytotype_audit.png`)
 # ==============================================================================
 
+if (grDevices::dev.cur() == 1L) grDevices::pdf(NULL)
+
 if (!exists("save_packera_png_300", mode = "function")) {
   for (.p in c("scripts/figures/theme_packera_pub.R", "../figures/theme_packera_pub.R")) {
     if (file.exists(.p)) {
@@ -158,8 +160,12 @@ if (!exists("save_packera_png_300", mode = "function")) {
     }
   }
   if (is.data.frame(organellar_placement_df) && nrow(organellar_placement_df) > 0L && all(c("genetic_sample_id", "locus", "best_match_taxon") %in% names(organellar_placement_df))) {
+    pl_use <- organellar_placement_df
+    if ("containment_gate_pass" %in% names(pl_use)) {
+      pl_use <- pl_use[!is.na(pl_use$containment_gate_pass) & as.integer(pl_use$containment_gate_pass) == 1L, , drop = FALSE]
+    }
     for (spec in list(c("plastid", "cp"), c("its", "its"), c("waxy", "waxy"))) {
-      sub_p <- organellar_placement_df[tolower(trimws(organellar_placement_df$locus)) == spec[1L], , drop = FALSE]
+      sub_p <- pl_use[tolower(trimws(pl_use$locus)) == spec[1L], , drop = FALSE]
       if (nrow(sub_p) > 0L) {
         mp <- match(sids, as.character(sub_p$genetic_sample_id))
         okp <- !is.na(mp)
@@ -174,7 +180,6 @@ if (!exists("save_packera_png_300", mode = "function")) {
   if (!any(has_loc)) {
     return(.empty_panel_06c(t_b, "No skimmed plastome, nrITS, or nuclear waxy placements detected", "Stage skimmed FASTA references or cytonuclear_discordance.csv in cohort"))
   }
-  disc[disc == 0L & !is.na(cp) & !is.na(nuc) & grepl("^Packera ", cp) & cp != nuc] <- 1L
 
   keep_idx <- which(has_loc)
   if (length(keep_idx) > 26L) keep_idx <- keep_idx[order(-disc[keep_idx], sids[keep_idx])[seq_len(26L)]]

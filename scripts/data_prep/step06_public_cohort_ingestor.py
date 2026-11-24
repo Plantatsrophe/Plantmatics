@@ -10,6 +10,9 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 import numpy as np
 import pandas as pd
 
+from scripts.data_prep.step06_public_tree_qc_utils import (
+    _is_outgroup_tip, _mad_screen_tips, _parse_newick_tips_and_dists,
+)
 from scripts.data_prep.step06_sample_metadata_utils import StagedGenomicAssets, _safe_text
 from scripts.data_prep.step06_synonym_utils import canonical_taxon_equiv_key, extract_species_from_seed_key, normalize_step06_taxon_name
 from scripts.data_prep.step06_voucher_linker_utils import _build_exsiccatae_index, _link_sample_to_voucher
@@ -25,7 +28,6 @@ SANGER_LOCUS_FILES = {
     "waxy_nuclear": "public_packera_waxy_nuclear.fasta",
     "bold_barcodes": "public_packera_bold_barcodes.fasta",
 }
-_NWK_TOK_RE = re.compile(r"([(),:;])")
 _BINOM_RE = re.compile(r"^Packera\s+(?:x\s+)?[a-z][a-z-]+$")
 
 
@@ -84,55 +86,6 @@ def _iter_fasta(path: Path, max_per_taxon: Optional[int] = None) -> List[Tuple[s
         if hdr and buf and (max_per_taxon is None or counts[_canon(_std_taxon(hdr))] < max_per_taxon):
             out.append((hdr, "".join(buf).upper()))
     return out
-
-
-def _parse_newick_tips_and_dists(text: str) -> Tuple[Dict[str, float], Dict[str, float], Dict[Tuple[str, str], float], Dict[str, List[str]]]:
-    s = text.strip()
-    if "#nexus" in s[:200].lower():
-        m = re.search(r"\btree\b[^=]*=\s*(\([^;]+;)", s, re.I | re.S)
-        s = m.group(1) if m else ""
-    if "(" not in s or ";" not in s: return {}, {}, {}, {}
-    tokens = [t.strip() for t in _NWK_TOK_RE.split(s[: s.index(";") + 1]) if t.strip()]
-    children, blen, label, supp, stack, nid, cur, i = defaultdict(list), {}, {}, {}, [], 0, -1, 0
-    while i < len(tokens):
-        tk = tokens[i]
-        if tk == "(": nid += 1; (children[stack[-1]].append(nid) if stack else None); stack.append(nid); cur = nid
-        elif tk == ",": cur = -1
-        elif tk == ")": cur = stack.pop() if stack else -1
-        elif tk == ":":
-            if i + 1 < len(tokens) and cur > 0:
-                try: blen[cur] = max(0.0, float(tokens[i + 1]))
-                except ValueError: blen[cur] = 0.0
-                i += 1
-        elif tk == ";": break
-        elif cur in children and cur > 0:
-            try: supp[cur] = float(tk)
-            except ValueError: pass
-        else: nid += 1; (children[stack[-1]].append(nid) if stack else None); label[nid] = tk.strip("'\""); cur = nid
-        i += 1
-    parent_of = {ch: pa for pa, chs in children.items() for ch in chs}
-    tip_lens, tip_supp, tip_nodes, tip_hdrs = {}, {}, {}, defaultdict(list)
-    for nd, raw_lbl in label.items():
-        if tx := _std_taxon(raw_lbl):
-            tip_hdrs[tx].append(raw_lbl); tip_lens.setdefault(tx, blen.get(nd, 0.0))
-            tip_supp.setdefault(tx, supp.get(parent_of.get(nd, 0), 0.90)); tip_nodes.setdefault(tx, nd)
-    coph, taxa, anc = {}, list(tip_nodes.keys()), {}
-    for tx, nd in tip_nodes.items():
-        dmap, acc, c = {}, 0.0, nd
-        while c in parent_of: dmap[c] = acc; acc += blen.get(c, 0.01); c = parent_of[c]
-        dmap[c] = acc; anc[tx] = dmap
-    for ia, ta in enumerate(taxa):
-        for tb in taxa[ia + 1 :]:
-            if common := [a for a in anc[ta] if a in anc[tb]]:
-                coph[(ta, tb)] = coph[(tb, ta)] = min(anc[ta][a] + anc[tb][a] for a in common)
-    return tip_lens, tip_supp, coph, tip_hdrs
-
-
-def _mad_screen_tips(tip_lens: Dict[str, float], mad_z: float = 5.0) -> Set[str]:
-    if len(tip_lens) < 6: return set(tip_lens.keys())
-    vals = np.array(list(tip_lens.values()), dtype=np.float64); med = float(np.median(vals))
-    mad = max(1e-6, 1.4826 * float(np.median(np.abs(vals - med))))
-    return {tx for tx, v in tip_lens.items() if not (((v - med) / mad) > mad_z and v > 3.0 * max(med, 1e-4))}
 
 
 def _kmers_11(seq: str) -> Set[str]:
@@ -301,10 +254,18 @@ def resolve_and_stage_dynamic_genomic_cohort(
                     if len(re.sub(r"[^ACGT]", "", sq)) >= 50 and (t := _std_taxon(h)): tset.add(t); hyb_raw_hdrs[t].append(h)
                 hyb_taxa_by_file[p.name] = tset
             else:
-                tl, sp_map, cp, t_hdrs = _parse_newick_tips_and_dists(txt); kept = _mad_screen_tips(tl); hyb_taxa_by_file[p.name] = kept
-                for k in kept:
-                    if k in sp_map: hyb_supp.setdefault(k, sp_map[k])
-                    hyb_raw_hdrs[k].extend(t_hdrs.get(k, []))
+                tl, sp_map, cp, t_hdrs = _parse_newick_tips_and_dists(txt, norm_fn=_std_taxon)
+                tip_to_tx = {uid: tx for tx, uids in t_hdrs.items() for uid in uids}
+                kept_uids = _mad_screen_tips(tl, tip_taxa=tip_to_tx)
+                kept_taxa: Set[str] = set()
+                for uid in kept_uids:
+                    if not (tx := tip_to_tx.get(uid) or _std_taxon(uid)):
+                        continue
+                    kept_taxa.add(tx)
+                    if uid in sp_map:
+                        hyb_supp[tx] = max(hyb_supp.get(tx, 0.0), sp_map[uid])
+                    hyb_raw_hdrs[tx].append(re.sub(r"__tip\d+$", "", uid))
+                hyb_taxa_by_file[p.name] = kept_taxa
                 hyb_coph.update(cp)
 
     sanger_pool = {loc: _screen_fasta_records(_iter_fasta(p, max_per_taxon=20), loc) for loc, fn in SANGER_LOCUS_FILES.items() if (p := next((f for f in assets.public_reference_files if f.name.lower() == fn), None)) and p.is_file()}

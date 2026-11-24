@@ -382,11 +382,13 @@ def run_offtarget_organellar_skim(
     its_ribo = _cluster_haplotypes(its_cons, "ITS_Ribotype", pos_maps=its_pos, min_id=0.990)
     waxy_clades = _cluster_haplotypes(waxy_cons, "Waxy_Lineage", pos_maps=wx_pos, min_id=0.990)
     cp_cache, its_cache, waxy_cache = {}, {}, {}
-    cp_full = {sid: match_best_public_lineage_with_metrics(seq, plastid_seeds, _kcache=cp_cache, q_pos=cp_pos.get(sid)) for sid, seq in cp_cons.items()}
-    pub_cp_match = {sid: vals[0] for sid, vals in cp_full.items()}
+    cp_full = {sid: match_best_public_lineage_with_metrics(seq, plastid_seeds, _kcache=cp_cache, q_pos=cp_pos.get(sid), min_containment=0.80, min_shared_11mers=80) for sid, seq in cp_cons.items()}
+    its_full = {sid: match_best_public_lineage_with_metrics(seq, its_seeds, _kcache=its_cache, q_pos=its_pos.get(sid), min_containment=0.80, min_shared_11mers=80) for sid, seq in its_cons.items()}
+    waxy_full = {sid: match_best_public_lineage_with_metrics(seq, waxy_seeds, _kcache=waxy_cache, q_pos=wx_pos.get(sid), min_containment=0.80, min_shared_11mers=80) for sid, seq in waxy_cons.items()}
+    pub_cp_match = {sid: (vals[0] if (vals[1] >= 0.80 and vals[2] >= 80) else "") for sid, vals in cp_full.items()}
     cp_metrics = {sid: (vals[1], vals[2]) for sid, vals in cp_full.items()}
-    pub_its_match = {sid: _match_best_public_lineage(seq, its_seeds, _kcache=its_cache) for sid, seq in its_cons.items()}
-    waxy_match = {sid: _match_best_public_lineage(seq, waxy_seeds, _kcache=waxy_cache) or waxy_clades.get(sid, "") for sid, seq in waxy_cons.items()}
+    pub_its_match = {sid: (vals[0] if (vals[1] >= 0.80 and vals[2] >= 80) else "") for sid, vals in its_full.items()}
+    waxy_match = {sid: (vals[0] if (vals[1] >= 0.80 and vals[2] >= 80) else "") for sid, vals in waxy_full.items()}
     nuc_taxon_map = _discover_empirical_nuclear_taxon_map(genomics_dir, out_dir)
     cyto_rows = _detect_cytonuclear_discordance(
         cp_clades, its_ribo, nuclear_tree_path=nuclear_tree,

@@ -75,8 +75,9 @@ def _cluster_haplotypes(
 
 
 def match_best_public_lineage_with_metrics(
-    seq: str, ref_seeds: Mapping[str, str], k: int = 13,
+    seq: str, ref_seeds: Mapping[str, str], k: int = 11,
     _kcache: Optional[Dict[str, Any]] = None, q_pos: Optional[Mapping[int, str]] = None,
+    min_containment: float = 0.80, min_shared_11mers: int = 80,
 ) -> Tuple[str, float, int]:
     """Identify closest public Packera taxon reference returning (taxon, kmer_containment, n_shared)."""
     _ = q_pos
@@ -84,14 +85,16 @@ def match_best_public_lineage_with_metrics(
         return "", 0.0, 0
     cache = _kcache if _kcache is not None else {}
     max_ref_len = max((len(s) for s in ref_seeds.values()), default=0)
-    use_k = 17 if (len(seq) > 5000 and max_ref_len >= 20000) else k
+    is_plastome_q = len(seq) > 5000 and max_ref_len >= 20000
+    use_k = 17 if is_plastome_q else k
     if len(seq) < use_k:
         return "", 0.0, 0
     q_kmers = {seq[i : i + use_k] for i in range(len(seq) - use_k + 1) if "N" not in seq[i : i + use_k]}
     min_i = 15 if len(q_kmers) >= 30 else max(3, len(q_kmers) // 3)
     if not q_kmers:
         return "", 0.0, 0
-    if "__refs__" not in cache:
+    ckey = f"__refs__{use_k}"
+    if ckey not in cache:
         ref_list, sp_kmers = [], defaultdict(set)
         for rkey, rseq in ref_seeds.items():
             if not (sp := _extract_species_from_seed_key(rkey)) or len(rseq) < use_k:
@@ -104,12 +107,12 @@ def match_best_public_lineage_with_metrics(
                 is_pure_its = (180 <= len(rseq) <= 670) and ("large|subunit" not in low_rk) and ("external" not in low_rk)
                 ref_list.append((sp, rk, len(rseq), is_pure_its))
                 sp_kmers[sp].update(rk)
-        cache["__refs__"] = (ref_list, Counter(km for rset in sp_kmers.values() for km in rset))
-    ref_list, df_cnt = cache["__refs__"]
-    is_plastome_q = len(seq) > 5000 and max_ref_len >= 20000
+        cache[ckey] = (ref_list, Counter(km for rset in sp_kmers.values() for km in rset))
+    ref_list, df_cnt = cache[ckey]
     complete_refs = [(sp, rk, rl, p_its) for sp, rk, rl, p_its in ref_list if rl >= 125000] if is_plastome_q else []
     pure_its_refs = [(sp, rk, rl, p_its) for sp, rk, rl, p_its in ref_list if p_its] if (not is_plastome_q and len(seq) <= 5000) else []
-    pools = ((complete_refs, 0.20), (ref_list, 0.35)) if complete_refs else (((pure_its_refs, 0.35), (ref_list, 0.35)) if pure_its_refs else ((ref_list, 0.35),))
+    pools = ((complete_refs, 0.10), (ref_list, 0.10)) if complete_refs else (((pure_its_refs, 0.10), (ref_list, 0.10)) if pure_its_refs else ((ref_list, 0.10),))
+    diag_best: Tuple[str, float, int] = ("", 0.0, 0)
     for pool, min_cov in pools:
         best_sp, best_sc, best_cont, best_n = "", (0.0, 0.0, 0.0), 0.0, 0
         for sp, r_kmers, rl, _ in pool:
@@ -123,16 +126,23 @@ def match_best_public_lineage_with_metrics(
             if (sc := (cov_key, idf_sc, float(rl >= 500))) > best_sc:
                 best_sc, best_sp, best_cont, best_n = sc, sp, round(cov_base, 4), len(shared)
         if best_sp:
-            return best_sp, best_cont, best_n
-    return "", 0.0, 0
+            if best_cont >= float(min_containment) and best_n >= int(min_shared_11mers):
+                return best_sp, best_cont, best_n
+            if (best_cont, best_n) > (diag_best[1], diag_best[2]):
+                diag_best = ("", best_cont, best_n)
+    return diag_best
 
 
 def _match_best_public_lineage(
-    seq: str, ref_seeds: Mapping[str, str], k: int = 13,
+    seq: str, ref_seeds: Mapping[str, str], k: int = 11,
     _kcache: Optional[Dict[str, Any]] = None, q_pos: Optional[Mapping[int, str]] = None,
+    min_containment: float = 0.80, min_shared_11mers: int = 80,
 ) -> str:
-    """Identify the closest public Packera taxon reference using strand-aware k-mer recall and IDF specificity."""
-    return match_best_public_lineage_with_metrics(seq, ref_seeds, k=k, _kcache=_kcache, q_pos=q_pos)[0]
+    """Identify the closest public Packera taxon reference passing strict containment and shared k-mer gates."""
+    return match_best_public_lineage_with_metrics(
+        seq, ref_seeds, k=k, _kcache=_kcache, q_pos=q_pos,
+        min_containment=min_containment, min_shared_11mers=min_shared_11mers,
+    )[0]
 
 
 def _infer_tree_neighbor_taxa(nuclear_tree_path: Optional[Path], raw_sp_of: Mapping[str, str]) -> Dict[str, str]:

@@ -29,18 +29,115 @@ if (grDevices::dev.cur() == 1L) {
   max(-1.0, min(1.0, (po - pe) / (1.0 - pe)))
 }
 
-.compute_allele_sharing_distance <- function(dosage_mat) {
+.load_locus_weights_tsv <- function(parsed_dir, locus_names) {
+  n_l <- length(locus_names)
+  w <- rep(1.0, n_l)
+  if (n_l > 0L) names(w) <- as.character(locus_names)
+  if (is.null(parsed_dir) || !nzchar(trimws(as.character(parsed_dir))) || n_l == 0L) return(w)
+  lw_path <- file.path(as.character(parsed_dir), "locus_weights.tsv")
+  if (!file.exists(lw_path)) return(w)
+  lw_df <- tryCatch(utils::read.delim(lw_path, stringsAsFactors = FALSE), error = function(e) NULL)
+  if (is.null(lw_df) || nrow(lw_df) == 0L || !("locus_id" %in% names(lw_df))) return(w)
+  wcol <- intersect(c("locus_paralogy_weight", "weight"), names(lw_df))[1L]
+  if (is.na(wcol)) return(w)
+  mt <- match(as.character(locus_names), as.character(lw_df$locus_id))
+  ok <- !is.na(mt)
+  if (any(ok)) {
+    vals <- suppressWarnings(as.numeric(lw_df[[wcol]][mt[ok]]))
+    good <- is.finite(vals) & vals >= 0.0
+    if (any(good)) w[ok][good] <- vals[good]
+  }
+  w
+}
+
+.is_step06_concept_or_heterotypic_holdout <- function(df) {
+  n <- if (is.data.frame(df)) nrow(df) else 0L
+  if (n == 0L) return(logical(0))
+  is_open <- rep(FALSE, n)
+  if ("is_open_or_hybrid_concept" %in% names(df)) {
+    v <- df$is_open_or_hybrid_concept
+    is_open <- if (is.logical(v)) !is.na(v) & v else tolower(trimws(as.character(v))) %in% c("1", "true", "t", "yes")
+  }
+  is_het_type <- rep(FALSE, n)
+  if ("concept_synonymy_status" %in% names(df)) {
+    cs <- tolower(trimws(as.character(df$concept_synonymy_status)))
+    has_ts <- if ("type_status" %in% names(df)) {
+      ts <- tolower(trimws(as.character(df$type_status)))
+      !is.na(ts) & nzchar(ts) & !(ts %in% c("none", "na", "null", "false", "0", "not_a_type"))
+    } else if ("is_type_specimen" %in% names(df)) {
+      vt <- df$is_type_specimen
+      if (is.logical(vt)) !is.na(vt) & vt else tolower(trimws(as.character(vt))) %in% c("1", "true", "t", "yes")
+    } else rep(FALSE, n)
+    is_het_type <- !is.na(cs) & cs == "heterotypic_synonym" & has_ts
+  }
+  is_open | is_het_type
+}
+
+.project_pcoa_gower_oos <- function(d_tr, d_te_tr, k_max = 5L) {
+  d_tr <- as.matrix(d_tr); storage.mode(d_tr) <- "numeric"; n_tr <- nrow(d_tr)
+  if (is.null(dim(d_te_tr))) {
+    d_te_tr <- matrix(as.numeric(d_te_tr), nrow = 1L, ncol = n_tr)
+  } else {
+    d_te_tr <- as.matrix(d_te_tr); storage.mode(d_te_tr) <- "numeric"
+  }
+  n_te <- nrow(d_te_tr)
+  if (n_tr < 2L || ncol(d_te_tr) != n_tr) {
+    return(list(X_train = matrix(0.0, nrow = n_tr, ncol = 1L), X_test = matrix(0.0, nrow = n_te, ncol = 1L), eig = numeric(0)))
+  }
+  k_req <- max(1L, min(as.integer(k_max), n_tr - 1L))
+  pco <- tryCatch(stats::cmdscale(stats::as.dist(d_tr), k = k_req, eig = TRUE), error = function(e) NULL)
+  if (is.null(pco) || !is.matrix(pco$points) || ncol(pco$points) == 0L) {
+    return(list(X_train = matrix(0.0, nrow = n_tr, ncol = 1L), X_test = matrix(0.0, nrow = n_te, ncol = 1L), eig = numeric(0)))
+  }
+  n_pts <- ncol(pco$points); eig_use <- pco$eig[seq_len(min(n_pts, length(pco$eig)))]
+  pos_ax <- which(is.finite(eig_use) & eig_use > 1e-10)
+  if (length(pos_ax) == 0L) {
+    return(list(X_train = matrix(0.0, nrow = n_tr, ncol = 1L), X_test = matrix(0.0, nrow = n_te, ncol = 1L), eig = numeric(0)))
+  }
+  lam <- eig_use[pos_ax]; X_tr <- pco$points[, pos_ax, drop = FALSE]
+  if (n_te == 0L) {
+    X_te <- matrix(0.0, nrow = 0L, ncol = length(pos_ax))
+  } else {
+    A_tr <- d_tr^2; c_tr <- colMeans(A_tr); mu_tr <- mean(A_tr)
+    A_te <- d_te_tr^2; r_te <- rowMeans(A_te)
+    B_te <- -0.5 * (sweep(sweep(A_te, 1L, r_te, "-"), 2L, c_tr, "-") + mu_tr)
+    X_te <- B_te %*% sweep(X_tr, 2L, lam, "/")
+  }
+  rownames(X_tr) <- rownames(d_tr)
+  if (n_te > 0L) rownames(X_te) <- rownames(d_te_tr)
+  colnames(X_tr) <- colnames(X_te) <- paste0("PCo", seq_along(pos_ax))
+  list(X_train = X_tr, X_test = X_te, eig = lam)
+}
+
+.compute_allele_sharing_distance <- function(dosage_mat, locus_weights = NULL) {
   n <- nrow(dosage_mat); p <- ncol(dosage_mat)
   d_mat <- matrix(0.0, nrow = n, ncol = n, dimnames = list(rownames(dosage_mat), rownames(dosage_mat)))
   n_shared_mat <- matrix(0L, nrow = n, ncol = n)
   min_shared <- if (p >= 200L) 150L else max(10L, as.integer(floor(0.20 * p)))
+  w_vec <- NULL
+  if (!is.null(locus_weights) && p > 0L) {
+    w_tmp <- rep(1.0, p); cn <- colnames(dosage_mat)
+    if (!is.null(names(locus_weights)) && !is.null(cn)) {
+      mt <- match(cn, names(locus_weights)); ok_w <- !is.na(mt)
+      w_tmp[ok_w] <- suppressWarnings(as.numeric(locus_weights[mt[ok_w]]))
+    } else if (length(locus_weights) == p) {
+      w_tmp <- suppressWarnings(as.numeric(locus_weights))
+    }
+    w_tmp[!is.finite(w_tmp) | w_tmp < 0.0] <- 1.0
+    if (any(abs(w_tmp - 1.0) > 1e-9)) w_vec <- w_tmp
+  }
   if (n >= 2L) {
     eval_row_i <- function(i) {
       vi <- dosage_mat[i, ]; mi <- is.finite(vi); j_seq <- (i + 1L):n
       ns_v <- integer(length(j_seq)); dv_v <- rep(NA_real_, length(j_seq))
       for (k in seq_along(j_seq)) {
         vj <- dosage_mat[j_seq[k], ]; sh <- mi & is.finite(vj); ns <- sum(sh); ns_v[k] <- ns
-        if (ns >= min_shared) dv_v[k] <- mean(abs(vi[sh] - vj[sh]))
+        if (ns >= min_shared) {
+          ad <- abs(vi[sh] - vj[sh])
+          dv_v[k] <- if (is.null(w_vec)) mean(ad) else {
+            ws <- w_vec[sh]; sw <- sum(ws); if (sw > 0.0) sum(ws * ad) / sw else mean(ad)
+          }
+        }
       }
       list(i = i, j_seq = j_seq, ns = ns_v, d = dv_v)
     }
@@ -258,7 +355,7 @@ reconcile_step06_cytonuclear_discordance <- function(full_audit, assign_df = NUL
   canon_tx <- function(x) {
     s <- tolower(trimws(gsub("_", " ", ifelse(is.na(x), "", as.character(x)))))
     s <- gsub("\u00d7", "x", s)
-    s <- gsub("\\bpackera[[:space:]]+x[[:space:]]*memmingeri\\b", "packera xmemmingeri", s)
+    s <- gsub("(^|[^[:alnum:]_])packera[[:space:]]+x[[:space:]]*memmingeri($|[^[:alnum:]_])", "\\1packera xmemmingeri\\2", s)
     s <- ifelse(s %in% c("packera tomentosa", "senecio tomentosus", "p. tomentosa"), "packera dubia", s)
     s <- ifelse(s == "packera millefolia", "packera millefolium", ifelse(s == "packera memmingeri", "packera xmemmingeri", s))
     s
@@ -288,9 +385,41 @@ reconcile_step06_cytonuclear_discordance <- function(full_audit, assign_df = NUL
   pub_wx <- if ("waxy_lineage_match" %in% names(full_audit)) as.character(full_audit$waxy_lineage_match) else rep("", n)
 
   has_pl_df <- !is.null(placement_df) && is.data.frame(placement_df) && nrow(placement_df) > 0L && "locus" %in% names(placement_df)
-  pl_cp <- if (has_pl_df) placement_df[placement_df$locus == "plastid", , drop = FALSE] else NULL
+  loc_low <- if (has_pl_df) tolower(trimws(as.character(placement_df$locus))) else character(0)
+  pl_cp <- if (has_pl_df) placement_df[loc_low == "plastid", , drop = FALSE] else NULL
+  pl_its <- if (has_pl_df) placement_df[loc_low == "its", , drop = FALSE] else NULL
+  pl_wx <- if (has_pl_df) placement_df[loc_low == "waxy", , drop = FALSE] else NULL
 
-  for (i in which(is_emp_ok)) {
+  eval_loc <- function(loc_df, sid, fb_tx) {
+    tx_v <- if (!is.na(fb_tx)) trimws(as.character(fb_tx)) else ""
+    pass_v <- nzchar(tx_v) && grepl("^Packera[[:space:]_]", tx_v)
+    cont_v <- NA_real_; had_r <- FALSE
+    if (!is.null(loc_df) && nrow(loc_df) > 0L) {
+      ml <- match(sid, as.character(loc_df$genetic_sample_id))
+      if (!is.na(ml)) {
+        had_r <- TRUE
+        has_gp <- "containment_gate_pass" %in% names(loc_df)
+        has_mc <- all(c("kmer_containment", "n_shared_11mers") %in% names(loc_df))
+        cont_v <- if ("kmer_containment" %in% names(loc_df)) suppressWarnings(as.numeric(loc_df$kmer_containment[ml])) else NA_real_
+        n11_v <- if ("n_shared_11mers" %in% names(loc_df)) suppressWarnings(as.integer(loc_df$n_shared_11mers[ml])) else NA_integer_
+        met_ok <- is.finite(cont_v) && cont_v >= 0.80 && is.finite(n11_v) && n11_v >= 80L
+        pass_v <- if (has_gp && !is.na(loc_df$containment_gate_pass[ml])) {
+          (as.integer(loc_df$containment_gate_pass[ml]) == 1L) && (!has_mc || met_ok)
+        } else if (has_mc) met_ok else pass_v
+        tx_v <- if (isTRUE(pass_v) && "best_match_taxon" %in% names(loc_df)) trimws(as.character(loc_df$best_match_taxon[ml])) else ""
+      }
+    }
+    list(pass = isTRUE(pass_v), tx = tx_v, k = canon_tx(tx_v), cont = cont_v, had_row = had_r)
+  }
+
+  for (i in seq_len(n)) {
+    cp_g <- eval_loc(pl_cp, sids[i], pub_cp[i])
+    its_g <- eval_loc(pl_its, sids[i], pub_its[i])
+    wx_g <- eval_loc(pl_wx, sids[i], pub_wx[i])
+    if (cp_g$had_row && !cp_g$pass && "public_plastome_match" %in% names(full_audit)) full_audit$public_plastome_match[i] <- NA_character_
+    if (its_g$had_row && !its_g$pass && "public_its_match" %in% names(full_audit)) full_audit$public_its_match[i] <- NA_character_
+    if (wx_g$had_row && !wx_g$pass && "waxy_lineage_match" %in% names(full_audit)) full_audit$waxy_lineage_match[i] <- NA_character_
+    if (!isTRUE(is_emp_ok[i])) next
     ek <- eff_k[i]; if (!nzchar(ek)) next
     clade_conflict <- FALSE
     if (nzchar(pc_vec[i])) {
@@ -301,22 +430,26 @@ reconcile_step06_cytonuclear_discordance <- function(full_audit, assign_df = NUL
         if (maj_k != ek && my_cnt < maj_cnt) clade_conflict <- TRUE
       }
     }
-    cp_tx <- if (!is.na(pub_cp[i])) trimws(pub_cp[i]) else ""
-    hq_cp <- nzchar(cp_tx) && grepl("^Packera[[:space:]_]", cp_tx)
-    if (has_pl_df && !is.null(pl_cp)) {
-      m_cp <- match(sids[i], as.character(pl_cp$genetic_sample_id))
-      if (!is.na(m_cp)) {
-        cont <- suppressWarnings(as.numeric(pl_cp$kmer_containment[m_cp]))
-        n11 <- suppressWarnings(as.integer(pl_cp$n_shared_11mers[m_cp]))
-        hq_cp <- is.finite(cont) && cont >= 0.80 && is.finite(n11) && n11 >= 80L
-        cp_tx <- if (hq_cp) as.character(pl_cp$best_match_taxon[m_cp]) else ""
-      }
+
+    cp_valid <- cp_g$pass && grepl("^packera ", cp_g$k) && !(cp_g$k %in% c("packera sp", "packera sp.", "packera unknown"))
+    its_ok_cp <- its_g$pass && (its_g$k == cp_g$k)
+    wx_ok_cp <- wx_g$pass && (wx_g$k == cp_g$k)
+    nuc_matches_cp <- if (!cp_valid) FALSE else if (its_ok_cp && wx_ok_cp) {
+      mc <- mean(c(its_g$cont, wx_g$cont), na.rm = TRUE); !is.finite(mc) || mc >= 0.85
+    } else if (its_ok_cp || wx_ok_cp) {
+      !(its_g$had_row && !its_g$pass) && !(wx_g$had_row && !wx_g$pass)
+    } else FALSE
+    cp_conflict <- cp_valid && (cp_g$k != ek) && !nuc_matches_cp
+    any_gate_fail <- (cp_g$had_row && !cp_g$pass) || (its_g$had_row && !its_g$pass) || (wx_g$had_row && !wx_g$pass)
+    if (clade_conflict || cp_conflict) {
+      disc_v[i] <- 1L
+    } else if (cp_valid && (cp_g$k == ek || nuc_matches_cp)) {
+      disc_v[i] <- 0L
+    } else if (!any_gate_fail && nzchar(pc_vec[i]) && !clade_conflict) {
+      disc_v[i] <- 0L
+    } else if (is.na(disc_v[i])) {
+      disc_v[i] <- 0L
     }
-    cp_k <- canon_tx(cp_tx)
-    cp_valid <- hq_cp && grepl("^packera ", cp_k) && !(cp_k %in% c("packera sp", "packera sp.", "packera unknown"))
-    nuc_matches_cp <- cp_valid && (canon_tx(pub_its[i]) == cp_k || canon_tx(pub_wx[i]) == cp_k)
-    cp_conflict <- cp_valid && (cp_k != ek) && !nuc_matches_cp
-    disc_v[i] <- if (clade_conflict || cp_conflict) 1L else 0L
   }
   full_audit$cytonuclear_discordant <- disc_v
   full_audit

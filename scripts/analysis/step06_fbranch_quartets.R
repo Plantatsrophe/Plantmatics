@@ -103,7 +103,7 @@ compute_tree_guided_fbranch <- function(pass_df, dos_mat, raw_genomics_dir, back
   )
 }
 
-compute_quartet_concordance_snps2cf <- function(pass_df, dos_mat, max_quartets = 120L, seed = 202611L) {
+compute_quartet_concordance_snps2cf <- function(pass_df, dos_mat, max_quartets = 120L, seed = 202611L, locus_weights = NULL) {
   if (is.matrix(pass_df) && is.data.frame(dos_mat)) {
     tmp_m <- pass_df; pass_df <- dos_mat; dos_mat <- tmp_m
   }
@@ -120,6 +120,19 @@ compute_quartet_concordance_snps2cf <- function(pass_df, dos_mat, max_quartets =
   sids <- if ("genetic_sample_id" %in% names(pass_df)) as.character(pass_df$genetic_sample_id) else as.character(seq_len(n))
   if (!is.null(rownames(dos_mat)) && all(sids %in% rownames(dos_mat)) && !identical(rownames(dos_mat), sids)) {
     dos_mat <- dos_mat[match(sids, rownames(dos_mat)), , drop = FALSE]
+  }
+  fin_d <- is.finite(dos_mat)
+  if (any(fin_d) && max(dos_mat[fin_d]) > 1.0 + 1e-6 && max(dos_mat[fin_d]) <= 2.0 + 1e-6) dos_mat[fin_d] <- dos_mat[fin_d] / 2.0
+  w_loci <- rep(1.0, ncol(dos_mat))
+  if (!is.null(locus_weights)) {
+    cn_d <- colnames(dos_mat)
+    if (!is.null(names(locus_weights)) && !is.null(cn_d)) {
+      mt <- match(cn_d, names(locus_weights)); ok_w <- !is.na(mt)
+      w_loci[ok_w] <- suppressWarnings(as.numeric(locus_weights[mt[ok_w]]))
+    } else if (length(locus_weights) == ncol(dos_mat)) {
+      w_loci <- suppressWarnings(as.numeric(locus_weights))
+    }
+    w_loci[!is.finite(w_loci) | w_loci < 0.0] <- 1.0
   }
   taxa_vec <- if ("species_standardized" %in% names(pass_df)) as.character(pass_df$species_standardized) else rep("", n)
   taxa_vec[is.na(taxa_vec) | !nzchar(taxa_vec)] <- sids[is.na(taxa_vec) | !nzchar(taxa_vec)]
@@ -143,10 +156,17 @@ compute_quartet_concordance_snps2cf <- function(pass_df, dos_mat, max_quartets =
     for (r_idx in seq_len(nrow(grid))) {
       sub <- dos_mat[as.integer(grid[r_idx, ]), , drop = FALSE]
       ok <- colSums(is.finite(sub)) == 4L; if (sum(ok) < 8L) next
-      any_valid_sites <- TRUE; bin <- round(sub[, ok, drop = FALSE]); inf <- which(colSums(bin) == 2L)
-      if (length(inf) == 0L) next
-      b_inf <- bin[, inf, drop = FALSE]
-      c1_vec <- c(c1_vec, sum(b_inf[1L, ] == b_inf[2L, ])); c2_vec <- c(c2_vec, sum(b_inf[1L, ] == b_inf[3L, ])); c3_vec <- c(c3_vec, sum(b_inf[1L, ] == b_inf[4L, ]))
+      any_valid_sites <- TRUE
+      P <- sub[, ok, drop = FALSE]; P[] <- pmin(1.0, pmax(0.0, P))
+      w_ok <- w_loci[ok]; sw <- sum(w_ok); sw2 <- sum(w_ok^2)
+      w_eff <- if (sw > 0.0 && sw2 > 0.0) w_ok * (sw / sw2) else rep(1.0, sum(ok))
+      p1 <- P[1L, ]; p2 <- P[2L, ]; p3 <- P[3L, ]; p4 <- P[4L, ]
+      q1 <- 1.0 - p1; q2 <- 1.0 - p2; q3 <- 1.0 - p3; q4 <- 1.0 - p4
+      c1_r <- sum(w_eff * (p1 * p2 * q3 * q4 + q1 * q2 * p3 * p4))
+      c2_r <- sum(w_eff * (p1 * p3 * q2 * q4 + q1 * q3 * p2 * p4))
+      c3_r <- sum(w_eff * (p1 * p4 * q2 * q3 + q1 * q4 * p2 * p3))
+      if ((c1_r + c2_r + c3_r) <= 1e-12) next
+      c1_vec <- c(c1_vec, c1_r); c2_vec <- c(c2_vec, c2_r); c3_vec <- c(c3_vec, c3_r)
     }
     if (!any_valid_sites) return(NULL)
     if (length(c1_vec) == 0L) return(list(t4 = t4, gm = 0.0, row = data.frame(quartet = paste(t4, collapse = ";"), major_topology = paste0(t4[1L], ",", t4[2L], "|", t4[3L], ",", t4[4L]), cf_12_34 = 1.0, cf_13_24 = 0.0, cf_14_23 = 0.0, n_inform_loci = 0.0, snaq_gamma_minor = 0.0, g_test_p = 1.0, delta_aicc_reticulation = 0.0, stringsAsFactors = FALSE)))
@@ -154,12 +174,12 @@ compute_quartet_concordance_snps2cf <- function(pass_df, dos_mat, max_quartets =
     if (n_inf <= 0.0) return(NULL)
     cf_vec <- c(c1, c2, c3) / n_inf; s <- sort(c(c1, c2, c3), decreasing = TRUE)
     top_n <- c(paste0(t4[1L], ",", t4[2L], "|", t4[3L], ",", t4[4L]), paste0(t4[1L], ",", t4[3L], "|", t4[2L], ",", t4[4L]), paste0(t4[1L], ",", t4[4L], "|", t4[2L], ",", t4[3L]))[which.max(cf_vec)]
-    p0 <- c(s[1L], 0.5 * (s[2L] + s[3L]), 0.5 * (s[2L] + s[3L])) / n_inf; p1 <- s / n_inf
-    pos0 <- (s > 0.0) & (p0 > 0.0); pos1 <- (s > 0.0) & (p1 > 0.0); const_ll <- lgamma(n_inf + 1.0) - sum(lgamma(s + 1.0))
-    ll_0 <- const_ll + sum(s[pos0] * log(p0[pos0])); ll_1 <- const_ll + sum(s[pos1] * log(p1[pos1]))
+    p0 <- c(s[1L], 0.5 * (s[2L] + s[3L]), 0.5 * (s[2L] + s[3L])) / n_inf; p1_m <- s / n_inf
+    pos0 <- (s > 0.0) & (p0 > 0.0); pos1 <- (s > 0.0) & (p1_m > 0.0); const_ll <- lgamma(n_inf + 1.0) - sum(lgamma(s + 1.0))
+    ll_0 <- const_ll + sum(s[pos0] * log(p0[pos0])); ll_1 <- const_ll + sum(s[pos1] * log(p1_m[pos1]))
     g_test_p <- stats::pchisq(max(0.0, 2.0 * (ll_1 - ll_0)), df = 1.0, lower.tail = FALSE)
     delta_aicc_ret <- (-2.0 * ll_0 + 2.0 + 4.0 / max(1.0, n_inf - 2.0)) - (-2.0 * ll_1 + 4.0 + 12.0 / max(1.0, n_inf - 3.0))
-    gamma_minor <- if (is.finite(delta_aicc_ret) && delta_aicc_ret >= 2.0 && is.finite(g_test_p) && g_test_p < 0.05) round(s[2L] / max(1e-9, s[1L] + s[2L]), 4) else 0.0
+    gamma_minor <- if (is.finite(delta_aicc_ret) && delta_aicc_ret >= 2.0 && is.finite(g_test_p) && g_test_p < 0.01) round(s[2L] / max(1e-9, s[1L] + s[2L]), 4) else 0.0
     list(t4 = t4, gm = gamma_minor, row = data.frame(
       quartet = paste(t4, collapse = ";"), major_topology = top_n, cf_12_34 = round(cf_vec[1L], 4), cf_13_24 = round(cf_vec[2L], 4), cf_14_23 = round(cf_vec[3L], 4),
       n_inform_loci = round(n_inf, 2), snaq_gamma_minor = gamma_minor, g_test_p = g_test_p, delta_aicc_reticulation = round(delta_aicc_ret, 4), stringsAsFactors = FALSE
