@@ -101,6 +101,9 @@ FORBIDDEN_OBSOLETE_SAM2_AND_PRUNED_HELPER_TOKENS = (
     "_subtract_interior_mounting_paper_pockets", "_build_native_lm3_crop_masks",
     "harmonize_upright_mask_sinus_bridges", "open_hairline_sinus_bridges_and_measure_voids",
     "bridge_already_opened", "compute_eroded_blade_cie_l_metrics",
+    # Retired Step 03 dead & duplicated helper tokens
+    "summarize_otu_dissection_metrics", "strip_deprecated_step03_cli_args",
+    "compute_polygon_solidity",
     # LeafMachine2 tokens
     *FORBIDDEN_LEGACY_LM2_TOKENS,
 )
@@ -241,11 +244,13 @@ class TestCodeHygiene(unittest.TestCase):
             PROJECT_ROOT / "scripts" / "tests" / "test_step02_vision_hygiene.py": 380,
             PROJECT_ROOT / "scripts" / "tests" / "test_step02_taxonomic_clarity.py": 400,
             PROJECT_ROOT / "scripts" / "morphometrics" / "step03_config_scale_utils.R": 240,
+            PROJECT_ROOT / "scripts" / "morphometrics" / "step03_ect_traits_utils.R": 360,
             PROJECT_ROOT / "scripts" / "morphometrics" / "03_fourier_extractor.R": 500,
             PROJECT_ROOT / "scripts" / "morphometrics" / "fourier_parallel_utils.R": 500,
             PROJECT_ROOT / "scripts" / "morphometrics" / "plasticity_mitigation_utils.R": 470,
             PROJECT_ROOT / "scripts" / "figures" / "step03_figures.R": 385,
             PROJECT_ROOT / "scripts" / "tests" / "test_step03_audit_contracts.py": 360,
+            PROJECT_ROOT / "scripts" / "tests" / "test_step03_taxonomic_clarity.py": 380,
             PROJECT_ROOT / "scripts" / "morphometrics" / "04_gmm_morphotools.R": 500,
             PROJECT_ROOT / "scripts" / "morphometrics" / "step04_allometry_merger_utils.R": 380,
             PROJECT_ROOT / "scripts" / "morphometrics" / "pub_synthesis_plates.R": 120,

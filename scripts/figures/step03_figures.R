@@ -54,12 +54,14 @@ render_step03_figures_suite <- function(
     as.integer(stats::median(suppressWarnings(as.numeric(spec_df$efd_harmonic_opt)), na.rm = TRUE))
   } else min(12L, max_h)
 
-  # Compute empirical cumulative harmonic power across harmonics 2..max_h
+  # Compute empirical cumulative harmonic power across harmonics 1..max_h
   pow_vec <- vapply(seq_len(max_h), function(k) {
     ck <- intersect(paste0(c("A", "B", "C", "D"), k), names(spec_df))
-    if (length(ck) == 0L || k == 1L) return(0.0)
+    if (length(ck) == 0L) return(0.0)
     m_k <- as.matrix(spec_df[, ck, drop = FALSE]); storage.mode(m_k) <- "double"
-    mean(rowSums(m_k^2, na.rm = TRUE), na.rm = TRUE)
+    ok_r <- rowSums(is.finite(m_k)) > 0L
+    if (!any(ok_r)) return(0.0)
+    mean(0.5 * rowSums(m_k[ok_r, , drop = FALSE]^2, na.rm = TRUE), na.rm = TRUE)
   }, numeric(1))
   if (sum(pow_vec) <= 1e-12) pow_vec <- (1.0 / (seq_len(max_h)^2.4))
   cum_pow <- 100.0 * cumsum(pow_vec) / max(sum(pow_vec), 1e-12)
@@ -179,11 +181,10 @@ render_step03_figures_suite <- function(
   if ("is_type_specimen" %in% names(pc_sub)) {
     is_t <- !is.na(pc_sub$is_type_specimen) & as.logical(pc_sub$is_type_specimen)
     if (any(is_t)) {
-      p03a_pca <- p03a_pca + ggplot2::geom_point(
-        data = pc_sub[is_t, , drop = FALSE],
-        ggplot2::aes(x = .data$pc1_num, y = .data$pc2_num, color = .data$plot_group),
-        shape = 8, size = 3.6, stroke = 1.1, show.legend = FALSE
-      )
+      pc_t <- pc_sub[is_t, , drop = FALSE]
+      p03a_pca <- p03a_pca +
+        ggplot2::geom_point(data = pc_t, ggplot2::aes(x = .data$pc1_num, y = .data$pc2_num), inherit.aes = FALSE, shape = 5, size = 4.6, stroke = 1.0, color = "#111827", show.legend = FALSE) +
+        ggplot2::geom_point(data = pc_t, ggplot2::aes(x = .data$pc1_num, y = .data$pc2_num, color = .data$plot_group), inherit.aes = FALSE, shape = 5, size = 3.2, stroke = 0.95, show.legend = FALSE)
     }
   }
   if (length(active_groups) > 10L && nrow(pc_sub) > 0L) {
@@ -251,6 +252,15 @@ render_step03_figures_suite <- function(
       x = "Basal Topological ECT_PC1",
       y = "Basal Topological ECT_PC2"
     )
+  if ("is_type_specimen" %in% names(ect_sub)) {
+    is_te <- !is.na(ect_sub$is_type_specimen) & as.logical(ect_sub$is_type_specimen)
+    if (any(is_te)) {
+      ect_t <- ect_sub[is_te, , drop = FALSE]
+      p03b_ord <- p03b_ord +
+        ggplot2::geom_point(data = ect_t, ggplot2::aes(x = .data$ect1, y = .data$ect2), inherit.aes = FALSE, shape = 5, size = 4.6, stroke = 1.0, color = "#111827", show.legend = FALSE) +
+        ggplot2::geom_point(data = ect_t, ggplot2::aes(x = .data$ect1, y = .data$ect2, color = .data$plot_group), inherit.aes = FALSE, shape = 5, size = 3.2, stroke = 0.95, show.legend = FALSE)
+    }
+  }
   if (length(active_groups) > 10L && nrow(ect_sub) > 0L) {
     cent_e <- stats::aggregate(cbind(ect1, ect2) ~ plot_group, data = ect_sub, FUN = stats::median)
     cent_e$lbl <- abbreviate_icn_taxon(cent_e$plot_group, abbreviate_genus = TRUE)

@@ -150,7 +150,7 @@ PACKERA_DB_LOGICAL_COLS <- c(
   "geno_quality_pass", "is_putative_novel_or_hybrid_query", "is_geno_admixed", "cytonuclear_discordant",
   "is_multi_cytotype_taxon", "cytotype_reproductive_barrier_pass",
   "is_nwi_wetland", "is_hybrid_taxon", "is_native", "is_exotic", "is_historical_or_extirpated",
-  "is_centroid_or_inst_coord", "is_open_or_hybrid_concept", "env_mcd_outlier_flag"
+  "is_centroid_or_inst_coord", "is_open_or_hybrid_concept", "is_abaxial_pressed_leaf", "env_mcd_outlier_flag"
 )
 
 PACKERA_DB_HARMONIC_COLS <- as.vector(vapply(
@@ -308,7 +308,25 @@ PACKERA_DB_WC_BIO_COLS <- c(
         blade_cie_l_sd = "REAL",
         blade_cie_l_sheet_delta = "REAL",
         blade_cie_a_delta = "REAL",
-        blade_cie_b_delta = "REAL"
+        blade_cie_b_delta = "REAL",
+        scale_source = "TEXT",
+        bbox_x1 = "INTEGER",
+        bbox_y1 = "INTEGER",
+        bbox_x2 = "INTEGER",
+        bbox_y2 = "INTEGER",
+        base_angle_deg = "REAL",
+        apex_angle_deg = "REAL",
+        lamina_curvature = "REAL",
+        lamina_trace_length_px = "REAL",
+        lamina_trace_length_mm = "REAL",
+        basal_cordate_index = "REAL",
+        margin_serration_index = "REAL",
+        margin_tooth_acuteness = "REAL",
+        terminal_lobe_area_frac = "REAL",
+        blade_cie_l_q85_sheet_delta = "REAL",
+        basal_zone_cie_l_delta = "REAL",
+        is_abaxial_pressed_leaf = "INTEGER DEFAULT 0",
+        abaxial_cie_l_sheet_delta = "REAL"
       )
     ))
   }
@@ -375,7 +393,20 @@ PACKERA_DB_WC_BIO_COLS <- c(
         log1p_capitulum_count = "REAL",
         log1p_capitulum_count_std = "REAL",
         nearest_type_basionym = "TEXT",
-        nearest_type_basionym_d2 = "REAL"
+        nearest_type_basionym_d2 = "REAL",
+        base_angle_deg = "REAL",
+        apex_angle_deg = "REAL",
+        lamina_curvature = "REAL",
+        lamina_trace_length_mm = "REAL",
+        basal_cordate_index = "REAL",
+        margin_serration_index = "REAL",
+        margin_tooth_acuteness = "REAL",
+        terminal_lobe_area_frac = "REAL",
+        blade_cie_l_q85_sheet_delta = "REAL",
+        basal_zone_cie_l_delta = "REAL",
+        is_abaxial_pressed_leaf = "INTEGER DEFAULT 0",
+        abaxial_leaf_fraction = "REAL",
+        abaxial_cie_l_sheet_delta = "REAL"
       )
     ))
   }
@@ -840,15 +871,18 @@ connect_packera_db <- function(
   v_fields_chk <- if (db_table_exists_safe(conn, "vouchers")) tryCatch(DBI::dbListFields(conn, "vouchers"), error = function(e) character(0)) else c("typified_basionym", "verbatim_taxon_concept", "concept_synonymy_status", "identification_year", "is_open_or_hybrid_concept")
   el_fields_chk <- if (db_table_exists_safe(conn, "extracted_leaves")) tryCatch(DBI::dbListFields(conn, "extracted_leaves"), error = function(e) character(0)) else c("leaf_zone", "ect_path", "bbox_x1", "basal_cordate_index", "blade_cie_l_q85_sheet_delta", "is_abaxial_pressed_leaf")
   vrp_fields_chk <- if (db_table_exists_safe(conn, "voucher_reproductive_phenology")) tryCatch(DBI::dbListFields(conn, "voucher_reproductive_phenology"), error = function(e) character(0)) else c("corymb_head_count_est", "radiate_head_fraction")
-  om_fields_chk <- if (db_table_exists_safe(conn, "otu_morphometrics")) tryCatch(DBI::dbListFields(conn, "otu_morphometrics"), error = function(e) character(0)) else c("cauline_leaf_count", "ECT_PC1", "scale_source")
+  leh_fields_chk <- if (db_table_exists_safe(conn, "leaf_efa_harmonics")) tryCatch(DBI::dbListFields(conn, "leaf_efa_harmonics"), error = function(e) character(0)) else c("scale_source", "bbox_x1", "lamina_trace_length_mm", "basal_cordate_index", "blade_cie_l_q85_sheet_delta", "is_abaxial_pressed_leaf")
+  om_fields_chk <- if (db_table_exists_safe(conn, "otu_morphometrics")) tryCatch(DBI::dbListFields(conn, "otu_morphometrics"), error = function(e) character(0)) else c("cauline_leaf_count", "ECT_PC1", "scale_source", "basal_cordate_index", "blade_cie_l_q85_sheet_delta", "abaxial_leaf_fraction")
   mv_fields_chk <- if (db_table_exists_safe(conn, "v_integrative_triage_master")) tryCatch(DBI::dbListFields(conn, "v_integrative_triage_master"), error = function(e) character(0)) else character(0)
   v_has_concept <- all(c("typified_basionym", "verbatim_taxon_concept", "concept_synonymy_status", "identification_year", "is_open_or_hybrid_concept") %in% v_fields_chk)
   el_has_zone <- all(c("leaf_zone", "ect_path", "bbox_x1", "basal_cordate_index", "blade_cie_l_q85_sheet_delta", "is_abaxial_pressed_leaf") %in% el_fields_chk)
   vrp_has_latest <- all(c("corymb_head_count_est", "radiate_head_fraction") %in% vrp_fields_chk)
-  om_has_cauline <- all(c("cauline_leaf_count", "ECT_PC1", "scale_source") %in% om_fields_chk)
+  leh_has_latest <- all(c("scale_source", "bbox_x1", "lamina_trace_length_mm", "basal_cordate_index", "blade_cie_l_q85_sheet_delta", "is_abaxial_pressed_leaf") %in% leh_fields_chk)
+  om_has_cauline <- all(c("cauline_leaf_count", "ECT_PC1", "scale_source", "basal_cordate_index", "blade_cie_l_q85_sheet_delta", "abaxial_leaf_fraction") %in% om_fields_chk)
   mv_has_latest <- identical(eff_path, ":memory:") || all(c(
     "is_passive", "scale_source", "AR_inv_std", "reproductive_trait_status",
     "corymb_head_count_est", "radiate_head_fraction",
+    "basal_cordate_index", "blade_cie_l_q85_sheet_delta", "abaxial_leaf_fraction",
     "ecoregion_can1", "ecoregion_can2", "w_geno_kappa",
     "geno_predicted_taxon", "geno_linkage_tier", "is_geno_admixed",
     "coalescent_gdi", "hybrid_generation_class", "cytonuclear_discordant",
@@ -868,7 +902,7 @@ connect_packera_db <- function(
     "env_mahal_d2", "env_mcd_outlier_flag"
   ) %in% mv_fields_chk)
   if (cur_ver >= PLANTMATICS_SCHEMA_USER_VERSION &&
-    v_has_concept && el_has_zone && vrp_has_latest && om_has_cauline && mv_has_latest &&
+    v_has_concept && el_has_zone && vrp_has_latest && leh_has_latest && om_has_cauline && mv_has_latest &&
     (identical(eff_path, ":memory:") || (
       db_table_exists_safe(conn, "v_integrative_triage_master") &&
         db_table_exists_safe(conn, "genomic_samples") &&
@@ -907,6 +941,7 @@ connect_packera_db <- function(
         "cda_oof_posterior_prob", "self_morph_mahal_d2", "open_set_df",
         "is_passive", "scale_source",
         "AR_inv_std", "reproductive_trait_status", "corymb_head_count_est", "radiate_head_fraction",
+        "basal_cordate_index", "blade_cie_l_q85_sheet_delta", "abaxial_leaf_fraction",
         "ecoregion_can1", "ecoregion_can2",
         "w_geno_kappa", "geno_predicted_taxon", "geno_linkage_tier", "is_geno_admixed",
         "coalescent_gdi", "hybrid_generation_class", "cytonuclear_discordant",
@@ -1253,42 +1288,160 @@ fetch_step03_contours_from_db <- function(
   }
 
   el_fields <- tryCatch(DBI::dbListFields(conn, "extracted_leaves"), error = function(e) character(0))
-  pi_fields <- tryCatch(DBI::dbListFields(conn, "plant_individuals"), error = function(e) character(0))
-  sel_ect <- if ("ect_path" %in% el_fields) "el.ect_path" else "NULL AS ect_path"
-  sel_zone <- if ("leaf_zone" %in% el_fields) "el.leaf_zone" else "'basal' AS leaf_zone"
-  sel_zone_conf <- if ("leaf_zone_confidence" %in% el_fields) "el.leaf_zone_confidence" else "NULL AS leaf_zone_confidence"
-  sel_dist_cr <- if ("dist_from_crown_norm" %in% el_fields) "el.dist_from_crown_norm" else "NULL AS dist_from_crown_norm"
-  sel_cy_rel <- if ("cy_rel_plant_bbox" %in% el_fields) "el.cy_rel_plant_bbox" else "NULL AS cy_rel_plant_bbox"
-  sel_arch <- if ("archetype_score" %in% el_fields) "el.archetype_score" else "NULL AS archetype_score"
-  sel_bdice <- if ("bilateral_dice" %in% el_fields) "el.bilateral_dice" else "NULL AS bilateral_dice"
-  sel_sia <- if ("si_a" %in% el_fields) "el.si_a" else "NULL AS si_a"
-  sel_lgates <- if ("lm3_gates_pass" %in% el_fields) "el.lm3_gates_pass" else "NULL AS lm3_gates_pass"
-  sel_ncc <- if ("n_lamina_components" %in% el_fields) "el.n_lamina_components" else "1 AS n_lamina_components"
-  sel_scale_src <- if ("scale_source" %in% el_fields) "el.scale_source" else "NULL AS scale_source"
-  sel_upright <- if ("mask_is_upright" %in% el_fields) "el.mask_is_upright" else "NULL AS mask_is_upright"
-  sel_amm2 <- if ("area_mm2" %in% el_fields) "el.area_mm2" else "NULL AS area_mm2"
-  sel_bl_lnorm <- if ("blade_cie_l_norm" %in% el_fields) "el.blade_cie_l_norm" else "NULL AS blade_cie_l_norm"
-  sel_bl_lsd <- if ("blade_cie_l_sd" %in% el_fields) "el.blade_cie_l_sd" else "NULL AS blade_cie_l_sd"
-  sel_bl_ldelta <- if ("blade_cie_l_sheet_delta" %in% el_fields) "el.blade_cie_l_sheet_delta" else "NULL AS blade_cie_l_sheet_delta"
-  sel_bl_adelta <- if ("blade_cie_a_delta" %in% el_fields) "el.blade_cie_a_delta" else "NULL AS blade_cie_a_delta"
-  sel_bl_bdelta <- if ("blade_cie_b_delta" %in% el_fields) "el.blade_cie_b_delta" else "NULL AS blade_cie_b_delta"
-  sel_bw_mm <- if ("blade_width_mm" %in% el_fields) "el.blade_width_mm" else "NULL AS blade_width_mm"
-  sel_pw_mm <- if ("petiole_width_mm" %in% el_fields && "petiole_width_mm" %in% pi_fields) {
-    "COALESCE(el.petiole_width_mm, pi.petiole_width_mm) AS petiole_width_mm"
-  } else if ("petiole_width_mm" %in% el_fields) {
-    "el.petiole_width_mm AS petiole_width_mm"
-  } else if ("petiole_width_mm" %in% pi_fields) {
-    "pi.petiole_width_mm AS petiole_width_mm"
-  } else {
-    "NULL AS petiole_width_mm"
+  has_pi_tbl <- db_table_exists_safe(conn, "plant_individuals")
+  has_vrp_tbl <- db_table_exists_safe(conn, "voucher_reproductive_phenology")
+  has_v_tbl <- db_table_exists_safe(conn, "vouchers")
+  pi_fields <- if (has_pi_tbl) tryCatch(DBI::dbListFields(conn, "plant_individuals"), error = function(e) character(0)) else character(0)
+  vrp_fields <- if (has_vrp_tbl) tryCatch(DBI::dbListFields(conn, "voucher_reproductive_phenology"), error = function(e) character(0)) else character(0)
+  v_fields <- if (has_v_tbl) tryCatch(DBI::dbListFields(conn, "vouchers"), error = function(e) character(0)) else character(0)
+
+  sel_opt <- function(alias, fields, col, fallback = "NULL") {
+    if (col %in% fields) sprintf("%s.%s", alias, col) else sprintf("%s AS %s", fallback, col)
   }
-  sel_dcid <- if ("detector_class_id" %in% el_fields) "el.detector_class_id" else "0 AS detector_class_id"
-  sel_cclip <- if ("is_crop_clipped" %in% el_fields) "el.is_crop_clipped" else "0 AS is_crop_clipped"
-  sel_haf <- if ("hole_area_frac" %in% el_fields) "el.hole_area_frac" else "0.0 AS hole_area_frac"
-  sel_evf <- if ("enclosed_void_frac" %in% el_fields) "el.enclosed_void_frac" else "0.0 AS enclosed_void_frac"
-  sel_bls <- if ("bilateral_lobe_symmetry" %in% el_fields) "el.bilateral_lobe_symmetry" else "NULL AS bilateral_lobe_symmetry"
-  sel_eqc <- if ("efa_qc_pass" %in% el_fields) "el.efa_qc_pass" else "NULL AS efa_qc_pass"
-  sel_qfr <- if ("qc_flag_reason" %in% el_fields) "el.qc_flag_reason" else "NULL AS qc_flag_reason"
+  sel_coal2 <- function(col, a1, f1, a2, f2, fallback = "NULL") {
+    in1 <- col %in% f1
+    in2 <- col %in% f2
+    if (in1 && in2) {
+      sprintf("COALESCE(%s.%s, %s.%s) AS %s", a1, col, a2, col, col)
+    } else if (in1) {
+      sprintf("%s.%s AS %s", a1, col, col)
+    } else if (in2) {
+      sprintf("%s.%s AS %s", a2, col, col)
+    } else {
+      sprintf("%s AS %s", fallback, col)
+    }
+  }
+  sel_vrp <- function(col) {
+    if (col %in% vrp_fields) {
+      sprintf("CASE WHEN vrp.catalogNumber IS NOT NULL THEN vrp.%s ELSE vrp0.%s END AS %s", col, col, col)
+    } else {
+      sprintf("NULL AS %s", col)
+    }
+  }
+
+  sel_ect <- sel_opt("el", el_fields, "ect_path")
+  sel_zone <- sel_opt("el", el_fields, "leaf_zone", "'basal'")
+  sel_zone_conf <- sel_opt("el", el_fields, "leaf_zone_confidence")
+  sel_dist_cr <- sel_opt("el", el_fields, "dist_from_crown_norm")
+  sel_cy_rel <- sel_opt("el", el_fields, "cy_rel_plant_bbox")
+  sel_arch <- sel_opt("el", el_fields, "archetype_score")
+  sel_bdice <- sel_opt("el", el_fields, "bilateral_dice")
+  sel_sia <- sel_opt("el", el_fields, "si_a")
+  sel_lgates <- sel_opt("el", el_fields, "lm3_gates_pass")
+  sel_ncc <- sel_opt("el", el_fields, "n_lamina_components", "1")
+  sel_scale_src <- sel_opt("el", el_fields, "scale_source")
+  sel_upright <- sel_opt("el", el_fields, "mask_is_upright")
+  sel_amm2 <- sel_opt("el", el_fields, "area_mm2")
+  sel_bl_lnorm <- sel_opt("el", el_fields, "blade_cie_l_norm")
+  sel_bl_lsd <- sel_opt("el", el_fields, "blade_cie_l_sd")
+  sel_bl_ldelta <- sel_opt("el", el_fields, "blade_cie_l_sheet_delta")
+  sel_bl_adelta <- sel_opt("el", el_fields, "blade_cie_a_delta")
+  sel_bl_bdelta <- sel_opt("el", el_fields, "blade_cie_b_delta")
+  sel_bw_mm <- sel_opt("el", el_fields, "blade_width_mm")
+  sel_pw_mm <- sel_coal2("petiole_width_mm", "el", el_fields, "pi", pi_fields)
+  sel_dcid <- sel_opt("el", el_fields, "detector_class_id", "0")
+  sel_cclip <- sel_opt("el", el_fields, "is_crop_clipped", "0")
+  sel_haf <- sel_opt("el", el_fields, "hole_area_frac", "0.0")
+  sel_evf <- sel_opt("el", el_fields, "enclosed_void_frac", "0.0")
+  sel_bls <- sel_opt("el", el_fields, "bilateral_lobe_symmetry")
+  sel_eqc <- sel_opt("el", el_fields, "efa_qc_pass")
+  sel_qfr <- sel_opt("el", el_fields, "qc_flag_reason")
+
+  sel_el_step02_extra <- paste(
+    c(
+      sel_opt("el", el_fields, "bbox_x1"),
+      sel_opt("el", el_fields, "bbox_y1"),
+      sel_opt("el", el_fields, "bbox_x2"),
+      sel_opt("el", el_fields, "bbox_y2"),
+      sel_opt("el", el_fields, "base_angle_deg"),
+      sel_opt("el", el_fields, "apex_angle_deg"),
+      sel_opt("el", el_fields, "lamina_curvature"),
+      sel_opt("el", el_fields, "lamina_trace_length_px"),
+      sel_opt("el", el_fields, "basal_cordate_index"),
+      sel_opt("el", el_fields, "margin_serration_index"),
+      sel_opt("el", el_fields, "margin_tooth_acuteness"),
+      sel_opt("el", el_fields, "terminal_lobe_area_frac"),
+      sel_opt("el", el_fields, "blade_cie_l_q85_sheet_delta"),
+      sel_opt("el", el_fields, "basal_zone_cie_l_delta"),
+      sel_opt("el", el_fields, "is_abaxial_pressed_leaf", "0"),
+      sel_opt("el", el_fields, "abaxial_cie_l_sheet_delta")
+    ),
+    collapse = ", "
+  )
+
+  sel_pi_extra <- paste(
+    c(
+      sel_opt("pi", pi_fields, "rosette_centroid_x"),
+      sel_opt("pi", pi_fields, "rosette_centroid_y")
+    ),
+    collapse = ", "
+  )
+
+  sel_vrp_all <- paste(
+    vapply(
+      c(
+        "AR_inv", "capitula_count", "involucre_height_px", "involucre_width_px",
+        "involucre_height_mm", "involucre_width_mm",
+        "corymb_head_count_est", "radiate_head_fraction"
+      ),
+      sel_vrp,
+      character(1L)
+    ),
+    collapse = ", "
+  )
+
+  sel_v_extra <- paste(
+    c(
+      sel_opt("v", v_fields, "institutionCode"),
+      sel_opt("v", v_fields, "scientificName"),
+      sel_opt("v", v_fields, "species_raw"),
+      sel_opt("v", v_fields, "species_standardized"),
+      sel_opt("v", v_fields, "recordedBy"),
+      sel_opt("v", v_fields, "recordNumber"),
+      sel_opt("v", v_fields, "identifiedBy"),
+      sel_opt("v", v_fields, "determiner_tier"),
+      sel_opt("v", v_fields, "type_status"),
+      sel_opt("v", v_fields, "county"),
+      sel_opt("v", v_fields, "stateProvince"),
+      sel_opt("v", v_fields, "locality"),
+      sel_opt("v", v_fields, "decimalLatitude"),
+      sel_opt("v", v_fields, "decimalLongitude"),
+      sel_opt("v", v_fields, "coordinateUncertainty"),
+      sel_opt("v", v_fields, "year"),
+      sel_opt("v", v_fields, "month"),
+      sel_opt("v", v_fields, "day"),
+      sel_opt("v", v_fields, "eventDate"),
+      sel_opt("v", v_fields, "doy"),
+      sel_opt("v", v_fields, "regional_group"),
+      sel_opt("v", v_fields, "infraspecific_taxon"),
+      sel_opt("v", v_fields, "is_primary_duplicate"),
+      sel_opt("v", v_fields, "duplicate_count"),
+      sel_opt("v", v_fields, "spatial_balance_weight"),
+      sel_opt("v", v_fields, "typified_basionym"),
+      sel_opt("v", v_fields, "verbatim_taxon_concept"),
+      sel_opt("v", v_fields, "concept_synonymy_status"),
+      sel_opt("v", v_fields, "identification_year"),
+      sel_opt("v", v_fields, "is_open_or_hybrid_concept", "0"),
+      sel_opt("v", v_fields, "georef_qc_status"),
+      sel_opt("v", v_fields, "is_centroid_or_inst_coord", "0"),
+      sel_opt("v", v_fields, "coord_quarantine_reason"),
+      sel_opt("v", v_fields, "usda_symbol"),
+      sel_opt("v", v_fields, "usda_county_status"),
+      sel_opt("v", v_fields, "exsiccatae_key"),
+      sel_opt("v", v_fields, "exsiccatae_taxonomic_conflict", "0"),
+      sel_opt("v", v_fields, "exsiccatae_gold_taxon")
+    ),
+    collapse = ", "
+  )
+
+  v_join_sql <- if (has_v_tbl) "LEFT JOIN vouchers v ON v.catalogNumber = el.catalogNumber " else ""
+  pi_join_sql <- if (has_pi_tbl) "LEFT JOIN plant_individuals pi ON pi.catalogNumber = el.catalogNumber AND pi.plant_individual_id = el.plant_individual_id " else ""
+  vrp_join_sql <- if (has_vrp_tbl) {
+    paste0(
+      "LEFT JOIN voucher_reproductive_phenology vrp ON vrp.catalogNumber = el.catalogNumber AND vrp.plant_individual_id = el.plant_individual_id ",
+      "LEFT JOIN voucher_reproductive_phenology vrp0 ON vrp0.catalogNumber = el.catalogNumber AND vrp0.plant_individual_id = 0 "
+    )
+  } else ""
 
   base_sql <- paste0(
     "SELECT ",
@@ -1299,23 +1452,20 @@ fetch_step03_contours_from_db <- function(
     "  ", sel_upright, ", ", sel_amm2, ", ", sel_bl_lnorm, ", ", sel_bl_lsd, ", ",
     sel_bl_ldelta, ", ", sel_bl_adelta, ", ", sel_bl_bdelta, ", ", sel_bw_mm, ", ", sel_pw_mm, ", ",
     "  ", sel_dcid, ", ", sel_cclip, ", ", sel_haf, ", ", sel_evf, ", ", sel_bls, ", ", sel_eqc, ", ", sel_qfr, ", ",
-    "  COALESCE(el.pixels_per_mm, v.pixels_per_mm) AS pixels_per_mm, ",
-    "  COALESCE(el.is_calibrated_mm, v.is_calibrated_mm) AS is_calibrated_mm, ",
-    "  COALESCE(el.petiole_length_mm, pi.petiole_length_mm) AS petiole_length_mm, ",
-    "  COALESCE(el.blade_length_mm, pi.blade_length_mm) AS blade_length_mm, ",
-    "  COALESCE(el.petiole_to_blade_ratio, pi.petiole_to_blade_ratio) AS petiole_to_blade_ratio, ",
-    "  CASE WHEN vrp.catalogNumber IS NOT NULL THEN vrp.AR_inv ELSE vrp0.AR_inv END AS AR_inv, ",
-    "  CASE WHEN vrp.catalogNumber IS NOT NULL THEN vrp.capitula_count ELSE vrp0.capitula_count END AS capitula_count, ",
-    "  CASE WHEN vrp.catalogNumber IS NOT NULL THEN vrp.involucre_height_px ELSE vrp0.involucre_height_px END AS involucre_height_px, ",
-    "  CASE WHEN vrp.catalogNumber IS NOT NULL THEN vrp.involucre_width_px ELSE vrp0.involucre_width_px END AS involucre_width_px, ",
-    "  CASE WHEN vrp.catalogNumber IS NOT NULL THEN vrp.involucre_height_mm ELSE vrp0.involucre_height_mm END AS involucre_height_mm, ",
-    "  CASE WHEN vrp.catalogNumber IS NOT NULL THEN vrp.involucre_width_mm ELSE vrp0.involucre_width_mm END AS involucre_width_mm, ",
+    "  ", sel_el_step02_extra, ", ",
+    "  ", sel_coal2("pixels_per_mm", "el", el_fields, "v", v_fields), ", ",
+    "  ", sel_coal2("is_calibrated_mm", "el", el_fields, "v", v_fields), ", ",
+    "  ", sel_coal2("petiole_length_mm", "el", el_fields, "pi", pi_fields), ", ",
+    "  ", sel_coal2("blade_length_mm", "el", el_fields, "pi", pi_fields), ", ",
+    "  ", sel_coal2("petiole_to_blade_ratio", "el", el_fields, "pi", pi_fields), ", ",
+    "  ", sel_pi_extra, ", ",
+    "  ", sel_vrp_all, ", ",
+    "  ", sel_v_extra, ", ",
     "  el.contour_xy_json ",
     "FROM extracted_leaves el ",
-    "LEFT JOIN vouchers v ON v.catalogNumber = el.catalogNumber ",
-    "LEFT JOIN plant_individuals pi ON pi.catalogNumber = el.catalogNumber AND pi.plant_individual_id = el.plant_individual_id ",
-    "LEFT JOIN voucher_reproductive_phenology vrp ON vrp.catalogNumber = el.catalogNumber AND vrp.plant_individual_id = el.plant_individual_id ",
-    "LEFT JOIN voucher_reproductive_phenology vrp0 ON vrp0.catalogNumber = el.catalogNumber AND vrp0.plant_individual_id = 0 "
+    v_join_sql,
+    pi_join_sql,
+    vrp_join_sql
   )
 
   contour_pred <- "el.contour_xy_json IS NOT NULL AND el.contour_xy_json != ''"
@@ -1529,7 +1679,14 @@ fetch_step03_contours_from_db <- function(
         coo <- align_contour_horizontal_xax(coo, is_upright = db_upright_vec[i])
         was_tipup_db <- isTRUE(attr(coo, "lm3_from_tipup"))
       }
-      if (has_momocs) coo <- tryCatch(Momocs::coo_cw(coo), error = function(e) coo)
+      if (exists("ensure_clockwise_keep_start_r", mode = "function")) {
+        coo <- ensure_clockwise_keep_start_r(coo)
+      } else if (nrow(coo) >= 3L) {
+        sa2 <- sum(coo[, 1L] * c(coo[-1L, 2L], coo[1L, 2L]) - c(coo[-1L, 1L], coo[1L, 1L]) * coo[, 2L])
+        if (is.finite(sa2) && sa2 > 0.0) {
+          coo <- coo[c(1L, seq.int(nrow(coo), 2L, by = -1L)), , drop = FALSE]
+        }
+      }
 
       x_next <- c(coo[-1L, 1L], coo[1L, 1L])
       y_next <- c(coo[-1L, 2L], coo[1L, 2L])
@@ -1710,6 +1867,62 @@ fetch_step03_contours_from_db <- function(
     )
   )
 
+  pull_db_then_manifest_num <- function(cn) {
+    out_v <- if (cn %in% names(sub_rows)) suppressWarnings(as.numeric(sub_rows[[cn]])) else rep(NA_real_, n_kept)
+    out_v[!is.finite(out_v)] <- NA_real_
+    if (!is.null(m_hdr) && cn %in% names(m_hdr) && any(!is.na(m_hit_vec) & !is.finite(out_v))) {
+      fill_mask <- !is.na(m_hit_vec) & !is.finite(out_v)
+      cand_v <- suppressWarnings(as.numeric(m_hdr[[cn]][m_hit_vec[fill_mask]]))
+      fin_m <- is.finite(cand_v)
+      if (any(fin_m)) {
+        fill_pos <- which(fill_mask)
+        out_v[fill_pos[fin_m]] <- cand_v[fin_m]
+      }
+    }
+    out_v
+  }
+  pull_sub_chr <- function(cn) {
+    if (cn %in% names(sub_rows)) as.character(sub_rows[[cn]]) else rep(NA_character_, n_kept)
+  }
+  pull_sub_int <- function(cn) {
+    if (cn %in% names(sub_rows)) suppressWarnings(as.integer(sub_rows[[cn]])) else rep(NA_integer_, n_kept)
+  }
+  pull_sub_num <- function(cn) {
+    if (cn %in% names(sub_rows)) suppressWarnings(as.numeric(sub_rows[[cn]])) else rep(NA_real_, n_kept)
+  }
+
+  bbox_x1_v <- suppressWarnings(as.integer(round(pull_db_then_manifest_num("bbox_x1"))))
+  bbox_y1_v <- suppressWarnings(as.integer(round(pull_db_then_manifest_num("bbox_y1"))))
+  bbox_x2_v <- suppressWarnings(as.integer(round(pull_db_then_manifest_num("bbox_x2"))))
+  bbox_y2_v <- suppressWarnings(as.integer(round(pull_db_then_manifest_num("bbox_y2"))))
+  cx_px_v <- pull_db_then_manifest_num("cx_px")
+  cy_px_v <- pull_db_then_manifest_num("cy_px")
+  miss_cx <- !is.finite(cx_px_v) & is.finite(bbox_x1_v) & is.finite(bbox_x2_v)
+  if (any(miss_cx)) cx_px_v[miss_cx] <- 0.5 * (as.numeric(bbox_x1_v[miss_cx]) + as.numeric(bbox_x2_v[miss_cx]))
+  miss_cy <- !is.finite(cy_px_v) & is.finite(bbox_y1_v) & is.finite(bbox_y2_v)
+  if (any(miss_cy)) cy_px_v[miss_cy] <- 0.5 * (as.numeric(bbox_y1_v[miss_cy]) + as.numeric(bbox_y2_v[miss_cy]))
+
+  ltl_px_v <- pull_db_then_manifest_num("lamina_trace_length_px")
+  ltl_mm_v <- ifelse(
+    cal_kept & is.finite(ppm_kept) & ppm_kept > 0 & is.finite(ltl_px_v),
+    round(ltl_px_v / ppm_kept, 4),
+    NA_real_
+  )
+
+  abax_flag_v <- rep(NA, n_kept)
+  if ("is_abaxial_pressed_leaf" %in% names(sub_rows)) {
+    raw_ab <- toupper(trimws(as.character(sub_rows$is_abaxial_pressed_leaf)))
+    abax_flag_v[raw_ab %in% c("1", "1.0", "TRUE", "T", "YES")] <- TRUE
+    abax_flag_v[raw_ab %in% c("0", "0.0", "FALSE", "F", "NO")] <- FALSE
+  }
+  if (!is.null(m_hdr) && "is_abaxial_pressed_leaf" %in% names(m_hdr) && any(is.na(abax_flag_v) & !is.na(m_hit_vec))) {
+    fill_ab <- which(is.na(abax_flag_v) & !is.na(m_hit_vec))
+    m_ab_raw <- toupper(trimws(as.character(m_hdr$is_abaxial_pressed_leaf[m_hit_vec[fill_ab]])))
+    abax_flag_v[fill_ab[m_ab_raw %in% c("1", "1.0", "TRUE", "T", "YES")]] <- TRUE
+    abax_flag_v[fill_ab[m_ab_raw %in% c("0", "0.0", "FALSE", "F", "NO")]] <- FALSE
+  }
+  abax_flag_v[is.na(abax_flag_v)] <- FALSE
+
   coords_list <- merged$coo[ok_idx]
   names(coords_list) <- sid_vec
   meta_df <- data.frame(
@@ -1731,6 +1944,21 @@ fetch_step03_contours_from_db <- function(
       vapply(coords_list, function(c_el) isTRUE(attr(c_el, "lm3_from_tipup")), logical(1L)),
       as.logical(db_upright_vec[ok_idx])
     ),
+    bbox_x1 = bbox_x1_v,
+    bbox_y1 = bbox_y1_v,
+    bbox_x2 = bbox_x2_v,
+    bbox_y2 = bbox_y2_v,
+    cx_px = cx_px_v,
+    cy_px = cy_px_v,
+    base_angle_deg = pull_db_then_manifest_num("base_angle_deg"),
+    apex_angle_deg = pull_db_then_manifest_num("apex_angle_deg"),
+    lamina_curvature = pull_db_then_manifest_num("lamina_curvature"),
+    lamina_trace_length_px = ltl_px_v,
+    lamina_trace_length_mm = ltl_mm_v,
+    basal_cordate_index = pull_db_then_manifest_num("basal_cordate_index"),
+    margin_serration_index = pull_db_then_manifest_num("margin_serration_index"),
+    margin_tooth_acuteness = pull_db_then_manifest_num("margin_tooth_acuteness"),
+    terminal_lobe_area_frac = pull_db_then_manifest_num("terminal_lobe_area_frac"),
     area_mm2 = {
       db_am <- if ("area_mm2" %in% names(sub_rows)) suppressWarnings(as.numeric(sub_rows$area_mm2)) else rep(NA_real_, n_kept)
       db_am[!is.finite(db_am)] <- NA_real_
@@ -1764,6 +1992,10 @@ fetch_step03_contours_from_db <- function(
     blade_cie_l_sheet_delta = pull_manifest_num("blade_cie_l_sheet_delta", if ("blade_cie_l_sheet_delta" %in% names(sub_rows)) suppressWarnings(as.numeric(sub_rows$blade_cie_l_sheet_delta)) else rep(NA_real_, n_kept)),
     blade_cie_a_delta = pull_manifest_num("blade_cie_a_delta", if ("blade_cie_a_delta" %in% names(sub_rows)) suppressWarnings(as.numeric(sub_rows$blade_cie_a_delta)) else rep(NA_real_, n_kept)),
     blade_cie_b_delta = pull_manifest_num("blade_cie_b_delta", if ("blade_cie_b_delta" %in% names(sub_rows)) suppressWarnings(as.numeric(sub_rows$blade_cie_b_delta)) else rep(NA_real_, n_kept)),
+    blade_cie_l_q85_sheet_delta = pull_db_then_manifest_num("blade_cie_l_q85_sheet_delta"),
+    basal_zone_cie_l_delta = pull_db_then_manifest_num("basal_zone_cie_l_delta"),
+    is_abaxial_pressed_leaf = as.logical(abax_flag_v),
+    abaxial_cie_l_sheet_delta = pull_db_then_manifest_num("abaxial_cie_l_sheet_delta"),
     petiole_to_blade_ratio = suppressWarnings(as.numeric(sub_rows$petiole_to_blade_ratio)),
     is_dissected = eff_diss_vec,
     ect_path = db_ect_vec,
@@ -1772,12 +2004,54 @@ fetch_step03_contours_from_db <- function(
     dist_from_crown_norm = pull_manifest_num("dist_from_crown_norm", db_dist_cr_vec),
     cy_rel_plant_bbox = pull_manifest_num("cy_rel_plant_bbox", db_cy_rel_vec),
     cy_rel_sheet = pull_manifest_num("cy_rel_sheet"),
-    AR_inv = suppressWarnings(as.numeric(sub_rows$AR_inv)),
-    capitula_count = suppressWarnings(as.numeric(sub_rows$capitula_count)),
-    involucre_height_px = suppressWarnings(as.numeric(sub_rows$involucre_height_px)),
-    involucre_width_px = suppressWarnings(as.numeric(sub_rows$involucre_width_px)),
-    involucre_height_mm = suppressWarnings(as.numeric(sub_rows$involucre_height_mm)),
-    involucre_width_mm = suppressWarnings(as.numeric(sub_rows$involucre_width_mm)),
+    rosette_centroid_x = pull_sub_num("rosette_centroid_x"),
+    rosette_centroid_y = pull_sub_num("rosette_centroid_y"),
+    AR_inv = pull_sub_num("AR_inv"),
+    capitula_count = pull_sub_num("capitula_count"),
+    involucre_height_px = pull_sub_num("involucre_height_px"),
+    involucre_width_px = pull_sub_num("involucre_width_px"),
+    involucre_height_mm = pull_sub_num("involucre_height_mm"),
+    involucre_width_mm = pull_sub_num("involucre_width_mm"),
+    corymb_head_count_est = pull_sub_int("corymb_head_count_est"),
+    radiate_head_fraction = pull_sub_num("radiate_head_fraction"),
+    institutionCode = pull_sub_chr("institutionCode"),
+    scientificName = pull_sub_chr("scientificName"),
+    species_raw = pull_sub_chr("species_raw"),
+    species_standardized = pull_sub_chr("species_standardized"),
+    recordedBy = pull_sub_chr("recordedBy"),
+    recordNumber = pull_sub_chr("recordNumber"),
+    identifiedBy = pull_sub_chr("identifiedBy"),
+    determiner_tier = pull_sub_chr("determiner_tier"),
+    type_status = pull_sub_chr("type_status"),
+    county = pull_sub_chr("county"),
+    stateProvince = pull_sub_chr("stateProvince"),
+    locality = pull_sub_chr("locality"),
+    decimalLatitude = pull_sub_num("decimalLatitude"),
+    decimalLongitude = pull_sub_num("decimalLongitude"),
+    coordinateUncertainty = pull_sub_num("coordinateUncertainty"),
+    year = pull_sub_int("year"),
+    month = pull_sub_int("month"),
+    day = pull_sub_int("day"),
+    eventDate = pull_sub_chr("eventDate"),
+    doy = pull_sub_num("doy"),
+    regional_group = pull_sub_chr("regional_group"),
+    infraspecific_taxon = pull_sub_chr("infraspecific_taxon"),
+    is_primary_duplicate = pull_sub_int("is_primary_duplicate"),
+    duplicate_count = pull_sub_int("duplicate_count"),
+    spatial_balance_weight = pull_sub_num("spatial_balance_weight"),
+    typified_basionym = pull_sub_chr("typified_basionym"),
+    verbatim_taxon_concept = pull_sub_chr("verbatim_taxon_concept"),
+    concept_synonymy_status = pull_sub_chr("concept_synonymy_status"),
+    identification_year = pull_sub_int("identification_year"),
+    is_open_or_hybrid_concept = pull_sub_int("is_open_or_hybrid_concept"),
+    georef_qc_status = pull_sub_chr("georef_qc_status"),
+    is_centroid_or_inst_coord = pull_sub_int("is_centroid_or_inst_coord"),
+    coord_quarantine_reason = pull_sub_chr("coord_quarantine_reason"),
+    usda_symbol = pull_sub_chr("usda_symbol"),
+    usda_county_status = pull_sub_chr("usda_county_status"),
+    exsiccatae_key = pull_sub_chr("exsiccatae_key"),
+    exsiccatae_taxonomic_conflict = pull_sub_int("exsiccatae_taxonomic_conflict"),
+    exsiccatae_gold_taxon = pull_sub_chr("exsiccatae_gold_taxon"),
     centroid_size = cs_kept,
     log_centsize = log_cs_kept,
     aspect_ratio = merged$ar[ok_idx],
@@ -1786,6 +2060,7 @@ fetch_step03_contours_from_db <- function(
     mask_source = paste0("sqlite://extracted_leaves/", sid_vec),
     stringsAsFactors = FALSE
   )
+  meta_df <- coerce_sqlite_logical_cols(meta_df)
   rownames(meta_df) <- sid_vec
   list(
     coords_list = coords_list,
@@ -1797,8 +2072,11 @@ fetch_step03_contours_from_db <- function(
   if (is.null(df) || !is.data.frame(df) || nrow(df) == 0L) {
     return(df)
   }
-  for (ic in intersect(c("plant_individual_id", "leaf_id", "efd_harmonic_opt", "efd_k95_pcs", "basal_leaf_count", "cauline_leaf_count"), names(df))) {
+  for (ic in intersect(c("plant_individual_id", "leaf_id", "efd_harmonic_opt", "efd_k95_pcs", "basal_leaf_count", "cauline_leaf_count", "bbox_x1", "bbox_y1", "bbox_x2", "bbox_y2"), names(df))) {
     df[[ic]] <- suppressWarnings(as.integer(df[[ic]]))
+  }
+  if ("is_abaxial_pressed_leaf" %in% names(df)) {
+    df <- coerce_sqlite_logical_cols(df, cols = "is_abaxial_pressed_leaf")
   }
   if ("selected_morph_features" %in% names(df)) {
     df[["selected_morph_features"]] <- .normalize_semicolon_col_r(df[["selected_morph_features"]])
@@ -1817,10 +2095,16 @@ fetch_step03_contours_from_db <- function(
       "ect_lobe_complexity", "cauline_ect_lobe_complexity",
       "ect_bilateral_asym", "heteroblasty_ect_distance",
       "area_mm2", "petiole_width_mm", "blade_width_mm",
+      "base_angle_deg", "apex_angle_deg", "lamina_curvature",
+      "lamina_trace_length_px", "lamina_trace_length_mm",
+      "basal_cordate_index", "margin_serration_index", "margin_tooth_acuteness",
+      "terminal_lobe_area_frac",
       "blade_cie_l_norm", "blade_cie_l_sd",
-      "blade_cie_l_sheet_delta", "blade_cie_a_delta", "blade_cie_b_delta",
+      "blade_cie_l_sheet_delta", "blade_cie_l_q85_sheet_delta", "basal_zone_cie_l_delta",
+      "blade_cie_a_delta", "blade_cie_b_delta",
+      "abaxial_leaf_fraction", "abaxial_cie_l_sheet_delta",
       "blade_cie_a_browning_delta", "blade_cie_b_yellowing_delta",
-      "corymb_head_count_est", "anthesis_head_count", "fruiting_head_count",
+      "corymb_head_count_est", "radiate_head_fraction", "anthesis_head_count", "fruiting_head_count",
       "Boot_LRT_Stat_prev", "Boot_LRT_P_prev",
       "log1p_capitulum_count", "log1p_capitulum_count_std", "nearest_type_basionym_d2", "spatial_balance_weight"
     ),
@@ -2011,13 +2295,14 @@ persist_step03_to_sqlite <- function(
   has_fin_in_leaf <- function(cn) {
     (cn %in% names(leaf_df)) && any(is.finite(suppressWarnings(as.numeric(leaf_df[[cn]]))))
   }
-  agg_med_col <- function(cn, digits = NULL, pos_only = FALSE, cal_vec = NULL) {
+  agg_med_col <- function(cn, digits = NULL, pos_only = FALSE, cal_vec = NULL, subset_vec = NULL) {
     out <- rep(NA_real_, n_df)
     if (!(cn %in% names(leaf_df))) return(out)
     v_all <- suppressWarnings(as.numeric(leaf_df[[cn]]))
     for (i in which(matched_rows)) {
       idx <- prim_idx[[i]]
       if (!is.null(cal_vec)) idx <- idx[cal_vec[idx]]
+      if (!is.null(subset_vec)) idx <- idx[subset_vec[idx]]
       if (length(idx) == 0L) next
       vf <- v_all[idx]
       vf <- if (isTRUE(pos_only)) vf[is.finite(vf) & vf > 0.0] else vf[is.finite(vf)]
@@ -2029,7 +2314,9 @@ persist_step03_to_sqlite <- function(
     out
   }
 
-  harm_cols <- intersect(PACKERA_DB_HARMONIC_COLS, names(leaf_df))
+  df_has_asym <- any(grepl("^[BC][0-9]+$", names(df)))
+  allowed_harm_pool <- if (df_has_asym) PACKERA_DB_HARMONIC_COLS else PACKERA_DB_SYM_HARMONIC_COLS
+  harm_cols <- intersect(allowed_harm_pool, names(leaf_df))
   harm_cols <- harm_cols[vapply(harm_cols, has_fin_in_leaf, logical(1L))]
   for (hc in harm_cols) {
     vals <- agg_med_col(hc)
@@ -2041,7 +2328,10 @@ persist_step03_to_sqlite <- function(
   for (spec in list(
     list(col = "ECT_PC1", d = 6L), list(col = "ECT_PC2", d = 6L), list(col = "ECT_PC3", d = 6L),
     list(col = "ect_lobe_complexity", d = 4L),
-    list(col = "solidity", d = 4L), list(col = "dissection_index", d = 4L), list(col = "aspect_ratio", d = 4L)
+    list(col = "solidity", d = 4L), list(col = "dissection_index", d = 4L), list(col = "aspect_ratio", d = 4L),
+    list(col = "base_angle_deg", d = 4L), list(col = "apex_angle_deg", d = 4L), list(col = "lamina_curvature", d = 4L),
+    list(col = "basal_cordate_index", d = 4L), list(col = "margin_serration_index", d = 4L),
+    list(col = "margin_tooth_acuteness", d = 4L), list(col = "terminal_lobe_area_frac", d = 4L)
   )) {
     cn <- spec$col
     if (has_fin_in_leaf(cn)) {
@@ -2073,16 +2363,20 @@ persist_step03_to_sqlite <- function(
     }
   }
 
-  l_cal <- if ("is_calibrated_mm" %in% names(leaf_df)) {
-    !is.na(leaf_df$is_calibrated_mm) & as.logical(leaf_df$is_calibrated_mm)
+  uncal_ss_set <- c("mp_estimated", "predicted_from_megapixels", "tick_lattice_unboxed", "uncalibrated")
+  l_cal_raw <- if ("is_calibrated_mm" %in% names(leaf_df)) {
+    as.logical(leaf_df$is_calibrated_mm)
   } else {
-    rep(TRUE, nrow(leaf_df))
+    rep(NA, nrow(leaf_df))
   }
-  if ("scale_source" %in% names(leaf_df)) {
-    ss_l <- tolower(trimws(as.character(leaf_df$scale_source)))
-    ss_l[is.na(ss_l)] <- ""
-    l_cal <- l_cal & !(ss_l %in% c("mp_estimated", "predicted_from_megapixels", "tick_lattice_unboxed", "uncalibrated"))
+  ss_l <- if ("scale_source" %in% names(leaf_df)) {
+    s_tmp <- tolower(trimws(as.character(leaf_df$scale_source)))
+    s_tmp[is.na(s_tmp) | s_tmp %in% c("na", "null")] <- ""
+    s_tmp
+  } else {
+    rep("", nrow(leaf_df))
   }
+  l_cal <- ifelse(is.na(l_cal_raw), !(ss_l %in% uncal_ss_set), l_cal_raw) & !(ss_l %in% uncal_ss_set)
   d_cal <- if ("is_calibrated_mm" %in% names(df)) {
     !is.na(df$is_calibrated_mm) & as.logical(df$is_calibrated_mm)
   } else {
@@ -2090,8 +2384,47 @@ persist_step03_to_sqlite <- function(
   }
   if ("scale_source" %in% names(df)) {
     ss_d <- tolower(trimws(as.character(df$scale_source)))
-    ss_d[is.na(ss_d)] <- ""
-    d_cal <- d_cal & !(ss_d %in% c("mp_estimated", "predicted_from_megapixels", "tick_lattice_unboxed", "uncalibrated"))
+    ss_d[is.na(ss_d) | ss_d %in% c("na", "null")] <- ""
+    d_cal <- d_cal & !(ss_d %in% uncal_ss_set)
+  }
+  if (("scale_source" %in% names(leaf_df)) || ("is_calibrated_mm" %in% names(leaf_df))) {
+    ss_rest <- rep(NA_character_, n_df)
+    ok_ss <- rep(FALSE, n_df)
+    ok_cal_meta <- rep(FALSE, n_df)
+    for (i in which(matched_rows)) {
+      idx <- prim_idx[[i]]
+      if (length(idx) == 0L) next
+      has_cal_meta_i <- any(!is.na(l_cal_raw[idx]) | nzchar(ss_l[idx]))
+      if (has_cal_meta_i) {
+        ok_cal_meta[i] <- TRUE
+        has_cal_i <- any(l_cal[idx])
+        d_cal[i] <- d_cal[i] & has_cal_i
+      }
+      if (any(nzchar(ss_l[idx]))) {
+        ok_ss[i] <- TRUE
+        if (d_cal[i]) {
+          cal_ss <- ss_l[idx[l_cal[idx]]]
+          cal_ss <- cal_ss[nzchar(cal_ss)]
+          ss_rest[i] <- if (length(cal_ss) > 0L) cal_ss[1L] else "ruler_calibrated"
+        } else if ("tick_lattice_unboxed" %in% ss_l[idx]) {
+          ss_rest[i] <- "tick_lattice_unboxed"
+        } else if (any(ss_l[idx] %in% c("mp_estimated", "predicted_from_megapixels"))) {
+          ss_rest[i] <- "mp_estimated"
+        } else {
+          ss_rest[i] <- "uncalibrated"
+        }
+      }
+    }
+    if (any(ok_ss)) {
+      if (!("scale_source" %in% names(df))) df$scale_source <- rep(NA_character_, n_df)
+      df$scale_source[ok_ss] <- ss_rest[ok_ss]
+      restored_mask[["scale_source"]] <- ok_ss
+    }
+    if (any(ok_cal_meta)) {
+      if (!("is_calibrated_mm" %in% names(df))) df$is_calibrated_mm <- rep(NA, n_df)
+      df$is_calibrated_mm[ok_cal_meta] <- d_cal[ok_cal_meta]
+      restored_mask[["is_calibrated_mm"]] <- ok_cal_meta
+    }
   }
   if (has_fin_in_leaf("centroid_size") || has_fin_in_leaf("log_centsize")) {
     cs_vals <- if (has_fin_in_leaf("centroid_size")) agg_med_col("centroid_size", digits = 4L, pos_only = TRUE, cal_vec = l_cal) else rep(NA_real_, n_df)
@@ -2108,19 +2441,102 @@ persist_step03_to_sqlite <- function(
     restored_mask[["log_centsize"]] <- matched_rows
   }
 
+  has_ltl_px <- has_fin_in_leaf("lamina_trace_length_px")
+  has_ltl_mm <- has_fin_in_leaf("lamina_trace_length_mm")
+  if (has_ltl_mm || has_ltl_px) {
+    if (!("lamina_trace_length_mm" %in% names(leaf_df))) {
+      leaf_df$lamina_trace_length_mm <- rep(NA_real_, nrow(leaf_df))
+    }
+    ltl_mm_l <- suppressWarnings(as.numeric(leaf_df$lamina_trace_length_mm))
+    if (has_ltl_px && ("pixels_per_mm" %in% names(leaf_df))) {
+      l_ppm <- suppressWarnings(as.numeric(leaf_df$pixels_per_mm))
+      l_px <- suppressWarnings(as.numeric(leaf_df$lamina_trace_length_px))
+      fill_ltl <- !is.finite(ltl_mm_l) & l_cal & is.finite(l_ppm) & (l_ppm > 0.0) & is.finite(l_px)
+      if (any(fill_ltl)) {
+        ltl_mm_l[fill_ltl] <- round(l_px[fill_ltl] / l_ppm[fill_ltl], 4)
+      }
+    }
+    ltl_mm_l[!l_cal] <- NA_real_
+    leaf_df$lamina_trace_length_mm <- ltl_mm_l
+    ltl_vals <- rep(NA_real_, n_df)
+    for (i in which(matched_rows & d_cal)) {
+      idx <- prim_idx[[i]]
+      idx <- idx[l_cal[idx]]
+      if (length(idx) == 0L) next
+      vf <- ltl_mm_l[idx]
+      vf <- vf[is.finite(vf) & vf > 0.0]
+      if (length(vf) > 0L) {
+        ltl_vals[i] <- round(as.numeric(stats::quantile(vf, probs = 0.75, type = 7L, names = FALSE)), 4)
+      }
+    }
+    if (!("lamina_trace_length_mm" %in% names(df))) df$lamina_trace_length_mm <- rep(NA_real_, n_df)
+    df$lamina_trace_length_mm[matched_rows] <- ltl_vals[matched_rows]
+    restored_mask[["lamina_trace_length_mm"]] <- matched_rows
+  }
+
+  has_abax_col <- "is_abaxial_pressed_leaf" %in% names(leaf_df)
+  l_abax <- if (has_abax_col) {
+    !is.na(leaf_df$is_abaxial_pressed_leaf) & as.logical(leaf_df$is_abaxial_pressed_leaf)
+  } else {
+    rep(FALSE, nrow(leaf_df))
+  }
+  l_adax <- !l_abax
+
+  if (has_fin_in_leaf("basal_zone_cie_l_delta")) {
+    bz_vals <- agg_med_col("basal_zone_cie_l_delta", digits = 4L)
+    ok_bz <- matched_rows & is.finite(bz_vals)
+    if (any(ok_bz)) {
+      if (!("basal_zone_cie_l_delta" %in% names(df))) df$basal_zone_cie_l_delta <- rep(NA_real_, n_df)
+      df$basal_zone_cie_l_delta[ok_bz] <- bz_vals[ok_bz]
+      restored_mask[["basal_zone_cie_l_delta"]] <- ok_bz
+    }
+  }
+
   phot_cols <- unique(c(
-    intersect(c("blade_cie_l_norm", "blade_cie_l_sd", "blade_cie_l_sheet_delta", "blade_cie_a_delta", "blade_cie_b_delta", "blade_cie_a_browning_delta", "blade_cie_b_yellowing_delta"), names(leaf_df)),
+    intersect(c(
+      "blade_cie_l_norm", "blade_cie_l_sd", "blade_cie_l_sheet_delta",
+      "blade_cie_l_q85_sheet_delta",
+      "blade_cie_a_delta", "blade_cie_b_delta",
+      "blade_cie_a_browning_delta", "blade_cie_b_yellowing_delta"
+    ), names(leaf_df)),
     grep("^blade_cie_", names(leaf_df), value = TRUE)
   ))
   phot_cols <- phot_cols[vapply(phot_cols, has_fin_in_leaf, logical(1L))]
   for (pcol in phot_cols) {
-    vals <- agg_med_col(pcol, digits = 4L)
+    vals <- agg_med_col(pcol, digits = 4L, subset_vec = l_adax)
+    fb_all <- agg_med_col(pcol, digits = 4L)
+    use_fb <- matched_rows & !is.finite(vals) & is.finite(fb_all)
+    if (any(use_fb)) vals[use_fb] <- fb_all[use_fb]
     ok_p <- matched_rows & is.finite(vals)
     if (any(ok_p)) {
       if (!(pcol %in% names(df))) df[[pcol]] <- rep(NA_real_, n_df)
       df[[pcol]][ok_p] <- vals[ok_p]
       restored_mask[[pcol]] <- ok_p
     }
+  }
+
+  if (has_abax_col) {
+    abax_frac <- rep(NA_real_, n_df)
+    abax_flag <- rep(FALSE, n_df)
+    for (i in which(matched_rows)) {
+      idx <- prim_idx[[i]]
+      if (length(idx) > 0L) {
+        abax_frac[i] <- round(mean(l_abax[idx]), 4)
+        abax_flag[i] <- any(l_abax[idx])
+      }
+    }
+    if (!("abaxial_leaf_fraction" %in% names(df))) df$abaxial_leaf_fraction <- rep(NA_real_, n_df)
+    df$abaxial_leaf_fraction[matched_rows] <- abax_frac[matched_rows]
+    restored_mask[["abaxial_leaf_fraction"]] <- matched_rows
+    if (!("is_abaxial_pressed_leaf" %in% names(df))) df$is_abaxial_pressed_leaf <- rep(FALSE, n_df)
+    df$is_abaxial_pressed_leaf[matched_rows] <- abax_flag[matched_rows]
+    restored_mask[["is_abaxial_pressed_leaf"]] <- matched_rows
+  }
+  if (has_fin_in_leaf("abaxial_cie_l_sheet_delta")) {
+    abax_l_vals <- agg_med_col("abaxial_cie_l_sheet_delta", digits = 4L, subset_vec = if (has_abax_col) l_abax else NULL)
+    if (!("abaxial_cie_l_sheet_delta" %in% names(df))) df$abaxial_cie_l_sheet_delta <- rep(NA_real_, n_df)
+    df$abaxial_cie_l_sheet_delta[matched_rows] <- abax_l_vals[matched_rows]
+    restored_mask[["abaxial_cie_l_sheet_delta"]] <- matched_rows
   }
 
   pca_sym_cols <- grep("^[AD][0-9]+$", harm_cols, value = TRUE)
@@ -2403,7 +2819,7 @@ fetch_step04_morphometrics_from_db <- function(
     add_coalesce_col(cn_pi, c("om", "pi", "vrp", "v"))
   }
   add_coalesce_col("AR_inv", c("om", "vrp"))
-  for (cn_vrp in c("capitula_count", "involucre_height_px", "involucre_width_px", "involucre_height_mm", "involucre_width_mm", "corymb_head_count_est", "anthesis_head_count", "fruiting_head_count")) {
+  for (cn_vrp in c("capitula_count", "involucre_height_px", "involucre_width_px", "involucre_height_mm", "involucre_width_mm", "corymb_head_count_est", "radiate_head_fraction", "anthesis_head_count", "fruiting_head_count")) {
     add_coalesce_col(cn_vrp, c("vrp", "pi", "om", "v"))
   }
 
@@ -2493,8 +2909,14 @@ fetch_step04_morphometrics_from_db <- function(
                 "Cauline_ECT_PC1", "Cauline_ECT_PC2", "aspect_ratio", "solidity", "q25_solidity",
                 "dissection_index", "dissected_leaf_fraction", "within_rosette_efa_dispersion",
                 "heteroblasty_efa_distance", "heteroblasty_ect_distance", "ect_lobe_complexity",
-                "cauline_ect_lobe_complexity", "blade_cie_l_norm", "blade_cie_l_sd",
-                "blade_cie_l_sheet_delta", "blade_cie_a_delta", "blade_cie_b_delta",
+                "cauline_ect_lobe_complexity",
+                "base_angle_deg", "apex_angle_deg", "lamina_curvature", "lamina_trace_length_mm",
+                "basal_cordate_index", "margin_serration_index", "margin_tooth_acuteness",
+                "terminal_lobe_area_frac",
+                "blade_cie_l_norm", "blade_cie_l_sd",
+                "blade_cie_l_sheet_delta", "blade_cie_l_q85_sheet_delta", "basal_zone_cie_l_delta",
+                "blade_cie_a_delta", "blade_cie_b_delta",
+                "is_abaxial_pressed_leaf", "abaxial_leaf_fraction", "abaxial_cie_l_sheet_delta",
                 "blade_cie_a_browning_delta", "blade_cie_b_yellowing_delta",
                 "centroid_size", "log_centsize", "scale_source"
               ),
@@ -2513,6 +2935,7 @@ fetch_step04_morphometrics_from_db <- function(
                 df[[rc]][fill_pos] <- hm_raw[[rc]][m_idx[fill_pos]]
               }
             }
+            df <- coerce_sqlite_logical_cols(df)
           }
         }
       }

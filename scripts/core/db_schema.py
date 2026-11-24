@@ -307,6 +307,19 @@ def _build_master_view_ddl() -> str:
         om.blade_cie_l_sheet_delta AS blade_cie_l_sheet_delta,
         om.blade_cie_a_delta AS blade_cie_a_delta,
         om.blade_cie_b_delta AS blade_cie_b_delta,
+        om.base_angle_deg AS base_angle_deg,
+        om.apex_angle_deg AS apex_angle_deg,
+        om.lamina_curvature AS lamina_curvature,
+        om.lamina_trace_length_mm AS lamina_trace_length_mm,
+        om.basal_cordate_index AS basal_cordate_index,
+        om.margin_serration_index AS margin_serration_index,
+        om.margin_tooth_acuteness AS margin_tooth_acuteness,
+        om.terminal_lobe_area_frac AS terminal_lobe_area_frac,
+        om.blade_cie_l_q85_sheet_delta AS blade_cie_l_q85_sheet_delta,
+        om.basal_zone_cie_l_delta AS basal_zone_cie_l_delta,
+        om.is_abaxial_pressed_leaf AS is_abaxial_pressed_leaf,
+        om.abaxial_leaf_fraction AS abaxial_leaf_fraction,
+        om.abaxial_cie_l_sheet_delta AS abaxial_cie_l_sheet_delta,
         om.is_dissected AS is_dissected,
         om.centroid_size AS centroid_size,
         om.log_centsize AS log_centsize,
@@ -1110,9 +1123,27 @@ def _build_schema_ddl() -> str:
         blade_cie_l_sheet_delta REAL,
         blade_cie_a_delta REAL,
         blade_cie_b_delta REAL,
+        blade_cie_l_q85_sheet_delta REAL,
+        basal_zone_cie_l_delta REAL,
+        is_abaxial_pressed_leaf INTEGER DEFAULT 0,
+        abaxial_cie_l_sheet_delta REAL,
         is_dissected INTEGER,
         pixels_per_mm REAL,
         is_calibrated_mm INTEGER,
+        scale_source TEXT,
+        bbox_x1 INTEGER,
+        bbox_y1 INTEGER,
+        bbox_x2 INTEGER,
+        bbox_y2 INTEGER,
+        base_angle_deg REAL,
+        apex_angle_deg REAL,
+        lamina_curvature REAL,
+        lamina_trace_length_px REAL,
+        lamina_trace_length_mm REAL,
+        basal_cordate_index REAL,
+        margin_serration_index REAL,
+        margin_tooth_acuteness REAL,
+        terminal_lobe_area_frac REAL,
         petiole_length_mm REAL,
         petiole_width_mm REAL,
         blade_length_mm REAL,
@@ -1203,6 +1234,19 @@ def _build_schema_ddl() -> str:
         blade_cie_l_sheet_delta REAL,
         blade_cie_a_delta REAL,
         blade_cie_b_delta REAL,
+        base_angle_deg REAL,
+        apex_angle_deg REAL,
+        lamina_curvature REAL,
+        lamina_trace_length_mm REAL,
+        basal_cordate_index REAL,
+        margin_serration_index REAL,
+        margin_tooth_acuteness REAL,
+        terminal_lobe_area_frac REAL,
+        blade_cie_l_q85_sheet_delta REAL,
+        basal_zone_cie_l_delta REAL,
+        is_abaxial_pressed_leaf INTEGER DEFAULT 0,
+        abaxial_leaf_fraction REAL,
+        abaxial_cie_l_sheet_delta REAL,
         AR_inv REAL,
         AR_inv_std REAL,
         log1p_capitulum_count REAL,
@@ -1538,6 +1582,24 @@ _DYNAMIC_TABLE_MIGRATION_SPECS: Dict[str, Tuple[Tuple[str, str], ...]] = {
             ("blade_cie_l_sheet_delta", "REAL"),
             ("blade_cie_a_delta", "REAL"),
             ("blade_cie_b_delta", "REAL"),
+            ("scale_source", "TEXT"),
+            ("bbox_x1", "INTEGER"),
+            ("bbox_y1", "INTEGER"),
+            ("bbox_x2", "INTEGER"),
+            ("bbox_y2", "INTEGER"),
+            ("base_angle_deg", "REAL"),
+            ("apex_angle_deg", "REAL"),
+            ("lamina_curvature", "REAL"),
+            ("lamina_trace_length_px", "REAL"),
+            ("lamina_trace_length_mm", "REAL"),
+            ("basal_cordate_index", "REAL"),
+            ("margin_serration_index", "REAL"),
+            ("margin_tooth_acuteness", "REAL"),
+            ("terminal_lobe_area_frac", "REAL"),
+            ("blade_cie_l_q85_sheet_delta", "REAL"),
+            ("basal_zone_cie_l_delta", "REAL"),
+            ("is_abaxial_pressed_leaf", "INTEGER DEFAULT 0"),
+            ("abaxial_cie_l_sheet_delta", "REAL"),
         ]
     ),
     "otu_morphometrics": tuple(
@@ -1603,6 +1665,19 @@ _DYNAMIC_TABLE_MIGRATION_SPECS: Dict[str, Tuple[Tuple[str, str], ...]] = {
             ("log1p_capitulum_count_std", "REAL"),
             ("nearest_type_basionym", "TEXT"),
             ("nearest_type_basionym_d2", "REAL"),
+            ("base_angle_deg", "REAL"),
+            ("apex_angle_deg", "REAL"),
+            ("lamina_curvature", "REAL"),
+            ("lamina_trace_length_mm", "REAL"),
+            ("basal_cordate_index", "REAL"),
+            ("margin_serration_index", "REAL"),
+            ("margin_tooth_acuteness", "REAL"),
+            ("terminal_lobe_area_frac", "REAL"),
+            ("blade_cie_l_q85_sheet_delta", "REAL"),
+            ("basal_zone_cie_l_delta", "REAL"),
+            ("is_abaxial_pressed_leaf", "INTEGER DEFAULT 0"),
+            ("abaxial_leaf_fraction", "REAL"),
+            ("abaxial_cie_l_sheet_delta", "REAL"),
         ]
     ),
     "spatial_rf_predictions": tuple(
@@ -2351,10 +2426,11 @@ def init_db_schema(conn: sqlite3.Connection) -> None:
             ):
                 _migrate_vouchers_schema_columns(conn)
             el_cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(extracted_leaves);").fetchall()}
+            leh_cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(leaf_efa_harmonics);").fetchall()}
             om_cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(otu_morphometrics);").fetchall()}
             srf_cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(spatial_rf_predictions);").fetchall()}
             mv_cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(v_integrative_triage_master);").fetchall()}
-            req_mv_cols = {"is_passive", "scale_source", "AR_inv_std", "log1p_capitulum_count", "corymb_head_count_est", "radiate_head_fraction", "blade_cie_l_norm", "blade_cie_l_sheet_delta", "blade_cie_a_delta", "blade_cie_b_delta", "nearest_type_basionym", "reproductive_trait_status", "ecoregion_can1", "ecoregion_can2", "hybrid_zone_cohesion_pass", "hybrid_parent_1", "hybrid_parent_2", "cda_oof_posterior_prob", "self_morph_mahal_d2", "open_set_df", "cryptic_non_clinal_pass", "resurrection_basionym", "w_geno_kappa", "geno_predicted_taxon", "geno_linkage_tier", "is_geno_admixed", "coalescent_gdi", "hybrid_generation_class", "cytonuclear_discordant", "public_plastome_match", "public_its_match", "waxy_lineage_match", "public_backbone_clade", "public_phytop_ils_index", "public_phytop_ih_index", "genomic_propagation_tier", "cluster_propagated_gdi", "cytology_linkage_tier", "voucher_sporophytic_2n", "voucher_ploidy_level", "taxon_reported_cytotypes", "is_multi_cytotype_taxon", "cytotype_reproductive_barrier_pass", "soil_ca_mg_molar_ratio", "soil_ultramafic_ni_cr_index", "soil_carbonate_c_pct", "is_nwi_wetland", "nwi_wetland_system", "nwi_wetland_dist_m", "hydro_edaphic_niche_regime", "wetland_fidelity_concordance", "basionym_synonymy_type", "backbone_basionym_name", "protologue_url", "natureserve_global_rank", "nwpl_indicator_code", "nwpl_wetland_score", "is_centroid_or_inst_coord", "coord_quarantine_reason", "typified_basionym", "verbatim_taxon_concept", "concept_synonymy_status", "identification_year", "is_open_or_hybrid_concept", "env_mahal_d2", "env_mcd_outlier_flag"}
+            req_mv_cols = {"is_passive", "scale_source", "AR_inv_std", "log1p_capitulum_count", "corymb_head_count_est", "radiate_head_fraction", "blade_cie_l_norm", "blade_cie_l_sheet_delta", "blade_cie_a_delta", "blade_cie_b_delta", "basal_cordate_index", "blade_cie_l_q85_sheet_delta", "abaxial_leaf_fraction", "nearest_type_basionym", "reproductive_trait_status", "ecoregion_can1", "ecoregion_can2", "hybrid_zone_cohesion_pass", "hybrid_parent_1", "hybrid_parent_2", "cda_oof_posterior_prob", "self_morph_mahal_d2", "open_set_df", "cryptic_non_clinal_pass", "resurrection_basionym", "w_geno_kappa", "geno_predicted_taxon", "geno_linkage_tier", "is_geno_admixed", "coalescent_gdi", "hybrid_generation_class", "cytonuclear_discordant", "public_plastome_match", "public_its_match", "waxy_lineage_match", "public_backbone_clade", "public_phytop_ils_index", "public_phytop_ih_index", "genomic_propagation_tier", "cluster_propagated_gdi", "cytology_linkage_tier", "voucher_sporophytic_2n", "voucher_ploidy_level", "taxon_reported_cytotypes", "is_multi_cytotype_taxon", "cytotype_reproductive_barrier_pass", "soil_ca_mg_molar_ratio", "soil_ultramafic_ni_cr_index", "soil_carbonate_c_pct", "is_nwi_wetland", "nwi_wetland_system", "nwi_wetland_dist_m", "hydro_edaphic_niche_regime", "wetland_fidelity_concordance", "basionym_synonymy_type", "backbone_basionym_name", "protologue_url", "natureserve_global_rank", "nwpl_indicator_code", "nwpl_wetland_score", "is_centroid_or_inst_coord", "coord_quarantine_reason", "typified_basionym", "verbatim_taxon_concept", "concept_synonymy_status", "identification_year", "is_open_or_hybrid_concept", "env_mahal_d2", "env_mcd_outlier_flag"}
             if (
                 "leaf_zone" not in el_cols
                 or "area_mm2" not in el_cols
@@ -2370,12 +2446,21 @@ def init_db_schema(conn: sqlite3.Connection) -> None:
                 or "blade_cie_l_q85_sheet_delta" not in el_cols
                 or "is_abaxial_pressed_leaf" not in el_cols
                 or _tier_a_step02_needs_rebuild(conn)
+                or "scale_source" not in leh_cols
+                or "bbox_x1" not in leh_cols
+                or "lamina_trace_length_mm" not in leh_cols
+                or "basal_cordate_index" not in leh_cols
+                or "blade_cie_l_q85_sheet_delta" not in leh_cols
+                or "is_abaxial_pressed_leaf" not in leh_cols
                 or "cauline_leaf_count" not in om_cols
                 or "ECT_PC1" not in om_cols
                 or "blade_width_mm" not in om_cols
                 or "scale_source" not in om_cols
                 or "is_promoted_bronze" not in om_cols
                 or "within_rosette_efa_dispersion" not in om_cols
+                or "basal_cordate_index" not in om_cols
+                or "blade_cie_l_q85_sheet_delta" not in om_cols
+                or "abaxial_leaf_fraction" not in om_cols
                 or "env_mahal_d2" not in srf_cols
                 or "env_mcd_outlier_flag" not in srf_cols
                 or not req_mv_cols.issubset(mv_cols)

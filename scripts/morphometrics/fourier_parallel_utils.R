@@ -12,6 +12,12 @@
 #       with full Tier_0 nomenclatural type immunity from outlier dropping.
 # ==============================================================================
 
+if (!exists("aggregate_step02_traits_by_otu", mode = "function")) {
+  for (.s03_etp in c("scripts/morphometrics/step03_ect_traits_utils.R", "step03_ect_traits_utils.R")) {
+    if (file.exists(.s03_etp)) { source(.s03_etp); break }
+  }
+}
+
 write_step03_csv_fast <- function(df, target_path) {
   dir.create(dirname(target_path), recursive = TRUE, showWarnings = FALSE)
   tmp_p <- paste0(target_path, ".", Sys.getpid(), ".tmp")
@@ -56,10 +62,17 @@ align_contour_horizontal_xax <- function(coo, is_upright = NA) {
   }
 
   # 2. Already horizontally aligned along X-axis (Point 1 at basal/apical X pole):
-  #    Preserve exact midrib orientation without vertex-61 perimeter-asymmetry drift.
+  #    Preserve exact midrib orientation without vertex-61 perimeter-asymmetry drift,
+  #    rotating 180 deg when dx[1L] > 0 so Point 1 (lamina_base) always maps to -X.
   if (abs(dx[1L]) >= 0.42 * max_abs_x && abs(dy[1L]) <= 0.22 * max_abs_y) {
-    attr(coo, "lm3_xax_aligned") <- TRUE
-    return(coo)
+    out_coo <- if (is.finite(dx[1L]) && dx[1L] > 0.0) {
+      cbind(-dx + cx, -dy + cy)
+    } else {
+      cbind(dx + cx, dy + cy)
+    }
+    colnames(out_coo) <- colnames(coo)
+    attr(out_coo, "lm3_xax_aligned") <- TRUE
+    return(out_coo)
   }
 
   # 3. Fallback for arbitrary oblique legacy contours lacking Step 02 tip-up frame:
@@ -259,9 +272,6 @@ aggregate_step03_otu_medians_fast <- function(closed_leaf_df, all_harm_cols, sym
   ect2_v <- if (has_ect2) pull_num("ECT_PC2") else NULL
   ect3_v <- if (has_ect3) pull_num("ECT_PC3") else NULL
   ectlc_v <- if (has_ectlc) pull_num("ect_lobe_complexity") else NULL
-  phot_cols <- unique(intersect(c("blade_cie_l_norm", "blade_cie_l_sd", "blade_cie_l_sheet_delta", "blade_cie_a_delta", "blade_cie_b_delta", grep("^blade_(cie_|.*browning)", names(closed_leaf_df), value = TRUE)), names(closed_leaf_df)))
-  phot_vecs <- lapply(phot_cols, pull_num)
-  names(phot_vecs) <- phot_cols
   has_dis <- "is_dissected" %in% names(closed_leaf_df)
   dis_v <- if (has_dis) as.logical(closed_leaf_df$is_dissected) else NULL
 
@@ -283,7 +293,6 @@ aggregate_step03_otu_medians_fast <- function(closed_leaf_df, all_harm_cols, sym
     sv_m <- rep(NA_real_, m); av_m <- rep(NA_real_, m); pa_m <- rep(NA_real_, m); hr_m <- rep(NA_real_, m); lq_m <- rep(NA_real_, m)
     pet_m <- rep(NA_real_, m); petw_m <- rep(NA_real_, m); bld_m <- rep(NA_real_, m); bldw_m <- rep(NA_real_, m); pbr_m <- rep(NA_real_, m)
     ect1_m <- rep(NA_real_, m); ect2_m <- rep(NA_real_, m); ect3_m <- rep(NA_real_, m); ectlc_m <- rep(NA_real_, m)
-    phot_m <- if (length(phot_cols) > 0L) matrix(NA_real_, nrow = m, ncol = length(phot_cols), dimnames = list(NULL, phot_cols)) else NULL
     dis_m <- rep(NA, m); out_m <- logical(m)
 
     for (k in seq_len(m)) {
@@ -321,7 +330,6 @@ aggregate_step03_otu_medians_fast <- function(closed_leaf_df, all_harm_cols, sym
       if (has_pbr) pbr_m[k] <- q75_fin(pbr_v[idx])
       if (has_ect1) ect1_m[k] <- med_fin(ect1_v[idx], 6L); if (has_ect2) ect2_m[k] <- med_fin(ect2_v[idx], 6L)
       if (has_ect3) ect3_m[k] <- med_fin(ect3_v[idx], 6L); if (has_ectlc) ectlc_m[k] <- med_fin(ectlc_v[idx], 4L)
-      if (length(phot_cols) > 0L) for (pj in seq_along(phot_cols)) phot_m[k, pj] <- med_fin(phot_vecs[[pj]][idx], 4L)
       if (has_dis) dis_m[k] <- if (any(!is.na(dr))) any(dr, na.rm = TRUE) else NA
       if (has_out_col) out_m[k] <- all(out_vec[idx], na.rm = TRUE)
     }
@@ -333,7 +341,7 @@ aggregate_step03_otu_medians_fast <- function(closed_leaf_df, all_harm_cols, sym
       sv = sv_m, av = av_m, pa = pa_m, hr = hr_m, lq = lq_m,
       pet = pet_m, petw = petw_m, bld = bld_m, bldw = bldw_m, pbr = pbr_m,
       ect1 = ect1_m, ect2 = ect2_m, ect3 = ect3_m, ectlc = ectlc_m,
-      phot = phot_m, dis = dis_m, out = out_m
+      dis = dis_m, out = out_m
     )
   }
 
@@ -356,7 +364,6 @@ aggregate_step03_otu_medians_fast <- function(closed_leaf_df, all_harm_cols, sym
       sv = pull_c("sv"), av = pull_c("av"), pa = pull_c("pa"), hr = pull_c("hr"), lq = pull_c("lq"),
       pet = pull_c("pet"), petw = pull_c("petw"), bld = pull_c("bld"), bldw = pull_c("bldw"), pbr = pull_c("pbr"),
       ect1 = pull_c("ect1"), ect2 = pull_c("ect2"), ect3 = pull_c("ect3"), ectlc = pull_c("ectlc"),
-      phot = if (length(phot_cols) > 0L) do.call(rbind, lapply(c_list, `[[`, "phot")) else NULL,
       dis = pull_c("dis"), out = pull_c("out")
     )
   }
@@ -386,6 +393,10 @@ aggregate_step03_otu_medians_fast <- function(closed_leaf_df, all_harm_cols, sym
 
   other_meta <- intersect(
     c("pixels_per_mm", "is_calibrated_mm", "scale_source", "mask_is_upright", "species_standardized", "taxon", "institutionCode", "identifiedBy", "authority_tier", "type_status", "is_type_specimen", "is_promoted_bronze", "anchor_tier_source",
+      "typified_basionym", "verbatim_taxon_concept", "concept_synonymy_status", "identification_year", "is_open_or_hybrid_concept",
+      "georef_qc_status", "is_centroid_or_inst_coord", "coord_quarantine_reason",
+      "usda_symbol", "usda_county_status", "exsiccatae_key", "exsiccatae_taxonomic_conflict", "exsiccatae_gold_taxon",
+      "corymb_head_count_est", "radiate_head_fraction",
       "stateProvince", "county", "locality", "decimalLatitude", "decimalLongitude", "coordinateUncertainty",
       "year", "month", "day", "eventDate", "regional_group", "spatial_balance_weight"),
     names(closed_leaf_df)
@@ -452,7 +463,18 @@ aggregate_step03_otu_medians_fast <- function(closed_leaf_df, all_harm_cols, sym
   if (has_ect2) spec_df$ECT_PC2 <- res$ect2
   if (has_ect3) spec_df$ECT_PC3 <- res$ect3
   if (has_ectlc) spec_df$ect_lobe_complexity <- res$ectlc
-  for (pcol in phot_cols) spec_df[[pcol]] <- as.numeric(res$phot[, pcol])
+  if (exists("aggregate_step02_traits_by_otu", mode = "function")) {
+    spec_cal_flags <- vapply(seq_len(n_spec), function(gi) any(cal_mask[grp_list[[gi]]]), logical(1L))
+    prim_zones <- ifelse(is_caul_fb_vec, "cauline", "basal")
+    leaf_for_traits <- closed_leaf_df
+    if ("lamina_trace_length_mm" %in% names(leaf_for_traits) && any(!cal_mask)) {
+      leaf_for_traits$lamina_trace_length_mm[!cal_mask] <- NA_real_
+    }
+    s02_traits_df <- aggregate_step02_traits_by_otu(leaf_for_traits, grp_list, prim_zones, spec_cal_flags)
+    if (is.data.frame(s02_traits_df) && nrow(s02_traits_df) == n_spec) {
+      for (tcol in names(s02_traits_df)) spec_df[[tcol]] <- s02_traits_df[[tcol]]
+    }
+  }
   if (has_dis) spec_df$is_dissected <- res$dis
   if (has_out_col) spec_df$is_contour_outlier <- res$out
 

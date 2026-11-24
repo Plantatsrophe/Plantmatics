@@ -20,47 +20,47 @@
 merge_voucher_phenophase_covariates <- function(df, harmonics_path = NULL, vouchers_path = NULL) {
   if (is.null(df) || !is.data.frame(df) || nrow(df) == 0L) return(df)
   n <- nrow(df)
-
-  cand_dirs <- unique(stats::na.omit(c(
-    if (!is.null(harmonics_path) && nzchar(harmonics_path)) dirname(harmonics_path) else NA_character_,
-    if (!is.null(vouchers_path) && nzchar(vouchers_path)) dirname(vouchers_path) else NA_character_
-  )))
+  in_paths <- stats::na.omit(c(
+    if (!is.null(harmonics_path) && nzchar(harmonics_path)) harmonics_path else NA_character_,
+    if (!is.null(vouchers_path) && nzchar(vouchers_path)) vouchers_path else NA_character_
+  ))
+  cand_dirs <- unique(dirname(in_paths))
+  ph_df <- NULL
   for (d_cand in cand_dirs) {
     ph_csv <- file.path(d_cand, "voucher_phenological_states.csv")
     if (file.exists(ph_csv) && isTRUE(file.info(ph_csv)$size > 0)) {
       ph_df <- tryCatch(utils::read.csv(ph_csv, stringsAsFactors = FALSE), error = function(e) NULL)
-      if (!is.null(ph_df) && nrow(ph_df) > 0L && "catalogNumber" %in% names(ph_df)) {
-        ph_pid <- if ("plant_individual_id" %in% names(ph_df)) {
-          ifelse(is.na(ph_df$plant_individual_id), 0L, as.integer(ph_df$plant_individual_id))
-        } else {
-          rep(0L, nrow(ph_df))
-        }
-        df_pid <- if ("plant_individual_id" %in% names(df)) {
-          ifelse(is.na(df$plant_individual_id), 0L, as.integer(df$plant_individual_id))
-        } else {
-          rep(0L, n)
-        }
-        k_ph <- paste(trimws(as.character(ph_df$catalogNumber)), ph_pid, sep = "__")
-        k_df <- paste(trimws(as.character(df$catalogNumber)), df_pid, sep = "__")
-        n_pids_sheet <- tapply(ph_pid, trimws(as.character(ph_df$catalogNumber)), function(z) length(unique(z)))
-        single_pid_sheet <- !(trimws(as.character(df$catalogNumber)) %in% names(n_pids_sheet[n_pids_sheet > 1L]))
-        m_exact <- match(k_df, k_ph)
-        m_sheet <- match(paste(trimws(as.character(df$catalogNumber)), 0L, sep = "__"), k_ph)
-        m_use <- ifelse(!is.na(m_exact), m_exact, ifelse(single_pid_sheet, m_sheet, NA_integer_))
-        ph_cols <- intersect(
-          c("n_anthesis", "n_bud", "n_fruiting", "n_senescent", "total_capitula", "phenological_state", "is_verified_anthesis"),
-          names(ph_df)
-        )
-        for (pc_nm in ph_cols) {
-          if (!(pc_nm %in% names(df))) {
-            df[[pc_nm]] <- ph_df[[pc_nm]][m_use]
-          } else {
-            miss_m <- is.na(df[[pc_nm]]) | !nzchar(trimws(as.character(df[[pc_nm]])))
-            if (any(miss_m)) df[[pc_nm]][miss_m] <- ph_df[[pc_nm]][m_use[miss_m]]
-          }
+      if (!is.null(ph_df) && nrow(ph_df) > 0L) break else ph_df <- NULL
+    }
+  }
+  if (is.null(ph_df) && exists("is_sqlite_active_for_inputs", mode = "function") &&
+      isTRUE(is_sqlite_active_for_inputs(in_paths)) && exists("connect_packera_db", mode = "function")) {
+    conn <- tryCatch(connect_packera_db(read_only = TRUE), error = function(e) NULL)
+    if (!is.null(conn)) {
+      on.exit(if (exists("disconnect_packera_db", mode = "function")) disconnect_packera_db(conn) else tryCatch(DBI::dbDisconnect(conn), error = function(e) NULL), add = TRUE)
+      if (isTRUE(tryCatch(DBI::dbExistsTable(conn, "voucher_reproductive_phenology"), error = function(e) FALSE))) {
+        avail_f <- tryCatch(DBI::dbListFields(conn, "voucher_reproductive_phenology"), error = function(e) character(0))
+        want_f <- intersect(c("catalogNumber", "plant_individual_id", "n_anthesis", "n_bud", "n_fruiting", "n_senescent", "total_capitula", "corymb_head_count_est", "radiate_head_fraction", "phenological_state", "is_verified_anthesis"), avail_f)
+        if ("catalogNumber" %in% want_f && length(want_f) >= 2L) {
+          q_cols <- paste(vapply(want_f, function(cl) as.character(DBI::dbQuoteIdentifier(conn, cl)), character(1)), collapse = ", ")
+          ph_df <- tryCatch(DBI::dbGetQuery(conn, sprintf("SELECT %s FROM voucher_reproductive_phenology;", q_cols)), error = function(e) NULL)
         }
       }
-      break
+    }
+  }
+  if (!is.null(ph_df) && nrow(ph_df) > 0L && "catalogNumber" %in% names(ph_df)) {
+    ph_pid <- if ("plant_individual_id" %in% names(ph_df)) ifelse(is.na(ph_df$plant_individual_id), 0L, as.integer(ph_df$plant_individual_id)) else rep(0L, nrow(ph_df))
+    df_pid <- if ("plant_individual_id" %in% names(df)) ifelse(is.na(df$plant_individual_id), 0L, as.integer(df$plant_individual_id)) else rep(0L, n)
+    k_ph <- paste(trimws(as.character(ph_df$catalogNumber)), ph_pid, sep = "__")
+    k_df <- paste(trimws(as.character(df$catalogNumber)), df_pid, sep = "__")
+    n_pids_sheet <- tapply(ph_pid, trimws(as.character(ph_df$catalogNumber)), function(z) length(unique(z)))
+    single_pid_sheet <- !(trimws(as.character(df$catalogNumber)) %in% names(n_pids_sheet[n_pids_sheet > 1L]))
+    m_exact <- match(k_df, k_ph); m_sheet <- match(paste(trimws(as.character(df$catalogNumber)), 0L, sep = "__"), k_ph)
+    m_use <- ifelse(!is.na(m_exact), m_exact, ifelse(single_pid_sheet, m_sheet, NA_integer_))
+    ph_cols <- intersect(c("n_anthesis", "n_bud", "n_fruiting", "n_senescent", "total_capitula", "corymb_head_count_est", "radiate_head_fraction", "phenological_state", "is_verified_anthesis"), names(ph_df))
+    for (pc_nm in ph_cols) {
+      if (!(pc_nm %in% names(df))) df[[pc_nm]] <- ph_df[[pc_nm]][m_use]
+      else { miss_m <- is.na(df[[pc_nm]]) | !nzchar(trimws(as.character(df[[pc_nm]]))); if (any(miss_m)) df[[pc_nm]][miss_m] <- ph_df[[pc_nm]][m_use[miss_m]] }
     }
   }
   df
@@ -75,7 +75,8 @@ residualize_ontogenetic_phenophase_plasticity <- function(
 ) {
   if (is.null(df) || !is.data.frame(df) || nrow(df) < 12L) return(df)
   n <- nrow(df)
-  target_cols <- intersect(as.character(target_cols), names(df))
+  repro_excl <- c("AR_inv", "AR_inv_std", "log1p_capitulum_count", "log1p_capitulum_count_std", "radiate_head_fraction", "radiate_head_fraction_std")
+  target_cols <- setdiff(intersect(as.character(target_cols), names(df)), repro_excl)
   if (length(target_cols) == 0L) return(df)
 
   auth_w <- if ("authority_weight" %in% names(df)) suppressWarnings(as.numeric(df$authority_weight)) else rep(1.0, n)
@@ -91,10 +92,8 @@ residualize_ontogenetic_phenophase_plasticity <- function(
   ref_idx <- which(as.logical(ref_mask))
   if (length(ref_idx) < 12L) return(df)
 
-  # Strictly specimen-intrinsic developmental covariates (zero geographic coordinates, DOY, or ecoregion labels)
+  # Strictly specimen-intrinsic phenophase covariate (zero geographic coordinates, DOY, ecoregion, or size backdoors)
   cov_list <- list()
-
-  # 1. Post-anthesis fruiting/senescent capitulum fraction from Step 02 single-individual reproductive detections
   n_fr <- rep(0.0, n)
   has_fr <- FALSE
   for (fc in intersect(c("n_fruiting", "n_senescent"), names(df))) {
@@ -105,6 +104,10 @@ residualize_ontogenetic_phenophase_plasticity <- function(
     }
   }
   tot_cap <- if ("total_capitula" %in% names(df)) suppressWarnings(as.numeric(df$total_capitula)) else if ("capitula_count" %in% names(df)) suppressWarnings(as.numeric(df$capitula_count)) else rep(NA_real_, n)
+  if ("corymb_head_count_est" %in% names(df)) {
+    corymb_cap <- suppressWarnings(as.numeric(df$corymb_head_count_est))
+    tot_cap <- ifelse(is.finite(tot_cap) | is.finite(corymb_cap), pmax(tot_cap, corymb_cap, na.rm = TRUE), NA_real_)
+  }
   if (has_fr) {
     has_cap_obs <- is.finite(tot_cap) & (tot_cap >= 1.0)
     fr_frac <- ifelse(has_cap_obs, pmin(1.0, pmax(0.0, n_fr / pmax(tot_cap, n_fr))), NA_real_)
@@ -113,22 +116,7 @@ residualize_ontogenetic_phenophase_plasticity <- function(
       cov_list[["fruiting_frac"]] <- fr_frac
     }
   }
-
-  # 2. Ruler-calibrated foliar size covariate for non-allometry-corrected architectural traits
-  has_log_cs <- FALSE
-  log_cs_v <- rep(NA_real_, n)
-  if ("log_centsize" %in% names(df)) {
-    cal_ok <- if ("is_calibrated_mm" %in% names(df)) (!is.na(df$is_calibrated_mm) & as.logical(df$is_calibrated_mm)) else rep(TRUE, n)
-    vv <- ifelse(cal_ok, suppressWarnings(as.numeric(df$log_centsize)), NA_real_)
-    ok_cs <- ref_idx[is.finite(vv[ref_idx])]
-    if (length(ok_cs) >= 12L && stats::sd(vv[ok_cs]) > 0.05) {
-      med_cs <- stats::median(vv[ok_cs])
-      log_cs_v <- ifelse(is.finite(vv), vv - med_cs, NA_real_)
-      has_log_cs <- TRUE
-    }
-  }
-
-  if (length(cov_list) == 0L && !has_log_cs) return(df)
+  if (length(cov_list) == 0L) return(df)
 
   sp_raw <- if ("species_standardized" %in% names(df)) as.character(df$species_standardized) else rep("Packera_sp", n)
   sp_raw[is.na(sp_raw) | !nzchar(trimws(sp_raw))] <- "Packera_sp"
@@ -139,13 +127,7 @@ residualize_ontogenetic_phenophase_plasticity <- function(
     is_pc_col <- grepl("^PC[0-9]+$", col_nm)
     if (is_pc_col && !isTRUE(intraspecific_mode)) next
 
-    use_covs <- cov_list
-    if (!is_pc_col && has_log_cs && !isTRUE(attr(df, "allometry_corrected_scalars"))) {
-      use_covs[["log_centsize_dev"]] <- log_cs_v
-    }
-    if (length(use_covs) == 0L) next
-
-    C_full <- do.call(cbind, use_covs)
+    C_full <- do.call(cbind, cov_list)
     fin_sub <- is.finite(yv[ref_idx]) & stats::complete.cases(C_full[ref_idx, , drop = FALSE])
     if (sum(fin_sub) < 12L) next
 
@@ -160,6 +142,16 @@ residualize_ontogenetic_phenophase_plasticity <- function(
     sub_sp <- droplevels(sub_sp[ok_sp])
     w_sub <- eff_w[sub_rows]
     if (sum(w_sub) <= 1e-12) w_sub <- rep(1.0, length(sub_rows))
+
+    # Require homogeneous within-taxon phenophase slopes before pooling across taxa
+    if (nlevels(sub_sp) >= 2L && sum(table(sub_sp) >= 5L) >= 2L) {
+      sp_ge5 <- names(which(table(sub_sp) >= 5L))
+      ii_ok <- as.character(sub_sp) %in% sp_ge5
+      df_int <- data.frame(y = yv[sub_rows[ii_ok]], fruiting_frac = C_full[sub_rows[ii_ok], 1L], sub_sp = droplevels(sub_sp[ii_ok]), w = w_sub[ii_ok])
+      an_int <- tryCatch(stats::anova(stats::lm(y ~ fruiting_frac * sub_sp, data = df_int, weights = w)), error = function(e) NULL)
+      p_int <- if (!is.null(an_int) && "fruiting_frac:sub_sp" %in% rownames(an_int)) suppressWarnings(as.numeric(an_int["fruiting_frac:sub_sp", "Pr(>F)"])) else NA_real_
+      if (is.finite(p_int) && p_int <= 0.05) next
+    }
 
     w_sp_mean <- function(v_in) {
       unname(vapply(split(seq_along(v_in), sub_sp), function(ii) stats::weighted.mean(v_in[ii], w = w_sub[ii], na.rm = TRUE), numeric(1))[as.character(sub_sp)])
@@ -188,15 +180,13 @@ residualize_ontogenetic_phenophase_plasticity <- function(
     p_val <- stats::pf(f_stat, df1, df2, lower.tail = FALSE)
 
     if (is.finite(r2_w) && r2_w >= min_partial_r2 && is.finite(p_val) && p_val < 0.05) {
-      c_ref_means <- vapply(seq_len(ncol(C_eval)), function(j) {
-        ok_j <- is.finite(C_eval[sub_rows, j])
-        if (any(ok_j)) stats::weighted.mean(C_eval[sub_rows[ok_j], j], w = w_sub[ok_j]) else 0.0
-      }, numeric(1))
       fin_all <- which(is.finite(yv) & stats::complete.cases(C_eval))
       if (length(fin_all) > 0L) {
-        C_cent <- sweep(C_eval[fin_all, , drop = FALSE], 2L, c_ref_means, "-")
-        adj_vals <- yv[fin_all] - as.numeric(C_cent %*% beta_w)
-        df[[col_nm]][fin_all] <- round(adj_vals, 6)
+        delta_vals <- as.numeric(C_eval[fin_all, , drop = FALSE] %*% beta_w)
+        nz_adj <- which(is.finite(delta_vals) & abs(delta_vals) > 0.0)
+        if (length(nz_adj) > 0L) {
+          df[[col_nm]][fin_all[nz_adj]] <- round(yv[fin_all[nz_adj]] - delta_vals[nz_adj], 6)
+        }
       }
     }
   }
@@ -360,9 +350,13 @@ apply_eb_institution_batch_centering <- function(df, target_cols, min_inst_n = 1
 
   is_regionally_confounded <- FALSE
   inst_ref <- inst_all[ref_mask]
+  cent_ref <- if ("is_centroid_or_inst_coord" %in% names(df)) {
+    cv_c <- df$is_centroid_or_inst_coord[ref_mask]
+    if (is.logical(cv_c)) !is.na(cv_c) & cv_c else if (is.numeric(cv_c)) !is.na(cv_c) & cv_c != 0 else tolower(trimws(as.character(cv_c))) %in% c("true", "1", "t", "yes")
+  } else rep(FALSE, sum(ref_mask))
   for (g_col in intersect(c("regional_group", "epa_ecoregion_l3", "stateProvince"), names(df))) {
     reg_raw <- trimws(as.character(df[[g_col]][ref_mask]))
-    ok_rg <- !is.na(inst_ref) & !is.na(df[[g_col]][ref_mask]) & nzchar(reg_raw)
+    ok_rg <- !cent_ref & !is.na(inst_ref) & !is.na(df[[g_col]][ref_mask]) & nzchar(reg_raw)
     if (length(unique(reg_raw[ok_rg])) >= 2L) {
       tab_rg <- table(inst_ref[ok_rg], reg_raw[ok_rg])
       tab_rg <- tab_rg[rowSums(tab_rg) >= 2L, , drop = FALSE]
@@ -371,7 +365,7 @@ apply_eb_institution_batch_centering <- function(df, target_cols, min_inst_n = 1
         chi_v <- suppressWarnings(stats::chisq.test(tab_rg, simulate.p.value = FALSE)$statistic)
         cramers_v <- sqrt(as.numeric(chi_v) / max(1.0, sum(tab_rg) * (min(nrow(tab_rg), ncol(tab_rg)) - 1L)))
         dom_share <- stats::weighted.mean(apply(tab_rg, 1L, max) / pmax(rowSums(tab_rg), 1), w = rowSums(tab_rg))
-        is_regionally_confounded <- (is.finite(cramers_v) && cramers_v > 0.65) || (is.finite(dom_share) && dom_share >= 0.75)
+        is_regionally_confounded <- (is.finite(cramers_v) && cramers_v >= 0.45) || (is.finite(dom_share) && dom_share >= 0.75)
       }
       break
     }
@@ -404,7 +398,8 @@ apply_eb_institution_batch_centering <- function(df, target_cols, min_inst_n = 1
       ii <- which(rownames(fit_pre) == "inst")[1L]; ri <- which(rownames(fit_pre) == "Residuals")[1L]
       pre_eta[[col]] <- as.numeric(fit_pre$`Sum Sq`[ii] / max(fit_pre$`Sum Sq`[ii] + fit_pre$`Sum Sq`[ri], 1e-12))
     }
-    if (!((isTRUE(allow_shape_centering) || grepl("^blade_(cie_|.*browning)", col)) && !isTRUE(is_regionally_confounded))) next
+    is_phot <- grepl("^(blade_cie_|basal_zone_cie_l_delta|abaxial_cie_l_sheet_delta|blade_.*browning)", col)
+    if (!((isTRUE(allow_shape_centering) || is_phot) && !isTRUE(is_regionally_confounded))) next
 
     # Estimate marginal species means and zero-mean institutional location shifts iteratively
     d_raw <- stats::setNames(rep(0.0, length(u_inst)), u_inst)

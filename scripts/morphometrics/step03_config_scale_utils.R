@@ -1,12 +1,18 @@
 # ==============================================================================
 # Module: scripts/morphometrics/step03_config_scale_utils.R
-# Step 03 Config Loading, Calibration Provenance, Photometry Discovery & CLI
+# Step 03 Config Loading, Calibration Provenance & Photometry/Trait Contracts
 # ==============================================================================
 
 STEP03_PRIMARY_CALIBRATED_SOURCES <- c("ruler_calibrated", "measured_from_ruler", "measured_from_fieldprism")
 STEP03_UNCALIBRATED_SOURCES <- c(
   "mp_estimated", "predicted_from_megapixels", "tick_lattice_unboxed", "uncalibrated"
 )
+STEP03_LEAF_ARCH_MED_COLS <- c(
+  "base_angle_deg", "apex_angle_deg", "lamina_curvature",
+  "basal_cordate_index", "margin_serration_index",
+  "margin_tooth_acuteness", "terminal_lobe_area_frac"
+)
+STEP03_LEAF_Q75_MM_COLS <- c("lamina_trace_length_mm")
 
 is_step03_plausible_unboxed_mm <- function(ppm, ss) {
   n <- max(length(ppm), length(ss))
@@ -198,33 +204,15 @@ resolve_step03_calibration_provenance <- function(pixels_per_mm, is_calibrated_m
   df
 }
 
-discover_step03_photometry_cols <- function(col_names) {
-  cn <- as.character(col_names)
-  unique(intersect(
-    c("blade_cie_l_norm", "blade_cie_l_sd", "blade_cie_l_sheet_delta",
-      "blade_cie_a_delta", "blade_cie_b_delta", grep("^blade_(cie_|.*browning)", cn, value = TRUE)),
-    cn
-  ))
-}
-
-strip_deprecated_step03_cli_args <- function(cli_args) {
-  args <- as.character(cli_args)
-  if (length(args) == 0L) return(character(0))
-  out <- character(0)
-  i <- 1L
-  val_flags <- c("--permutations", "-r", "--report-out", "-g", "--plot-out")
-  while (i <= length(args)) {
-    tok <- args[i]
-    if (grepl("^(--permutations|--report-out|--plot-out|-r|-g)=", tok)) {
-      i <- i + 1L
-      next
-    }
-    if (tok %in% val_flags) {
-      i <- if (i < length(args) && !is.na(args[i + 1L]) && !startsWith(args[i + 1L], "-")) i + 2L else i + 1L
-      next
-    }
-    out <- c(out, tok)
-    i <- i + 1L
-  }
-  out
+discover_step03_photometry_cols <- function(df) {
+  cn <- if (is.data.frame(df) || is.list(df)) names(df) else as.character(df)
+  if (is.null(cn) || length(cn) == 0L) return(character(0))
+  cn <- as.character(cn)
+  known <- c(
+    "blade_cie_l_norm", "blade_cie_l_sd", "blade_cie_l_sheet_delta",
+    "blade_cie_l_q85_sheet_delta", "basal_zone_cie_l_delta",
+    "abaxial_cie_l_sheet_delta", "blade_cie_a_delta", "blade_cie_b_delta"
+  )
+  extra <- grep("^blade_(cie_|.*browning)", cn, value = TRUE)
+  setdiff(unique(intersect(c(known, extra), cn)), "is_abaxial_pressed_leaf")
 }

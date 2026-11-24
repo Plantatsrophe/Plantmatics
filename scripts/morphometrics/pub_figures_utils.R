@@ -565,21 +565,11 @@ reconstruct_efa_outline <- function(harm_vec, nb_pts = 120L) {
     x <- x + A[n] * cos(nt) + B[n] * sin(nt)
     y <- y + C[n] * cos(nt) + D[n] * sin(nt)
   }
-  # Orient major blade axis vertically (apex up, petiole base down)
-  span_x <- diff(range(x, na.rm = TRUE))
-  span_y <- diff(range(y, na.rm = TRUE))
-  if (span_x > 1.05 * span_y) {
-    tmp <- x; x <- y; y <- -tmp
-  }
-  # Ensure narrower petiole end is at bottom (y < 0) and broader lamina is at top
-  y_centered <- y - mean(y, na.rm = TRUE)
+  # Orient homologously using t = 0 (lamina_base at bottom y < 0, apex up y > 0)
   x_centered <- x - mean(x, na.rm = TRUE)
-  top_w <- stats::sd(x_centered[y_centered > 0.25 * max(y_centered, na.rm = TRUE)], na.rm = TRUE)
-  bot_w <- stats::sd(x_centered[y_centered < 0.25 * min(y_centered, na.rm = TRUE)], na.rm = TRUE)
-  if (is.finite(top_w) && is.finite(bot_w) && bot_w > 1.25 * top_w) {
-    y_centered <- -y_centered
-  }
-  cbind(x = x_centered, y = y_centered)
+  y_centered <- y - mean(y, na.rm = TRUE)
+  sign_tip <- if (is.finite(x_centered[1L]) && x_centered[1L] <= 0.0) 1.0 else -1.0
+  cbind(x = -sign_tip * y_centered, y = sign_tip * x_centered)
 }
 
 format_cda_loading_labels <- function(raw_vars) {
