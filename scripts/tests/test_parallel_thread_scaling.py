@@ -151,6 +151,36 @@ if (requireNamespace("terra", quietly = TRUE)) {
   )
 }
 
+# 5. Step 05 PCA-env ecospat parity, 1-vs-4 worker bit-parity & speed
+set.seed(77L); nw <- 60L
+sp_w <- rep(c("Packera aurea", "Packera dubia", "Packera anonyma", "Packera obovata"), each = 15L)
+df_w <- data.frame(
+  catalogNumber = sprintf("WN_%03d", seq_len(nw)), species_standardized = sp_w, analysis_group = sp_w,
+  determiner_tier = "Tier_1_Gold", coordinateUncertaintyInMeters = 100.0,
+  latitude = rep(c(35.5, 34.8, 36.2, 37.0), each = 15L) + rnorm(nw, 0, 0.4),
+  longitude = rep(c(-82.5, -79.2, -80.4, -78.1), each = 15L) + rnorm(nw, 0, 0.4),
+  bio1_temp_mean = rnorm(nw, 14.0, 1.5), bio12_precip_annual = rnorm(nw, 1250, 90),
+  fine_soil_ph = rnorm(nw, 5.8, 0.5), fine_soil_cec = rnorm(nw, 11.0, 2.0), topo_slope_deg = rnorm(nw, 9.0, 3.0),
+  stringsAsFactors = FALSE
+)
+ev_w <- c("bio1_temp_mean", "bio12_precip_annual", "fine_soil_ph", "fine_soil_cec", "topo_slope_deg")
+prep_p <- .prepare_partition_scores_glob(as.matrix(df_w[, ev_w]), coords_occ = as.matrix(df_w[, c("longitude", "latitude")]))
+i1 <- which(df_w$species_standardized == "Packera aurea"); i2 <- which(df_w$species_standardized == "Packera dubia")
+gf <- .run_fast_pca_env_pair_overlap(.build_fast_pca_env_taxon_grid(prep_p, i1, 100L), .build_fast_pca_env_taxon_grid(prep_p, i2, 100L), 0L)
+sc_all <- if (!is.null(prep_p$scores_M_all)) prep_p$scores_M_all else prep_p$scores_glob
+ze1 <- ecospat::ecospat.grid.clim.dyn(sc_all, .resolve_lineage_accessible_glob1(prep_p, i1), prep_p$scores_glob[i1, ], R = 100)
+ze2 <- ecospat::ecospat.grid.clim.dyn(sc_all, .resolve_lineage_accessible_glob1(prep_p, i2), prep_p$scores_glob[i2, ], R = 100)
+ov_e <- ecospat::ecospat.niche.overlap(ze1, ze2, cor = TRUE)
+Sys.setenv(PLANTMATICS_MAX_WORKERS = "1", PACKERA_MAX_WORKERS = "1"); set.seed(77L)
+w1 <- run_warren_niche_identity_tests(df_w, ev_w, n_perm = 100L)
+Sys.setenv(PLANTMATICS_MAX_WORKERS = "4", PACKERA_MAX_WORKERS = "4"); set.seed(77L)
+t0 <- proc.time()[3L]; w4 <- run_warren_niche_identity_tests(df_w, ev_w, n_perm = 100L); dt_w <- as.numeric(proc.time()[3L] - t0)
+res$warren <- list(
+  eco_d_diff = abs(gf$D_emp - as.numeric(ov_e$D)), eco_i_diff = abs(gf$I_emp - as.numeric(ov_e$I)),
+  sum_identical = identical(w1$summary, w4$summary), perm_max_diff = max(abs(w1$permutations$D_null - w4$permutations$D_null)),
+  elapsed_s = dt_w
+)
+
 jsonlite::write_json(res, out_json, auto_unbox = TRUE, digits = 12)
 """
 
@@ -173,6 +203,7 @@ class TestParallelThreadScaling(unittest.TestCase):
         )
         if proc.returncode != 0 or not out_json.exists():
             raise RuntimeError(f"Batched R thread-scaling test failed (rc={proc.returncode}):\n{proc.stdout}\n{proc.stderr}")
+        cls._r_stderr = proc.stderr
         cls._r_res = json.loads(out_json.read_text(encoding="utf-8"))
 
     @classmethod
@@ -254,6 +285,13 @@ class TestParallelThreadScaling(unittest.TestCase):
             self.assertLessEqual(float(sdm["auc_diff"]), 1e-12)
             self.assertTrue(bool(sdm["rast_fin"]))
             self.assertLessEqual(float(sdm["rast_max_diff"]), 1e-12)
+        self.assertNotIn("adehabitatMA", self._r_stderr)
+        wn = self._r_res["warren"]
+        self.assertLess(float(wn["eco_d_diff"]), 1e-3)
+        self.assertLess(float(wn["eco_i_diff"]), 1e-3)
+        self.assertTrue(bool(wn["sum_identical"]))
+        self.assertEqual(float(wn["perm_max_diff"]), 0.0)
+        self.assertLess(float(wn["elapsed_s"]), 5.0)
 
 
 if __name__ == "__main__":

@@ -17,6 +17,9 @@ suppressPackageStartupMessages({
   if (requireNamespace("ranger", quietly = TRUE)) library(ranger)
   if (requireNamespace("adespatial", quietly = TRUE)) library(adespatial)
   if (requireNamespace("blockCV", quietly = TRUE)) library(blockCV)
+  if (requireNamespace("sp", quietly = TRUE)) library(sp)
+  if (requireNamespace("adehabitatMA", quietly = TRUE)) suppressMessages(library(adehabitatMA))
+  if (requireNamespace("adehabitatHR", quietly = TRUE)) suppressMessages(library(adehabitatHR))
   if (requireNamespace("ecospat", quietly = TRUE)) library(ecospat)
   if (requireNamespace("digest", quietly = TRUE)) library(digest)
   if (requireNamespace("spatialRF", quietly = TRUE)) library(spatialRF)
@@ -3366,158 +3369,294 @@ compute_spatial_rf_mems <- function(df, env_vars, n_trees = 500, intraspecific_m
   rbind(sc_occ[idx_grp, 1:2, drop = FALSE], prep$scores_M_bg[hit_bg, 1:2, drop = FALSE])
 }
 
-.run_ecospat_test_chunk <- function(z1, z2, rep_n, test_kind) {
-  if (identical(test_kind, "equiv")) {
-    eq <- tryCatch(
-      suppressMessages(suppressWarnings(ecospat::ecospat.niche.equivalency.test(z1, z2, rep = rep_n, overlap.alternative = "lower", ncores = 1))),
-      error = function(e) suppressMessages(suppressWarnings(ecospat::ecospat.niche.equivalency.test(z1, z2, rep = rep_n, ncores = 1)))
-    )
-    list(D = as.numeric(eq$sim$D), I = as.numeric(eq$sim$I))
-  } else {
-    bg_sim <- tryCatch(
-      suppressMessages(suppressWarnings(ecospat::ecospat.niche.similarity.test(z1, z2, rep = rep_n, overlap.alternative = "lower", rand.type = 2, ncores = 1))),
-      error = function(e) tryCatch(
-        suppressMessages(suppressWarnings(ecospat::ecospat.niche.similarity.test(z1, z2, rep = rep_n, rand.type = 2, ncores = 1))),
-        error = function(e2) NULL
-      )
-    )
-    if (!is.null(bg_sim) && !is.null(bg_sim$sim$D)) {
-      list(D = as.numeric(bg_sim$sim$D), I = as.numeric(bg_sim$sim$I))
-    } else {
-      list(D = numeric(0), I = numeric(0))
-    }
+.eval_bivnorm_kde_grid <- function(x_mat, ext, dx, dy, R, g_seq, g_rev, env_mask = NULL) {
+  if (is.null(x_mat) || nrow(x_mat) < 2L) return(NULL)
+  fin <- is.finite(x_mat[, 1L]) & is.finite(x_mat[, 2L])
+  if (sum(fin) < 2L) return(NULL)
+  if (!all(fin)) x_mat <- x_mat[fin, , drop = FALSE]
+  n <- nrow(x_mat)
+  xr1 <- (x_mat[, 1L] - ext[1L]) / dx
+  xr2 <- (x_mat[, 2L] - ext[3L]) / dy
+  vx <- stats::var(xr1)
+  vy <- stats::var(xr2)
+  h <- sqrt(0.5 * ((if (is.finite(vx)) vx else 0.0) + (if (is.finite(vy)) vy else 0.0))) * (n^(-1.0 / 6.0))
+  if (!is.finite(h) || h <= 1e-6) return(NULL)
+
+  inv_h2 <- -0.5 / (h * h)
+  Kx <- exp(inv_h2 * outer(g_seq, xr1, "-")^2)
+  Ky_rev <- exp(inv_h2 * outer(g_rev, xr2, "-")^2)
+  dens <- tcrossprod(Ky_rev, Kx) / (n * 2.0 * pi * h * h)
+
+  ci <- pmin(R, pmax(1L, as.integer(floor(xr1 * R)) + 1L))
+  ri <- pmin(R, pmax(1L, as.integer(floor((1.0 - xr2) * R)) + 1L))
+  ci[x_mat[, 1L] >= ext[2L]] <- R
+  ri[x_mat[, 2L] <= ext[3L]] <- R
+  th_val <- suppressWarnings(min(dens[cbind(ri, ci)], na.rm = TRUE))
+  if (is.finite(th_val)) dens[dens < th_val] <- 0.0
+  if (!is.null(env_mask)) dens[!env_mask] <- 0.0
+  dens
+}
+
+.build_fast_pca_env_taxon_grid <- function(prep, idx_sp, R = 100L) {
+  if (is.null(prep) || is.null(prep$scores_glob) || length(idx_sp) < 5L) return(NULL)
+  sc_occ <- as.matrix(prep$scores_glob[, 1:2, drop = FALSE])
+  sc_glob <- as.matrix((if (!is.null(prep$scores_M_all)) prep$scores_M_all else prep$scores_glob)[, 1:2, drop = FALSE])
+  ext <- c(
+    min(sc_glob[, 1L], na.rm = TRUE), max(sc_glob[, 1L], na.rm = TRUE),
+    min(sc_glob[, 2L], na.rm = TRUE), max(sc_glob[, 2L], na.rm = TRUE)
+  )
+  dx <- abs(ext[2L] - ext[1L])
+  dy <- abs(ext[4L] - ext[3L])
+  if (!is.finite(dx) || dx <= 1e-12 || !is.finite(dy) || dy <= 1e-12) return(NULL)
+
+  R <- as.integer(R)
+  g_seq <- (0:(R - 1L)) / (R - 2L)
+  g_rev <- g_seq[R:1L]
+  g1_m <- as.matrix(.resolve_lineage_accessible_glob1(prep, idx_sp)[, 1:2, drop = FALSE])
+  sp_m <- sc_occ[idx_sp, 1:2, drop = FALSE]
+
+  g1_dens <- .eval_bivnorm_kde_grid(g1_m, ext, dx, dy, R, g_seq, g_rev, env_mask = NULL)
+  if (is.null(g1_dens)) return(NULL)
+  s_g1 <- sum(g1_dens)
+  if (!is.finite(s_g1) || s_g1 <= 0.0) return(NULL)
+  env_mask <- g1_dens > 0.0
+
+  sp_dens <- .eval_bivnorm_kde_grid(sp_m, ext, dx, dy, R, g_seq, g_rev, env_mask = env_mask)
+  if (is.null(sp_dens)) return(NULL)
+  s_sp <- sum(sp_dens)
+  if (!is.finite(s_sp) || s_sp <= 0.0) return(NULL)
+
+  Z <- g1_dens * (nrow(g1_m) / s_g1)
+  z <- sp_dens * (nrow(sp_m) / s_sp)
+  max_z <- max(z)
+  if (!is.finite(max_z) || max_z <= 0.0) return(NULL)
+  z_uncor <- z / max_z
+
+  z_cor <- z / Z
+  z_cor[!is.finite(z_cor)] <- 0.0
+  max_zc <- max(z_cor)
+  if (!is.finite(max_zc) || max_zc <= 0.0) return(NULL)
+  z_cor <- z_cor / max_zc
+  sum_zc <- sum(z_cor)
+  if (!is.finite(sum_zc) || sum_zc <= 0.0) return(NULL)
+  p_cor <- z_cor / sum_zc
+
+  cent_rc <- which(z_uncor == max(z_uncor), arr.ind = TRUE)[1L, , drop = TRUE]
+  cand_rc <- which(Z > 0.0, arr.ind = TRUE)
+  cand_w <- if (nrow(cand_rc) > 0L) Z[cand_rc] / max(Z) else numeric(0)
+
+  list(
+    R = R, ext = ext, dx = dx, dy = dy, g_seq = g_seq, g_rev = g_rev,
+    sp = sp_m, z = z, z.uncor = z_uncor, z.cor = z_cor, p_cor = p_cor,
+    Z = Z, env_mask = env_mask, cent_rc = cent_rc, cand_rc = cand_rc, cand_w = cand_w
+  )
+}
+
+.run_fast_pca_env_pair_overlap <- function(g1, g2, n_perm) {
+  p1 <- g1$p_cor
+  p2 <- g2$p_cor
+  sqrt_p1 <- sqrt(p1)
+  D_emp <- 1.0 - 0.5 * sum(abs(p1 - p2))
+  I_emp <- 1.0 - 0.5 * sum((sqrt_p1 - sqrt(p2))^2)
+  if (!is.finite(D_emp) || !is.finite(I_emp)) return(list(ok = FALSE))
+  if (n_perm <= 0L) {
+    return(list(
+      D_emp = D_emp, I_emp = I_emp,
+      p_equiv_D = NA_real_, p_equiv_I = NA_real_,
+      p_bg_D = NA_real_, p_bg_I = NA_real_,
+      D_null = numeric(0), I_null = numeric(0), ok = TRUE
+    ))
   }
+
+  occ_pool <- rbind(g1$sp, g2$sp)
+  n1 <- nrow(g1$sp)
+  n_tot <- nrow(occ_pool)
+  Z1_inv <- ifelse(g1$env_mask & (g1$Z > 0.0), 1.0 / g1$Z, 0.0)
+  Z2_inv <- ifelse(g2$env_mask & (g2$Z > 0.0), 1.0 / g2$Z, 0.0)
+
+  D_null <- rep(NA_real_, n_perm)
+  I_null <- rep(NA_real_, n_perm)
+  for (b in seq_len(n_perm)) {
+    idx_p1 <- sample.int(n_tot, n1)
+    d1 <- .eval_bivnorm_kde_grid(occ_pool[idx_p1, , drop = FALSE], g1$ext, g1$dx, g1$dy, g1$R, g1$g_seq, g1$g_rev, g1$env_mask)
+    d2 <- .eval_bivnorm_kde_grid(occ_pool[-idx_p1, , drop = FALSE], g2$ext, g2$dx, g2$dy, g2$R, g2$g_seq, g2$g_rev, g2$env_mask)
+    if (is.null(d1) || is.null(d2)) next
+    zc1 <- d1 * Z1_inv
+    zc2 <- d2 * Z2_inv
+    s1 <- sum(zc1); s2 <- sum(zc2)
+    if (!is.finite(s1) || s1 <= 0.0 || !is.finite(s2) || s2 <= 0.0) next
+    p1_s <- zc1 / s1
+    p2_s <- zc2 / s2
+    D_null[b] <- 1.0 - 0.5 * sum(abs(p1_s - p2_s))
+    I_null[b] <- 1.0 - 0.5 * sum((sqrt(p1_s) - sqrt(p2_s))^2)
+  }
+  d_eq_fin <- D_null[is.finite(D_null)]
+  i_eq_fin <- I_null[is.finite(I_null)]
+  p_equiv_D <- if (length(d_eq_fin) > 0L) (sum(d_eq_fin <= D_emp) + 1.0) / (length(d_eq_fin) + 1.0) else NA_real_
+  p_equiv_I <- if (length(i_eq_fin) > 0L) (sum(i_eq_fin <= I_emp) + 1.0) / (length(i_eq_fin) + 1.0) else NA_real_
+
+  p_bg_D <- NA_real_
+  p_bg_I <- NA_real_
+  if (nrow(g2$cand_rc) > 0L && length(g2$cent_rc) == 2L) {
+    R <- g2$R
+    z2_mat <- g2$z
+    cent_r <- as.integer(g2$cent_rc[1L])
+    cent_c <- as.integer(g2$cent_rc[2L])
+    cand_r <- as.integer(g2$cand_rc[, 1L])
+    cand_c <- as.integer(g2$cand_rc[, 2L])
+    n_cand <- length(cand_r)
+    picks <- sample.int(n_cand, size = n_perm, replace = TRUE, prob = g2$cand_w)
+
+    D_bg <- rep(NA_real_, n_perm)
+    I_bg <- rep(NA_real_, n_perm)
+    for (b in seq_len(n_perm)) {
+      pk <- picks[b]
+      dr <- cand_r[pk] - cent_r
+      dc <- cand_c[pk] - cent_c
+      r_s1 <- max(1L, 1L - dr); r_s2 <- min(R, R - dr)
+      c_s1 <- max(1L, 1L - dc); c_s2 <- min(R, R - dc)
+      if (r_s1 > r_s2 || c_s1 > c_s2) next
+      z_shift <- matrix(0.0, nrow = R, ncol = R)
+      z_shift[(r_s1 + dr):(r_s2 + dr), (c_s1 + dc):(c_s2 + dc)] <- z2_mat[r_s1:r_s2, c_s1:c_s2, drop = FALSE]
+      zc_sim <- z_shift * Z2_inv
+      s2_bg <- sum(zc_sim)
+      if (!is.finite(s2_bg) || s2_bg <= 0.0) next
+      p2_bg <- zc_sim / s2_bg
+      D_bg[b] <- 1.0 - 0.5 * sum(abs(p1 - p2_bg))
+      I_bg[b] <- 1.0 - 0.5 * sum((sqrt_p1 - sqrt(p2_bg))^2)
+    }
+    d_bg_fin <- D_bg[is.finite(D_bg)]
+    i_bg_fin <- I_bg[is.finite(I_bg)]
+    p_bg_D <- if (length(d_bg_fin) > 0L) (sum(d_bg_fin <= D_emp) + 1.0) / (length(d_bg_fin) + 1.0) else NA_real_
+    p_bg_I <- if (length(i_bg_fin) > 0L) (sum(i_bg_fin <= I_emp) + 1.0) / (length(i_bg_fin) + 1.0) else NA_real_
+  }
+
+  list(
+    D_emp = D_emp, I_emp = I_emp,
+    p_equiv_D = p_equiv_D, p_equiv_I = p_equiv_I,
+    p_bg_D = p_bg_D, p_bg_I = p_bg_I,
+    D_null = D_null, I_null = I_null,
+    ok = is.finite(D_emp) && is.finite(I_emp)
+  )
 }
 
 .evaluate_partition_jobs_parallel <- function(job_specs, grp_col, n_perm) {
   n_jobs <- length(job_specs)
   if (n_jobs == 0L) return(list())
-  can_par <- (n_perm >= 19L) && exists("packera_mclapply", mode = "function") &&
-             exists("resolve_packera_workers", mode = "function") && (resolve_packera_workers(64L) > 1L)
-  if (!can_par) {
-    return(lapply(job_specs, function(jb) {
-      compute_pca_env_partition_overlap(
-        jb$bg_mat, grp_col, jb$sp1, jb$sp2,
-        n_perm = n_perm, rf_var_weights = jb$rf_var_weights, precomputed_prep = jb$prep
-      )
-    }))
+  n_perm_use <- if (is.null(n_perm) || length(n_perm) == 0L || is.na(n_perm[1L])) 0L else as.integer(n_perm[1L])
+
+  # Draw deterministic per-job seeds once in the parent so worker count (1..N) yields bit-identical outputs
+  job_seeds <- if (n_perm_use > 0L) {
+    sample.int(2147483647L, size = n_jobs, replace = TRUE)
+  } else {
+    rep(NA_integer_, n_jobs)
   }
 
-  max_w <- resolve_packera_workers(64L)
-  chunks_per_test <- max(1L, min(as.integer(ceiling(n_perm / 4L)), as.integer(ceiling(max_w / max(1L, n_jobs)))))
-  build_grid_job <- function(j_i) {
-    jb <- job_specs[[j_i]]
-    prep <- if (!is.null(jb$prep)) jb$prep else .prepare_partition_scores_glob(jb$bg_mat, jb$rf_var_weights)
-    idx1 <- which(grp_col == jb$sp1)
-    idx2 <- which(grp_col == jb$sp2)
-    g_st <- NULL
-    if (!is.null(prep) && !is.null(prep$scores_glob) && requireNamespace("ecospat", quietly = TRUE) &&
-        length(idx1) >= 5L && length(idx2) >= 5L) {
-      g_st <- tryCatch({
-        sc_occ <- prep$scores_glob
-        sc_glob <- if (!is.null(prep$scores_M_all)) prep$scores_M_all else sc_occ
-        g1_m <- .resolve_lineage_accessible_glob1(prep, idx1)
-        g2_m <- .resolve_lineage_accessible_glob1(prep, idx2)
-        z1 <- ecospat::ecospat.grid.clim.dyn(glob = sc_glob, glob1 = g1_m, sp = sc_occ[idx1, 1:2, drop = FALSE], R = 100)
-        z2 <- ecospat::ecospat.grid.clim.dyn(glob = sc_glob, glob1 = g2_m, sp = sc_occ[idx2, 1:2, drop = FALSE], R = 100)
-        ov <- ecospat::ecospat.niche.overlap(z1, z2, cor = TRUE)
-        if (is.finite(as.numeric(ov$D)) && is.finite(as.numeric(ov$I))) {
-          list(z1 = z1, z2 = z2, D_emp = as.numeric(ov$D), I_emp = as.numeric(ov$I))
-        } else NULL
-      }, error = function(e) NULL)
-    }
-    list(prep = prep, g_st = g_st)
-  }
-  grid_states <- if (n_jobs >= 2L) packera_mclapply(seq_len(n_jobs), build_grid_job, mc.cores = min(max_w, n_jobs)) else lapply(seq_len(n_jobs), build_grid_job)
-  flat_tasks <- list()
+  prep_map <- list()
+  seen_preps <- list()
+  job_part_keys <- character(n_jobs)
   for (j_i in seq_len(n_jobs)) {
-    if (!is.null(grid_states[[j_i]]$g_st)) {
-      base_rep <- floor(n_perm / chunks_per_test)
-      rem_rep <- n_perm - base_rep * chunks_per_test
-      rep_vec <- rep(base_rep, chunks_per_test)
-      if (rem_rep > 0L) rep_vec[seq_len(rem_rep)] <- rep_vec[seq_len(rem_rep)] + 1L
-      rep_vec <- rep_vec[rep_vec > 0L]
-      for (tk in c("equiv", "bg")) {
-        for (rv in rep_vec) {
-          flat_tasks[[length(flat_tasks) + 1L]] <- list(job_idx = j_i, kind = tk, rep_n = as.integer(rv))
-        }
+    jb <- job_specs[[j_i]]
+    p_key <- if (!is.null(jb$part_id) && nzchar(as.character(jb$part_id[1L]))) {
+      as.character(jb$part_id[1L])
+    } else {
+      NULL
+    }
+    prep_j <- if (!is.null(jb$prep)) jb$prep else .prepare_partition_scores_glob(jb$bg_mat, jb$rf_var_weights)
+    if (is.null(p_key)) {
+      hit_k <- NULL
+      for (sk in names(seen_preps)) {
+        if (identical(seen_preps[[sk]], prep_j)) { hit_k <- sk; break }
+      }
+      if (is.null(hit_k)) {
+        hit_k <- sprintf("part_%d", length(seen_preps) + 1L)
+        seen_preps[[hit_k]] <- prep_j
+      }
+      p_key <- hit_k
+    }
+    if (is.null(prep_map[[p_key]])) prep_map[[p_key]] <- prep_j
+    job_part_keys[j_i] <- p_key
+  }
+
+  grid_specs <- list()
+  for (j_i in seq_len(n_jobs)) {
+    p_key <- job_part_keys[j_i]
+    jb <- job_specs[[j_i]]
+    for (tx in c(jb$sp1, jb$sp2)) {
+      g_key <- paste0(p_key, "::", as.character(tx))
+      if (!(g_key %in% names(grid_specs))) {
+        grid_specs[[g_key]] <- list(part_key = p_key, taxon = as.character(tx))
       }
     }
   }
 
-  chunk_outs <- list()
-  if (length(flat_tasks) > 0L) {
-    base_seed <- sample.int(100000000L, 1L)
-    n_workers <- resolve_packera_workers(64L, length(flat_tasks))
-    chunk_outs <- packera_mclapply(
-      seq_along(flat_tasks),
-      function(t_i) {
-        set.seed(as.integer((base_seed + t_i * 104729L) %% 2147483647L))
-        tk_obj <- flat_tasks[[t_i]]
-        gs <- grid_states[[tk_obj$job_idx]]$g_st
-        tryCatch(.run_ecospat_test_chunk(gs$z1, gs$z2, tk_obj$rep_n, tk_obj$kind), error = function(e) NULL)
-      },
-      mc.cores = n_workers,
+  max_w <- if (exists("resolve_packera_workers", mode = "function")) resolve_packera_workers(64L) else 1L
+  use_par_fn <- (max_w > 1L) && exists("packera_mclapply", mode = "function")
+
+  build_one_grid <- function(gs) {
+    idx_tx <- which(grp_col == gs$taxon)
+    if (length(idx_tx) < 5L) return(NULL)
+    .build_fast_pca_env_taxon_grid(prep_map[[gs$part_key]], idx_tx, R = 100L)
+  }
+  grid_keys <- names(grid_specs)
+  grid_list <- if (use_par_fn && length(grid_keys) >= 4L) {
+    packera_mclapply(
+      grid_specs,
+      build_one_grid,
+      mc.cores = resolve_packera_workers(64L, length(grid_keys))
+    )
+  } else {
+    lapply(grid_specs, build_one_grid)
+  }
+  names(grid_list) <- grid_keys
+
+  eval_job_fn <- function(j_i) {
+    jb <- job_specs[[j_i]]
+    p_key <- job_part_keys[j_i]
+    g1_j <- grid_list[[paste0(p_key, "::", as.character(jb$sp1))]]
+    g2_j <- grid_list[[paste0(p_key, "::", as.character(jb$sp2))]]
+    compute_pca_env_partition_overlap(
+      jb$bg_mat,
+      grp_col,
+      jb$sp1,
+      jb$sp2,
+      n_perm = n_perm_use,
+      rf_var_weights = jb$rf_var_weights,
+      precomputed_prep = prep_map[[p_key]],
+      precomputed_g1 = g1_j,
+      precomputed_g2 = g2_j,
+      job_seed = job_seeds[j_i]
+    )
+  }
+
+  if (use_par_fn && n_jobs >= 2L) {
+    packera_mclapply(
+      seq_len(n_jobs),
+      eval_job_fn,
+      mc.cores = resolve_packera_workers(64L, n_jobs),
       mc.preschedule = FALSE
     )
+  } else {
+    lapply(seq_len(n_jobs), eval_job_fn)
   }
-
-  out_res <- vector("list", n_jobs)
-  for (j_i in seq_len(n_jobs)) {
-    jb <- job_specs[[j_i]]
-    gs <- grid_states[[j_i]]$g_st
-    prep <- grid_states[[j_i]]$prep
-    if (!is.null(gs) && length(chunk_outs) == length(flat_tasks)) {
-      eq_d <- numeric(0); eq_i <- numeric(0); bg_d <- numeric(0); bg_i <- numeric(0)
-      ok_chunks <- TRUE
-      for (t_i in seq_along(flat_tasks)) {
-        if (flat_tasks[[t_i]]$job_idx == j_i) {
-          co <- chunk_outs[[t_i]]
-          if (is.null(co) || (identical(flat_tasks[[t_i]]$kind, "equiv") && length(co$D) == 0L)) {
-            ok_chunks <- FALSE
-            break
-          }
-          if (identical(flat_tasks[[t_i]]$kind, "equiv")) {
-            eq_d <- c(eq_d, co$D); eq_i <- c(eq_i, co$I)
-          } else {
-            bg_d <- c(bg_d, co$D); bg_i <- c(bg_i, co$I)
-          }
-        }
-      }
-      if (ok_chunks && length(eq_d) == n_perm) {
-        p_bg_d <- if (length(bg_d) > 0L) (sum(bg_d <= gs$D_emp, na.rm = TRUE) + 1) / (length(bg_d) + 1) else NA_real_
-        p_bg_i <- if (length(bg_i) > 0L) (sum(bg_i <= gs$I_emp, na.rm = TRUE) + 1) / (length(bg_i) + 1) else NA_real_
-        if (is.na(p_bg_d) || !is.finite(p_bg_d)) {
-          # Run fast analytical background fallback if ecospat similarity returned empty
-          fb <- compute_pca_env_partition_overlap(
-            jb$bg_mat, grp_col, jb$sp1, jb$sp2,
-            n_perm = n_perm, rf_var_weights = jb$rf_var_weights, precomputed_prep = prep
-          )
-          out_res[[j_i]] <- fb
-        } else {
-          out_res[[j_i]] <- list(
-            D_emp = gs$D_emp,
-            I_emp = gs$I_emp,
-            p_equiv_D = (sum(eq_d <= gs$D_emp, na.rm = TRUE) + 1) / (length(eq_d) + 1),
-            p_equiv_I = (sum(eq_i <= gs$I_emp, na.rm = TRUE) + 1) / (length(eq_i) + 1),
-            p_bg_D = p_bg_d,
-            p_bg_I = p_bg_i,
-            D_null = eq_d,
-            I_null = eq_i
-          )
-        }
-        next
-      }
-    }
-    out_res[[j_i]] <- compute_pca_env_partition_overlap(
-      jb$bg_mat, grp_col, jb$sp1, jb$sp2,
-      n_perm = n_perm, rf_var_weights = jb$rf_var_weights, precomputed_prep = prep
-    )
-  }
-  out_res
 }
 
-compute_pca_env_partition_overlap <- function(bg_mat, grp_col, sp1, sp2, n_perm = 100, rf_var_weights = NULL, precomputed_prep = NULL) {
+compute_pca_env_partition_overlap <- function(bg_mat, grp_col, sp1, sp2, n_perm = 100, rf_var_weights = NULL,
+                                              precomputed_prep = NULL, precomputed_g1 = NULL,
+                                              precomputed_g2 = NULL, job_seed = NULL) {
+  if (!is.null(job_seed) && length(job_seed) >= 1L && is.finite(job_seed[1L])) {
+    had_seed <- exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)
+    old_seed <- if (had_seed) get(".Random.seed", envir = .GlobalEnv, inherits = FALSE) else NULL
+    on.exit({
+      if (had_seed && !is.null(old_seed)) {
+        tryCatch(assign(".Random.seed", old_seed, envir = .GlobalEnv), error = function(e) NULL)
+      } else if (!had_seed && exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)) {
+        tryCatch(rm(".Random.seed", envir = .GlobalEnv), error = function(e) NULL)
+      }
+    }, add = TRUE)
+    set.seed(as.integer(job_seed[1L]))
+  }
+
   n_perm <- if (is.null(n_perm) || length(n_perm) == 0L || is.na(n_perm[1L])) 0L else as.integer(n_perm[1L])
   prep <- if (!is.null(precomputed_prep)) precomputed_prep else .prepare_partition_scores_glob(bg_mat, rf_var_weights)
   if (is.null(prep)) {
@@ -3532,74 +3671,23 @@ compute_pca_env_partition_overlap <- function(bg_mat, grp_col, sp1, sp2, n_perm 
   idx2 <- which(grp_col == sp2)
   n1 <- length(idx1); n2 <- length(idx2)
 
-  ecospat_ok <- FALSE
-  if (requireNamespace("ecospat", quietly = TRUE) && !is.null(scores_glob) && n1 >= 5 && n2 >= 5) {
-    eco_fit <- tryCatch({
-      scores_sp1 <- scores_glob[idx1, 1:2, drop = FALSE]
-      scores_sp2 <- scores_glob[idx2, 1:2, drop = FALSE]
-      sc_glob <- if (!is.null(prep$scores_M_all)) prep$scores_M_all else scores_glob
-      g1_m <- .resolve_lineage_accessible_glob1(prep, idx1)
-      g2_m <- .resolve_lineage_accessible_glob1(prep, idx2)
-      grid_R <- if (n_perm < 99) 50 else 100
-      z1 <- ecospat::ecospat.grid.clim.dyn(glob = sc_glob, glob1 = g1_m, sp = scores_sp1, R = grid_R)
-      z2 <- ecospat::ecospat.grid.clim.dyn(glob = sc_glob, glob1 = g2_m, sp = scores_sp2, R = grid_R)
-      ov <- ecospat::ecospat.niche.overlap(z1, z2, cor = TRUE)
-      if (n_perm >= 99) {
-        eq <- tryCatch(
-          suppressMessages(suppressWarnings(ecospat::ecospat.niche.equivalency.test(z1, z2, rep = n_perm, overlap.alternative = "lower", ncores = 1))),
-          error = function(e) suppressMessages(suppressWarnings(ecospat::ecospat.niche.equivalency.test(z1, z2, rep = n_perm, ncores = 1)))
-        )
-        bg_sim <- tryCatch(
-          suppressMessages(suppressWarnings(ecospat::ecospat.niche.similarity.test(z1, z2, rep = n_perm, overlap.alternative = "lower", rand.type = 2, ncores = 1))),
-          error = function(e) tryCatch(
-            suppressMessages(suppressWarnings(ecospat::ecospat.niche.similarity.test(z1, z2, rep = n_perm, rand.type = 2, ncores = 1))),
-            error = function(e2) NULL
-          )
-        )
-        d_sim <- as.numeric(eq$sim$D); i_sim <- as.numeric(eq$sim$I)
-        p_bg_d <- if (!is.null(bg_sim) && !is.null(bg_sim$sim$D)) {
-          d_bg <- as.numeric(bg_sim$sim$D)
-          (sum(d_bg <= as.numeric(ov$D), na.rm = TRUE) + 1) / (length(d_bg) + 1)
-        } else {
-          NA_real_
-        }
-        p_bg_i <- if (!is.null(bg_sim) && !is.null(bg_sim$sim$I)) {
-          i_bg <- as.numeric(bg_sim$sim$I)
-          (sum(i_bg <= as.numeric(ov$I), na.rm = TRUE) + 1) / (length(i_bg) + 1)
-        } else {
-          NA_real_
-        }
-        list(
-          D_emp = as.numeric(ov$D),
-          I_emp = as.numeric(ov$I),
-          p_equiv_D = (sum(d_sim <= as.numeric(ov$D), na.rm = TRUE) + 1) / (length(d_sim) + 1),
-          p_equiv_I = (sum(i_sim <= as.numeric(ov$I), na.rm = TRUE) + 1) / (length(i_sim) + 1),
-          p_bg_D = p_bg_d,
-          p_bg_I = p_bg_i,
-          D_null = d_sim,
-          I_null = i_sim,
-          has_perm = TRUE
-        )
-      } else {
-        list(
-          D_emp = as.numeric(ov$D),
-          I_emp = as.numeric(ov$I),
-          has_perm = FALSE
-        )
-      }
-    }, error = function(e) NULL)
-    if (!is.null(eco_fit) && is.finite(eco_fit$D_emp) && is.finite(eco_fit$I_emp)) {
-      D_emp <- eco_fit$D_emp; I_emp <- eco_fit$I_emp
-      if (isTRUE(eco_fit$has_perm)) {
-        p_equiv_D <- eco_fit$p_equiv_D; p_equiv_I <- eco_fit$p_equiv_I
-        p_bg_D <- eco_fit$p_bg_D; p_bg_I <- eco_fit$p_bg_I
-        D_null <- eco_fit$D_null; I_null <- eco_fit$I_null
-        ecospat_ok <- TRUE
+  if (!is.null(scores_glob) && n1 >= 5L && n2 >= 5L) {
+    g1 <- if (!is.null(precomputed_g1)) precomputed_g1 else .build_fast_pca_env_taxon_grid(prep, idx1, R = 100L)
+    g2 <- if (!is.null(precomputed_g2)) precomputed_g2 else .build_fast_pca_env_taxon_grid(prep, idx2, R = 100L)
+    if (!is.null(g1) && !is.null(g2)) {
+      fast_fit <- tryCatch(.run_fast_pca_env_pair_overlap(g1, g2, n_perm), error = function(e) list(ok = FALSE))
+      if (isTRUE(fast_fit$ok) && (n_perm <= 0L || (is.finite(fast_fit$p_equiv_D) && is.finite(fast_fit$p_bg_D)))) {
+        return(list(
+          D_emp = fast_fit$D_emp, I_emp = fast_fit$I_emp,
+          p_equiv_D = fast_fit$p_equiv_D, p_equiv_I = fast_fit$p_equiv_I,
+          p_bg_D = fast_fit$p_bg_D, p_bg_I = fast_fit$p_bg_I,
+          D_null = fast_fit$D_null, I_null = fast_fit$I_null
+        ))
       }
     }
   }
 
-  # Calibrated 2D PCA-env Kernel Density & Equivalency / Background Similarity Tests (Broennimann et al. 2012; Warren et al. 2008)
+  # Analytical Gaussian fallback for tiny sample sizes (n < 5) or zero-variance degenerate PCA-env axes
   ord_bg <- if (!is.null(scores_glob)) as.matrix(scores_glob) else as.matrix(bg_sub)
   ord_df1 <- ord_bg[idx1, , drop = FALSE]
   ord_df2 <- ord_bg[idx2, , drop = FALSE]
@@ -3607,37 +3695,25 @@ compute_pca_env_partition_overlap <- function(bg_mat, grp_col, sp1, sp2, n_perm 
   m2 <- colMeans(ord_df2); s2 <- apply(ord_df2, 2, stats::sd) + 1e-4
   p1 <- exp(-0.5 * rowSums(t((t(ord_bg) - m1) / s1)^2)); p1 <- p1 / max(sum(p1), 1e-12)
   p2 <- exp(-0.5 * rowSums(t((t(ord_bg) - m2) / s2)^2)); p2 <- p2 / max(sum(p2), 1e-12)
+  D_emp <- 1 - 0.5 * sum(abs(p1 - p2))
+  I_emp <- 1 - 0.5 * sqrt(sum((sqrt(p1) - sqrt(p2))^2))
 
-  if (!ecospat_ok) {
-    if (!exists("D_emp", inherits = FALSE) || !is.finite(D_emp)) {
-      D_emp <- 1 - 0.5 * sum(abs(p1 - p2))
-      I_emp <- 1 - 0.5 * sqrt(sum((sqrt(p1) - sqrt(p2))^2))
+  if (n_perm > 0L) {
+    pooled <- rbind(ord_df1, ord_df2); n_tot <- n1 + n2
+    D_null <- numeric(n_perm); I_null <- numeric(n_perm)
+    for (k in seq_len(n_perm)) {
+      idx_perm <- sample.int(n_tot, n1)
+      p_df1 <- pooled[idx_perm, , drop = FALSE]; p_df2 <- pooled[-idx_perm, , drop = FALSE]
+      pm1 <- colMeans(p_df1); ps1 <- apply(p_df1, 2, stats::sd) + 1e-4
+      pm2 <- colMeans(p_df2); ps2 <- apply(p_df2, 2, stats::sd) + 1e-4
+      pp1 <- exp(-0.5 * rowSums(t((t(ord_bg) - pm1) / ps1)^2)); pp1 <- pp1 / max(sum(pp1), 1e-12)
+      pp2 <- exp(-0.5 * rowSums(t((t(ord_bg) - pm2) / ps2)^2)); pp2 <- pp2 / max(sum(pp2), 1e-12)
+      D_null[k] <- 1 - 0.5 * sum(abs(pp1 - pp2))
+      I_null[k] <- 1 - 0.5 * sqrt(sum((sqrt(pp1) - sqrt(pp2))^2))
     }
+    p_equiv_D <- (sum(D_null <= D_emp) + 1) / (n_perm + 1)
+    p_equiv_I <- (sum(I_null <= I_emp) + 1) / (n_perm + 1)
 
-    if (n_perm > 0L) {
-      pooled <- rbind(ord_df1, ord_df2); n_tot <- n1 + n2
-      D_null <- numeric(n_perm); I_null <- numeric(n_perm)
-      for (k in seq_len(n_perm)) {
-        idx_perm <- sample.int(n_tot, n1)
-        p_df1 <- pooled[idx_perm, , drop = FALSE]; p_df2 <- pooled[-idx_perm, , drop = FALSE]
-        pm1 <- colMeans(p_df1); ps1 <- apply(p_df1, 2, stats::sd) + 1e-4
-        pm2 <- colMeans(p_df2); ps2 <- apply(p_df2, 2, stats::sd) + 1e-4
-        pp1 <- exp(-0.5 * rowSums(t((t(ord_bg) - pm1) / ps1)^2)); pp1 <- pp1 / max(sum(pp1), 1e-12)
-        pp2 <- exp(-0.5 * rowSums(t((t(ord_bg) - pm2) / ps2)^2)); pp2 <- pp2 / max(sum(pp2), 1e-12)
-        D_null[k] <- 1 - 0.5 * sum(abs(pp1 - pp2))
-        I_null[k] <- 1 - 0.5 * sqrt(sum((sqrt(pp1) - sqrt(pp2))^2))
-      }
-      p_equiv_D <- (sum(D_null <= D_emp) + 1) / (n_perm + 1)
-      p_equiv_I <- (sum(I_null <= I_emp) + 1) / (n_perm + 1)
-    } else {
-      D_null <- numeric(0); I_null <- numeric(0)
-      p_equiv_D <- NA_real_; p_equiv_I <- NA_real_
-    }
-    p_bg_D <- NA_real_; p_bg_I <- NA_real_
-  }
-
-  # Background Similarity Permutation Test (Warren et al. 2008: random background niche shifts across regional PCA-env)
-  if (n_perm > 0L && (is.na(p_bg_D) || !is.finite(p_bg_D))) {
     n_bg_tot <- nrow(ord_bg)
     D_bg_null <- numeric(n_perm); I_bg_null <- numeric(n_perm)
     for (k in seq_len(n_perm)) {
@@ -3650,6 +3726,10 @@ compute_pca_env_partition_overlap <- function(bg_mat, grp_col, sp1, sp2, n_perm 
     }
     p_bg_D <- (sum(D_bg_null <= D_emp) + 1) / (n_perm + 1)
     p_bg_I <- (sum(I_bg_null <= I_emp) + 1) / (n_perm + 1)
+  } else {
+    D_null <- numeric(0); I_null <- numeric(0)
+    p_equiv_D <- NA_real_; p_equiv_I <- NA_real_
+    p_bg_D <- NA_real_; p_bg_I <- NA_real_
   }
 
   return(list(
@@ -3711,7 +3791,7 @@ compute_edaphic_schoener_d <- function(
     sp1 <- pr[1]; sp2 <- pr[2]
     if (sum(grp_col == sp1, na.rm = TRUE) < 5L || sum(grp_col == sp2, na.rm = TRUE) < 5L) next
     pair_name <- paste0(gsub("Packera ", "P.", sp1), " vs ", gsub("Packera ", "P.", sp2))
-    ed_jobs[[length(ed_jobs) + 1L]] <- list(bg_mat = X_ed, sp1 = sp1, sp2 = sp2, rf_var_weights = rf_var_weights, prep = prep_ed)
+    ed_jobs[[length(ed_jobs) + 1L]] <- list(part_id = "edaph", bg_mat = X_ed, sp1 = sp1, sp2 = sp2, rf_var_weights = rf_var_weights, prep = prep_ed)
     ed_meta[[length(ed_meta) + 1L]] <- list(pair_name = pair_name, sp1 = sp1, sp2 = sp2)
   }
   if (length(ed_jobs) == 0L) {
@@ -3855,9 +3935,9 @@ run_warren_niche_identity_tests <- function(
     n2 <- sum(grp_col == sp2, na.rm = TRUE)
     if (n1 < 5 || n2 < 5) next
     valid_pair_meta[[length(valid_pair_meta) + 1L]] <- list(sp1 = sp1, sp2 = sp2, pair_name = pair_name, n1 = n1, n2 = n2)
-    part_jobs[[length(part_jobs) + 1L]] <- list(bg_mat = X_clim_part, sp1 = sp1, sp2 = sp2, rf_var_weights = rf_var_weights, prep = prep_clim)
-    part_jobs[[length(part_jobs) + 1L]] <- list(bg_mat = X_edaph_part, sp1 = sp1, sp2 = sp2, rf_var_weights = rf_var_weights, prep = prep_edaph)
-    part_jobs[[length(part_jobs) + 1L]] <- list(bg_mat = X_joint_part, sp1 = sp1, sp2 = sp2, rf_var_weights = rf_var_weights, prep = prep_joint)
+    part_jobs[[length(part_jobs) + 1L]] <- list(part_id = "clim", bg_mat = X_clim_part, sp1 = sp1, sp2 = sp2, rf_var_weights = rf_var_weights, prep = prep_clim)
+    part_jobs[[length(part_jobs) + 1L]] <- list(part_id = "edaph", bg_mat = X_edaph_part, sp1 = sp1, sp2 = sp2, rf_var_weights = rf_var_weights, prep = prep_edaph)
+    part_jobs[[length(part_jobs) + 1L]] <- list(part_id = "joint", bg_mat = X_joint_part, sp1 = sp1, sp2 = sp2, rf_var_weights = rf_var_weights, prep = prep_joint)
   }
 
   n_perm_use <- if (isTRUE(post_sel_w)) 0L else n_perm
@@ -3925,7 +4005,18 @@ run_warren_niche_identity_tests <- function(
     }
   }
 
-  summary_table <- do.call(rbind, results_list)
+  summary_table <- if (length(results_list) > 0L) {
+    do.call(rbind, results_list)
+  } else {
+    data.frame(
+      Pair = character(0), Taxon1 = character(0), Taxon2 = character(0), N1 = integer(0), N2 = integer(0),
+      D_clim = numeric(0), I_clim = numeric(0), p_equiv_D_clim = numeric(0), p_bg_D_clim = numeric(0),
+      D_edaph = numeric(0), I_edaph = numeric(0), p_equiv_D_edaph = numeric(0), p_bg_D_edaph = numeric(0),
+      D_joint = numeric(0), I_joint = numeric(0), Schoener_D = numeric(0), Warren_D = numeric(0), Warren_I = numeric(0),
+      p_value_D = numeric(0), p_value_I = numeric(0), p_bg_D_joint = numeric(0), p_bg_I_joint = numeric(0),
+      Niche_Divergence_Axis = character(0), Taxonomic_Inference = character(0), stringsAsFactors = FALSE
+    )
+  }
   perm_table <- if (length(perm_dist_list) > 0L) do.call(rbind, perm_dist_list) else data.frame()
   return(list(summary = summary_table, permutations = perm_table, collinearity_blocks = block_screen))
 }
