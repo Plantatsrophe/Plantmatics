@@ -1,1063 +1,168 @@
 # ==============================================================================
-# Step 05 Module: Phenology, Circular DOY, & Type-Locality Ecotype Controls
-# Extracted from 05_multimodal_spatial_rf.R
+# Step 05 Module: Ecotype Regime Discovery, Anchor Resolution & IBE Coordinator
 # ==============================================================================
+if (grDevices::dev.cur() == 1L) grDevices::pdf(NULL)
 
-.step05_pheno_env <- environment()
-.step05_oframes <- vapply(sys.frames(), function(f) if (!is.null(f$ofile)) as.character(f$ofile) else "", character(1))
-.step05_ohits <- .step05_oframes[nzchar(.step05_oframes)]
+.step05_ohits <- Filter(nzchar, vapply(sys.frames(), function(f) if (!is.null(f$ofile)) as.character(f$ofile) else "", character(1)))
 .step05_cfile <- sub("^--file=", "", grep("^--file=", commandArgs(trailingOnly = FALSE), value = TRUE))
 .step05_resolve_cands <- function(fname) {
-  cands <- c(
-    file.path("scripts", "analysis", fname),
-    file.path(getwd(), "scripts", "analysis", fname),
-    file.path("analysis", fname),
-    fname
-  )
+  cands <- c(file.path("scripts", "analysis", fname), file.path(getwd(), "scripts", "analysis", fname), file.path("analysis", fname), fname)
   if (length(.step05_ohits) > 0L) cands <- c(file.path(dirname(utils::tail(.step05_ohits, 1L)), fname), cands)
   if (length(.step05_cfile) > 0L) cands <- c(file.path(dirname(.step05_cfile[1L]), fname), cands)
   cands
 }
-.step05_hop_cands <- .step05_resolve_cands("step05_circular_hopkins_models.R")
-.step05_hop_hit <- .step05_hop_cands[file.exists(.step05_hop_cands)][1L]
-if (!is.na(.step05_hop_hit) && nzchar(.step05_hop_hit)) {
-  source(.step05_hop_hit, local = .step05_pheno_env)
-}
-if (!exists("load_step05_macroecology_config", mode = "function")) {
-  .step05_cfg_cands <- .step05_resolve_cands("step05_config_geo_utils.R")
-  .step05_cfg_hit <- .step05_cfg_cands[file.exists(.step05_cfg_cands)][1L]
-  if (!is.na(.step05_cfg_hit) && nzchar(.step05_cfg_hit)) {
-    source(.step05_cfg_hit, local = .step05_pheno_env)
+for (.m in list(
+  c("step05_circular_hopkins_models.R", "select_circular_hopkins_baseline_model"),
+  c("step05_config_geo_utils.R",        "load_step05_macroecology_config"),
+  c("step05_allochronic_pheno_utils.R", "test_allochronic_bimodality_von_mises"),
+  c("step05_type_niche_utils.R",        "compute_type_locality_ecological_control")
+)) {
+  if (!exists(.m[2L], mode = "function")) {
+    .hit <- .step05_resolve_cands(.m[1L])[file.exists(.step05_resolve_cands(.m[1L]))][1L]
+    if (!is.na(.hit) && nzchar(.hit)) source(.hit)
   }
 }
+if (!exists(".to_bool_s05", mode = "function")) .to_bool_s05 <- function(x) if (is.logical(x)) (!is.na(x) & x) else if (is.numeric(x) || is.integer(x)) (!is.na(x) & is.finite(x) & x != 0) else tolower(trimws(as.character(x))) %in% c("true", "1", "t", "yes")
 
 .is_step05_extralimital_non_type <- function(df, group_vec = NULL, clean_base_mask = NULL, is_type_vec = NULL) {
-  if (is.null(df) || !is.data.frame(df) || nrow(df) == 0L) {
-    return(logical(0))
-  }
+  if (is.null(df) || !is.data.frame(df) || nrow(df) == 0L) return(logical(0))
   n <- nrow(df)
-  is_t <- if (!is.null(is_type_vec) && length(is_type_vec) == n) {
-    as.logical(is_type_vec)
-  } else if (exists(".identify_type_specimen_vec", mode = "function")) {
-    as.logical(.identify_type_specimen_vec(df)$is_type_specimen)
-  } else if ("is_type_specimen" %in% names(df)) {
-    as.logical(df$is_type_specimen)
-  } else {
-    rep(FALSE, n)
-  }
+  is_t <- if (!is.null(is_type_vec) && length(is_type_vec) == n) as.logical(is_type_vec)
+    else if (exists(".identify_type_specimen_vec", mode = "function")) as.logical(.identify_type_specimen_vec(df)$is_type_specimen)
+    else if ("is_type_specimen" %in% names(df)) as.logical(df$is_type_specimen) else rep(FALSE, n)
   is_t[is.na(is_t)] <- FALSE
-  usda_st <- if ("usda_county_status" %in% names(df)) tolower(trimws(as.character(df$usda_county_status))) else rep("", n)
-  usda_st[is.na(usda_st)] <- ""
-  is_out <- usda_st %in% c("out_of_range", "natureserve_exotic_or_waif")
-  ex_conf <- if ("exsiccatae_taxonomic_conflict" %in% names(df)) {
-    raw_ec <- df$exsiccatae_taxonomic_conflict
-    if (is.logical(raw_ec)) !is.na(raw_ec) & raw_ec
-    else if (is.numeric(raw_ec)) !is.na(raw_ec) & (raw_ec != 0)
-    else tolower(trimws(as.character(raw_ec))) %in% c("true", "1", "t", "yes")
-  } else {
-    rep(FALSE, n)
-  }
-  raw_mask <- (!is_t) & (is_out | ex_conf)
-  if (!any(raw_mask)) return(raw_mask)
+  us <- if ("usda_county_status" %in% names(df)) tolower(trimws(as.character(df$usda_county_status))) else rep("", n); us[is.na(us)] <- ""
+  ex_c <- if ("exsiccatae_taxonomic_conflict" %in% names(df)) .to_bool_s05(df$exsiccatae_taxonomic_conflict) else rep(FALSE, n)
+  raw_m <- (!is_t) & ((us %in% c("out_of_range", "natureserve_exotic_or_waif")) | ex_c)
+  if (!any(raw_m)) return(raw_m)
   g_v <- if (!is.null(group_vec) && length(group_vec) == n) as.character(group_vec) else if ("species_standardized" %in% names(df)) as.character(df$species_standardized) else rep("ALL", n)
-  base_m <- if (!is.null(clean_base_mask) && length(clean_base_mask) == n) as.logical(clean_base_mask) else rep(TRUE, n)
-  base_m[is.na(base_m)] <- FALSE
-  out_mask <- rep(FALSE, n)
-  for (tx_chk in unique(g_v[!is.na(g_v) & nzchar(g_v)])) {
-    if (sum(base_m & !is.na(g_v) & (g_v == tx_chk) & !raw_mask) >= 2L) {
-      out_mask[!is.na(g_v) & (g_v == tx_chk) & raw_mask] <- TRUE
-    }
-  }
-  out_mask
+  bm <- if (!is.null(clean_base_mask) && length(clean_base_mask) == n) as.logical(clean_base_mask) else rep(TRUE, n); bm[is.na(bm)] <- FALSE
+  out_m <- rep(FALSE, n)
+  for (tx in unique(g_v[!is.na(g_v) & nzchar(g_v)])) if (sum(bm & !is.na(g_v) & (g_v == tx) & !raw_m) >= 2L) out_m[!is.na(g_v) & (g_v == tx) & raw_m] <- TRUE
+  out_m
 }
 
-# ------------------------------------------------------------------------------
-# 2d. Latitudinal Spring Baseline & Phenological Anomalies (Delta DOY) Engine
-# ------------------------------------------------------------------------------
-extract_doy_robust <- function(df) {
-  doy_vec <- if ("doy" %in% names(df)) suppressWarnings(as.numeric(df$doy)) else rep(NA_real_, nrow(df))
-  if ("eventDate" %in% names(df)) {
-    na_idx <- which(is.na(doy_vec) & !is.na(df$eventDate))
-    if (length(na_idx) > 0) {
-      dt <- as.Date(df$eventDate[na_idx], format = "%Y-%m-%d")
-      doy_vec[na_idx] <- as.integer(format(dt, "%j"))
-    }
-  }
-  if (any(is.na(doy_vec)) && all(c("year", "month", "day") %in% names(df))) {
-    na_idx <- which(is.na(doy_vec) & !is.na(df$year) & !is.na(df$month) & !is.na(df$day))
-    if (length(na_idx) > 0) {
-      y_str <- as.character(as.integer(df$year[na_idx]))
-      m_str <- sprintf("%02d", as.integer(df$month[na_idx]))
-      d_str <- sprintf("%02d", as.integer(df$day[na_idx]))
-      dt <- as.Date(paste(y_str, m_str, d_str, sep = "-"), format = "%Y-%m-%d")
-      doy_vec[na_idx] <- as.integer(format(dt, "%j"))
-    }
-  }
-  return(doy_vec)
-}
-
-read_config_phenology_bounds <- function(config_path = "config/config.yaml") {
-  min_doy <- 30.0
-  max_doy <- 220.0
-  if (exists("load_step05_macroecology_config", mode = "function")) {
-    cfg <- tryCatch(load_step05_macroecology_config(config_path), error = function(e) NULL)
-    if (is.list(cfg)) {
-      if (!is.null(cfg$min_flowering_doy) && is.finite(cfg$min_flowering_doy) &&
-          cfg$min_flowering_doy >= 1.0 && cfg$min_flowering_doy <= 366.0) {
-        min_doy <- as.numeric(cfg$min_flowering_doy)
-      }
-      if (!is.null(cfg$max_flowering_doy) && is.finite(cfg$max_flowering_doy) &&
-          cfg$max_flowering_doy >= 1.0 && cfg$max_flowering_doy <= 366.0) {
-        max_doy <- as.numeric(cfg$max_flowering_doy)
-      }
-      return(list(min_flowering_doy = min_doy, max_flowering_doy = max_doy))
-    }
-  }
-  if (!is.null(config_path) && nzchar(config_path) && file.exists(config_path)) {
-    lines <- tryCatch(readLines(config_path, warn = FALSE), error = function(e) character(0))
-    if (length(lines) > 0L) {
-      m_min <- grep("^[[:space:]]*min_flowering_doy[[:space:]]*:", lines, value = TRUE)
-      if (length(m_min) > 0L) {
-        val <- suppressWarnings(as.numeric(sub("#.*$", "", sub("^[^:]+:[[:space:]]*", "", m_min[1]))))
-        if (is.finite(val) && val >= 1.0 && val <= 366.0) min_doy <- val
-      }
-      m_max <- grep("^[[:space:]]*max_flowering_doy[[:space:]]*:", lines, value = TRUE)
-      if (length(m_max) > 0L) {
-        val <- suppressWarnings(as.numeric(sub("#.*$", "", sub("^[^:]+:[[:space:]]*", "", m_max[1]))))
-        if (is.finite(val) && val >= 1.0 && val <= 366.0) max_doy <- val
-      }
-    }
-  }
-  list(min_flowering_doy = min_doy, max_flowering_doy = max_doy)
-}
-
-compute_circular_mean_doy <- function(doy_vec) {
-  v <- suppressWarnings(as.numeric(doy_vec))
-  v <- v[is.finite(v) & v >= 1.0 & v <= 366.0]
-  if (length(v) == 0L) return(NA_real_)
-  theta <- 2.0 * pi * (v / 365.25)
-  sin_m <- mean(sin(theta))
-  cos_m <- mean(cos(theta))
-  if (!is.finite(sin_m) || !is.finite(cos_m) || sqrt(sin_m^2 + cos_m^2) < 1e-8) {
-    return(as.numeric(stats::median(v)))
-  }
-  ang <- atan2(sin_m, cos_m)
-  if (ang <= 0.0) ang <- ang + 2.0 * pi
-  c_doy <- ang * 365.25 / (2.0 * pi)
-  if (c_doy <= 0.0) c_doy <- c_doy + 365.25
-  as.numeric(c_doy)
-}
-
-circular_signed_doy_offset <- function(doy_vec, center_doy) {
-  v <- suppressWarnings(as.numeric(doy_vec))
-  if (length(v) == 0L) return(numeric(0))
-  c_v <- suppressWarnings(as.numeric(center_doy))
-  if (length(c_v) == 0L || all(!is.finite(c_v))) {
-    return(rep(NA_real_, length(v)))
-  }
-  if (length(c_v) == 1L) {
-    c_v <- rep(c_v, length(v))
-  } else if (length(c_v) != length(v)) {
-    stop(sprintf("circular_signed_doy_offset length mismatch: %d vs %d", length(v), length(c_v)))
-  }
-  out <- rep(NA_real_, length(v))
-  ok <- is.finite(v) & is.finite(c_v)
-  if (any(ok)) {
-    d_theta <- 2.0 * pi * ((v[ok] - c_v[ok]) / 365.25)
-    out[ok] <- atan2(sin(d_theta), cos(d_theta)) * 365.25 / (2.0 * pi)
-  }
-  out
-}
-
-wrap_doy_365 <- function(doy_vec) {
-  v <- suppressWarnings(as.numeric(doy_vec))
-  w <- v %% 365.25
-  idx_le <- which(is.finite(w) & w <= 0.0)
-  if (length(idx_le) > 0L) w[idx_le] <- w[idx_le] + 365.25
-  w
-}
-
-model_latitudinal_spring_baseline <- function(flowering_df, circ_mean_doy = NULL, lat_bounds = NULL) {
-  message("Modeling Circular von Mises Latitudinal Anthesis Baseline (AICc Selection over Hopkins 1918 & Empirical Models)...")
-
-  df_in <- as.data.frame(flowering_df, check.names = FALSE, stringsAsFactors = FALSE)
-  lat_col <- if ("decimalLatitude" %in% names(df_in) && any(!is.na(df_in$decimalLatitude))) {
-    suppressWarnings(as.numeric(df_in$decimalLatitude))
-  } else if ("latitude" %in% names(df_in)) {
-    suppressWarnings(as.numeric(df_in$latitude))
-  } else {
-    rep(NA_real_, nrow(df_in))
-  }
-  df_in$decimalLatitude <- lat_col
-  doy_num <- if ("doy" %in% names(df_in)) suppressWarnings(as.numeric(df_in$doy)) else rep(NA_real_, nrow(df_in))
-  df_in$doy <- doy_num
-
-  keep_valid <- !is.na(df_in$decimalLatitude) & is.finite(df_in$decimalLatitude) &
-                df_in$decimalLatitude >= -90.0 & df_in$decimalLatitude <= 90.0 &
-                !is.na(df_in$doy) & is.finite(df_in$doy) &
-                df_in$doy >= 1.0 & df_in$doy <= 366.0
-  if (!is.null(lat_bounds) && length(lat_bounds) == 2L && all(is.finite(lat_bounds))) {
-    keep_valid <- keep_valid &
-                  df_in$decimalLatitude >= min(lat_bounds) &
-                  df_in$decimalLatitude <= max(lat_bounds)
-  }
-  valid <- df_in[keep_valid, , drop = FALSE]
-  day_per_rad <- 365.25 / (2.0 * pi)
-
-  ref_circ_doy <- if (!is.null(circ_mean_doy) && length(circ_mean_doy) >= 1L && is.finite(circ_mean_doy[1L])) {
-    as.numeric(circ_mean_doy[1L])
-  } else {
-    compute_circular_mean_doy(valid$doy)
-  }
-
-  circ_fit <- select_circular_hopkins_baseline_model(valid)
-  n_v <- nrow(valid)
-  mu_0_doy <- wrap_doy_365(circ_fit$mu_0 * day_per_rad)
-  b_lat <- as.numeric(circ_fit$b_lat)
-  b_yr <- as.numeric(circ_fit$b_year)
-  min_lat <- if (n_v > 0L) min(valid$decimalLatitude, na.rm = TRUE) else NA_real_
-
-  if (n_v == 0L) {
-    message("[WARN] Zero georeferenced anthesis records with valid DOY available for latitudinal baseline.")
-    valid$expected_doy <- numeric(0)
-    valid$hopkins_expected <- numeric(0)
-    valid$delta_doy <- numeric(0)
-    return(list(
-      intercept = ref_circ_doy, slope = 0.0, slope_lat = 0.0, slope_year = 0.0,
-      b_lon = 0.0, ref_lon = 0.0, b_year = 0.0, ref_year = 1990.0,
-      b_elev = 0.0, ref_elev = 0.0, b_mat = 0.0, ref_mat = 0.0,
-      min_lat = NA_real_, pred_min_lat = ref_circ_doy,
-      circ_mean_doy = ref_circ_doy, hopkins_expected = numeric(0),
-      r_squared = 0.0, p_value = NA_real_, n = 0L, model = NULL,
-      df = valid, r2 = 0.0, p_val = NA_real_, status = "insufficient_sample",
-      selected_model = circ_fit$selected_model, model_selection_table = circ_fit$model_selection_table,
-      aicc_weight = circ_fit$aicc_weight, delta_aicc_vs_hopkins1918 = circ_fit$delta_aicc_vs_hopkins1918,
-      rayleigh_z = circ_fit$rayleigh_z, rayleigh_p = circ_fit$rayleigh_p, r_bar = circ_fit$r_bar,
-      is_uniform_null = TRUE, predict_doy_rad = circ_fit$predict_doy_rad
-    ))
-  }
-
-  theta_obs <- doy_to_rad(valid$doy)
-  theta_hat <- circ_fit$predict_doy_rad(valid)
-  hopkins_expected <- wrap_doy_365(theta_hat * day_per_rad)
-  delta_doy <- wrap_rad(theta_obs - theta_hat) * day_per_rad
-  valid$expected_doy <- hopkins_expected
-  valid$hopkins_expected <- hopkins_expected
-  valid$delta_doy <- delta_doy
-
-  min_row <- valid[which.min(valid$decimalLatitude)[1L], , drop = FALSE]
-  pred_min_lat <- wrap_doy_365(circ_fit$predict_doy_rad(min_row)[1L] * day_per_rad)
-  lin_intercept <- mu_0_doy - b_lat * circ_fit$lat_ref
-
-  if (n_v < 6L) {
-    message(sprintf("[WARN] Small anthesis cohort (N=%d < 6); returning conservative circular fallback baseline.", n_v))
-    return(list(
-      intercept = lin_intercept, slope = b_lat, slope_lat = b_lat, slope_year = b_yr,
-      b_lon = circ_fit$b_lon, ref_lon = circ_fit$lon_ref,
-      b_year = b_yr, ref_year = circ_fit$year_ref,
-      b_elev = circ_fit$b_elev, ref_elev = circ_fit$elev_ref,
-      b_mat = circ_fit$b_mat, ref_mat = circ_fit$mat_ref,
-      min_lat = min_lat, pred_min_lat = pred_min_lat,
-      circ_mean_doy = ref_circ_doy, hopkins_expected = hopkins_expected,
-      r_squared = 0.0, p_value = circ_fit$rayleigh_p, n = as.integer(n_v), model = circ_fit,
-      df = valid, r2 = 0.0, p_val = circ_fit$rayleigh_p, status = "insufficient_sample",
-      selected_model = circ_fit$selected_model, model_selection_table = circ_fit$model_selection_table,
-      aicc_weight = circ_fit$aicc_weight, delta_aicc_vs_hopkins1918 = circ_fit$delta_aicc_vs_hopkins1918,
-      rayleigh_z = circ_fit$rayleigh_z, rayleigh_p = circ_fit$rayleigh_p, r_bar = circ_fit$r_bar,
-      is_uniform_null = circ_fit$is_uniform_null, predict_doy_rad = circ_fit$predict_doy_rad
-    ))
-  }
-
-  r_null <- circ_fit$r_bar
-  r_res <- mean(cos(wrap_rad(theta_obs - theta_hat)), na.rm = TRUE)
-  r2_val <- if (is.finite(r_null) && is.finite(r_res) && (1.0 - r_null) > 1e-8) {
-    max(0.0, min(1.0, (r_res - r_null) / (1.0 - r_null)))
-  } else {
-    0.0
-  }
-
-  tbl <- circ_fit$model_selection_table
-  sel_idx <- which(tbl$Model == circ_fit$selected_model)[1L]
-  k_sel <- if (!is.na(sel_idx)) tbl$k_params[sel_idx] else 2L
-  ll_sel <- if (!is.na(sel_idx)) tbl$LogLik[sel_idx] else NA_real_
-  m0_idx <- which(tbl$Model == "M0_Constant_Phase")[1L]
-  ll_m0 <- if (!is.na(m0_idx)) tbl$LogLik[m0_idx] else NA_real_
-
-  p_val <- if (is.finite(k_sel) && k_sel > 2L && is.finite(ll_sel) && is.finite(ll_m0)) {
-    stats::pchisq(max(0.0, 2.0 * (ll_sel - ll_m0)), df = k_sel - 2L, lower.tail = FALSE)
-  } else if (identical(circ_fit$selected_model, "M1_Hopkins_1918_Fixed")) {
-    d_obs_c <- circular_signed_doy_offset(valid$doy, mu_0_doy)
-    d_pred_c <- wrap_rad(theta_hat - circ_fit$mu_0) * day_per_rad
-    if (length(d_pred_c) >= 3L && is.finite(stats::sd(d_pred_c, na.rm = TRUE)) && stats::sd(d_pred_c, na.rm = TRUE) > 1e-8) {
-      tryCatch({
-        sm <- summary(stats::lm(d_obs_c ~ d_pred_c))
-        if (nrow(sm$coefficients) >= 2L && ncol(sm$coefficients) >= 4L) as.numeric(sm$coefficients[2L, 4L]) else circ_fit$rayleigh_p
-      }, error = function(e) circ_fit$rayleigh_p)
-    } else {
-      circ_fit$rayleigh_p
-    }
-  } else {
-    circ_fit$rayleigh_p
-  }
-  status_str <- if (isTRUE(circ_fit$is_uniform_null)) "uniform_null" else "ok"
-
-  message(sprintf(
-    "Circular Hopkins AICc Selected [%s]: slope=%.3f d/deg (b_elev=%.4f, b_mat=%.3f, b_yr=%.4f, kappa=%.2f, AICc_w=%.3f, Rayleigh_p=%.3e, R2_circ=%.4f, N=%d)",
-    circ_fit$selected_model, b_lat, circ_fit$b_elev, circ_fit$b_mat, b_yr,
-    circ_fit$kappa, ifelse(is.finite(circ_fit$aicc_weight), circ_fit$aicc_weight, NA_real_),
-    circ_fit$rayleigh_p, r2_val, n_v
-  ))
-
-  return(list(
-    intercept = lin_intercept, slope = b_lat, slope_lat = b_lat, slope_year = b_yr,
-    b_lon = circ_fit$b_lon, ref_lon = circ_fit$lon_ref,
-    b_year = b_yr, ref_year = circ_fit$year_ref,
-    b_elev = circ_fit$b_elev, ref_elev = circ_fit$elev_ref,
-    b_mat = circ_fit$b_mat, ref_mat = circ_fit$mat_ref,
-    min_lat = min_lat, pred_min_lat = pred_min_lat,
-    circ_mean_doy = ref_circ_doy, hopkins_expected = hopkins_expected,
-    r_squared = r2_val, p_value = p_val, n = as.integer(n_v), model = circ_fit,
-    df = valid, r2 = r2_val, p_val = p_val, status = status_str,
-    selected_model = circ_fit$selected_model, model_selection_table = circ_fit$model_selection_table,
-    aicc_weight = circ_fit$aicc_weight, delta_aicc_vs_hopkins1918 = circ_fit$delta_aicc_vs_hopkins1918,
-    rayleigh_z = circ_fit$rayleigh_z, rayleigh_p = circ_fit$rayleigh_p, r_bar = circ_fit$r_bar,
-    is_uniform_null = circ_fit$is_uniform_null, predict_doy_rad = circ_fit$predict_doy_rad
-  ))
-}
-
-compute_phenological_anomalies <- function(df, output_csv = NULL, summary_csv = NULL, demo = FALSE, config_path = "config/config.yaml") {
-  message("Computing cohort-adaptive circular phenological anomalies (Delta DOY)...")
-  df$doy <- extract_doy_robust(df)
-  lat_val <- if ("decimalLatitude" %in% names(df) && any(!is.na(df$decimalLatitude))) {
-    suppressWarnings(as.numeric(df$decimalLatitude))
-  } else if ("latitude" %in% names(df)) {
-    suppressWarnings(as.numeric(df$latitude))
-  } else {
-    rep(NA_real_, nrow(df))
-  }
-  df$decimalLatitude <- lat_val
-  df$latitude <- lat_val
-
-  valid_doy <- !is.na(df$doy) & is.finite(df$doy) & df$doy >= 1.0 & df$doy <= 366.0
-  valid_lat <- !is.na(df$decimalLatitude) & is.finite(df$decimalLatitude) &
-               df$decimalLatitude >= -90.0 & df$decimalLatitude <= 90.0
-
-  # ----------------------------------------------------------------------------
-  # 3-Tier Cohort-Adaptive Anthesis Verification Filter
-  # ----------------------------------------------------------------------------
-  # Darwin Core reproductiveCondition check: exclude fruiting-only / sterile-only sheets
-  if ("reproductiveCondition" %in% names(df)) {
-    rc <- tolower(trimws(as.character(df$reproductiveCondition)))
-    rc[is.na(rc)] <- ""
-    has_fruit <- grepl("fruit", rc)
-    has_sterile <- grepl("sterile", rc)
-    has_fl <- grepl("fl", rc)
-    dwc_fruit_only <- has_fruit & !has_fl
-    dwc_sterile_only <- has_sterile & !has_fl
-  } else {
-    dwc_fruit_only <- rep(FALSE, nrow(df))
-    dwc_sterile_only <- rep(FALSE, nrow(df))
-  }
-  pass_dwc <- !(dwc_fruit_only | dwc_sterile_only)
-
-  # Computer Vision check: voucher_phenological_state == "anthesis"
-  if ("voucher_phenological_state" %in% names(df)) {
-    v_state <- tolower(trimws(as.character(df$voucher_phenological_state)))
-    v_state[is.na(v_state)] <- ""
-  } else {
-    v_state <- rep("", nrow(df))
-  }
-
-  .as_finite_num <- function(cname) {
-    if (!(cname %in% names(df))) return(rep(NA_real_, nrow(df)))
-    v <- suppressWarnings(as.numeric(df[[cname]]))
-    v[!is.finite(v)] <- NA_real_
-    v
-  }
-  tot_caps <- .as_finite_num("total_capitula")
-  if ("capitula_count" %in% names(df)) {
-    cap_cnt <- .as_finite_num("capitula_count")
-    miss_tc <- !is.finite(tot_caps) & is.finite(cap_cnt)
-    if (any(miss_tc)) tot_caps[miss_tc] <- cap_cnt[miss_tc]
-  }
-  if ("corymb_head_count_est" %in% names(df)) {
-    corymb_est <- .as_finite_num("corymb_head_count_est")
-    tot_caps <- pmax(tot_caps, corymb_est, na.rm = TRUE)
-  }
-  tot_caps[!is.finite(tot_caps)] <- 0
-
-  n_anth_vec <- .as_finite_num("n_anthesis")
-  if ("anthesis_head_count" %in% names(df)) {
-    anth_est <- .as_finite_num("anthesis_head_count")
-    n_anth_vec <- pmax(n_anth_vec, anth_est, na.rm = TRUE)
-  }
-  n_anth_vec[!is.finite(n_anth_vec)] <- 0
-  has_valid_cv <- ((v_state != "" & v_state != "unknown" & v_state != "na") & tot_caps > 0) | (n_anth_vec > 0)
-  is_cv_anth_label <- grepl("anthesis", v_state) | (n_anth_vec > 0)
-  raw_anthesis_cand <- valid_doy & valid_lat & pass_dwc &
-                       ((has_valid_cv & is_cv_anth_label) | (!has_valid_cv))
-
-  cfg_bounds <- if (exists("load_step05_macroecology_config", mode = "function")) {
-    load_step05_macroecology_config(config_path)
-  } else {
-    read_config_phenology_bounds(config_path)
-  }
-  min_d <- if (!is.null(cfg_bounds$min_flowering_doy) && is.finite(cfg_bounds$min_flowering_doy)) as.numeric(cfg_bounds$min_flowering_doy) else 30.0
-  max_d <- if (!is.null(cfg_bounds$max_flowering_doy) && is.finite(cfg_bounds$max_flowering_doy)) as.numeric(cfg_bounds$max_flowering_doy) else 220.0
-
-  raw_doy_pool <- if (any(raw_anthesis_cand)) df$doy[raw_anthesis_cand] else df$doy[valid_doy]
-  circ_mean_raw <- if (length(raw_doy_pool) > 0L) compute_circular_mean_doy(raw_doy_pool) else compute_circular_mean_doy(c(min_d, max_d))
-  circ_med_doy <- if (length(raw_doy_pool) > 0L && is.finite(circ_mean_raw)) {
-    wrap_doy_365(circ_mean_raw + stats::median(circular_signed_doy_offset(raw_doy_pool, circ_mean_raw), na.rm = TRUE))
-  } else {
-    circ_mean_raw
-  }
-  is_vernal_cohort <- is.finite(circ_med_doy) && (min_d <= max_d) && (circ_med_doy >= min_d) && (circ_med_doy < 170.0)
-  vernal_hi <- min(max_d, 240.0)
-  in_vernal_win <- valid_doy & (df$doy >= min_d) & (df$doy <= vernal_hi)
-  offseason_vernal_mask <- if (is_vernal_cohort) (valid_doy & !in_vernal_win) else rep(FALSE, nrow(df))
-
-  # Empirical cohort latitude bounds: [min(lat) - 3.0, max(lat) + 3.0]
-  lat_cand <- if (is_vernal_cohort && any(raw_anthesis_cand & in_vernal_win)) {
-    raw_anthesis_cand & in_vernal_win
-  } else {
-    raw_anthesis_cand
-  }
-  lat_pool <- if (any(lat_cand)) df$decimalLatitude[lat_cand] else df$decimalLatitude[valid_lat]
-  if (length(lat_pool) > 0L) {
-    lat_min_gate <- max(-90.0, min(lat_pool, na.rm = TRUE) - 3.0)
-    lat_max_gate <- min(90.0, max(lat_pool, na.rm = TRUE) + 3.0)
-  } else {
-    lat_min_gate <- -90.0
-    lat_max_gate <- 90.0
-  }
-
-  # Enforce vernal bounds [min_flowering_doy, max_flowering_doy] (<= 240) when cohort median < 170;
-  # otherwise use cohort-adaptive circular DOY gate (for winter-wrapping / autumn cohorts)
-  n_raw_anthesis <- sum(raw_anthesis_cand)
-  if (is_vernal_cohort) {
-    pass_doy_gate <- in_vernal_win
-    vernal_pool <- if (any(raw_anthesis_cand & in_vernal_win)) df$doy[raw_anthesis_cand & in_vernal_win] else raw_doy_pool
-    circ_mean_doy <- if (length(vernal_pool) > 0L) compute_circular_mean_doy(vernal_pool) else circ_mean_raw
-    message(sprintf("[INFO] Vernal anthesis gate (circ_med_doy=%.1f < 170): DOY [%.0f, %.0f] (autumn > 240 excluded; offseason N=%d), lat=[%.2f, %.2f].",
-                    circ_med_doy, min_d, vernal_hi, sum(offseason_vernal_mask), lat_min_gate, lat_max_gate))
-  } else if (n_raw_anthesis >= 5L) {
-    circ_mean_doy <- circ_mean_raw
-    cand_offsets <- circular_signed_doy_offset(df$doy[raw_anthesis_cand], circ_mean_doy)
-    mad_doy <- stats::mad(cand_offsets, constant = 1.4826, na.rm = TRUE)
-    half_arc <- min(120.0, max(45.0, 3.5 * if (is.finite(mad_doy) && mad_doy > 0) mad_doy else 21.0))
-    arc_lo <- max(-half_arc, as.numeric(stats::quantile(cand_offsets, 0.005, na.rm = TRUE)) - 21.0)
-    arc_hi <- min(half_arc, as.numeric(stats::quantile(cand_offsets, 0.995, na.rm = TRUE)) + 21.0)
-    all_offsets <- circular_signed_doy_offset(df$doy, circ_mean_doy)
-    pass_doy_gate <- valid_doy & is.finite(all_offsets) & (all_offsets >= arc_lo) & (all_offsets <= arc_hi)
-    message(sprintf("[INFO] Cohort-adaptive circular anthesis gate: circ_mean_doy=%.1f, arc=[%+.1f, %+.1f] d (half_arc=%.1f d), lat=[%.2f, %.2f] (N_cand=%d).",
-                    circ_mean_doy, arc_lo, arc_hi, half_arc, lat_min_gate, lat_max_gate, n_raw_anthesis))
-  } else {
-    if (min_d <= max_d) {
-      pass_doy_gate <- valid_doy & (df$doy >= min_d) & (df$doy <= max_d)
-    } else {
-      pass_doy_gate <- valid_doy & (df$doy >= min_d | df$doy <= max_d)
-    }
-    circ_mean_doy <- circ_mean_raw
-    message(sprintf("[WARN] Verified anthesis candidates N=%d (< 5); falling back to config phenology bounds DOY [%.0f, %.0f], lat=[%.2f, %.2f].",
-                    n_raw_anthesis, min_d, max_d, lat_min_gate, lat_max_gate))
-  }
-
-  pass_calendar <- pass_doy_gate & valid_lat &
-                   (df$decimalLatitude >= lat_min_gate) & (df$decimalLatitude <= lat_max_gate)
-
-  cv_anthesis <- rep(FALSE, nrow(df))
-  cv_fruit <- rep(FALSE, nrow(df))
-  cv_sterile <- rep(FALSE, nrow(df))
-
-  cv_anthesis[has_valid_cv & is_cv_anth_label] <- TRUE
-  cv_fruit[has_valid_cv & !is_cv_anth_label & grepl("fruit", v_state)] <- TRUE
-  cv_sterile[has_valid_cv & !is_cv_anth_label & (v_state %in% c("sterile", "bud", "senescent") | grepl("sterile|bud", v_state))] <- TRUE
-
-  missing_cv <- !has_valid_cv
-  cv_anthesis[missing_cv & pass_calendar & pass_dwc] <- TRUE
-  cv_fruit[missing_cv & dwc_fruit_only] <- TRUE
-  cv_sterile[missing_cv & dwc_sterile_only] <- TRUE
-
-  is_verified_anthesis <- pass_calendar & pass_dwc & cv_anthesis & !offseason_vernal_mask
-  is_fruit_excluded <- pass_calendar & (cv_fruit | dwc_fruit_only) & !is_verified_anthesis
-  is_sterile_excluded <- pass_calendar & (cv_sterile | dwc_sterile_only) & !is_verified_anthesis & !is_fruit_excluded
-
-  df$is_verified_anthesis <- is_verified_anthesis
-  df$is_active_anthesis <- is_verified_anthesis
-  phen_state <- ifelse(nzchar(v_state) & !(v_state %in% c("unknown", "na")), v_state, "unknown")
-  phen_state[is_verified_anthesis & phen_state %in% c("unknown", "")] <- "anthesis"
-  phen_state[is_sterile_excluded] <- "sterile"
-  phen_state[is_fruit_excluded] <- "fruiting_only"
-  phen_state[!pass_calendar | offseason_vernal_mask] <- "offseason_or_fruiting_flush"
-  df$phenological_state <- phen_state
-  df$anthesis_filter_status <- "Excluded_Calendar_Gate"
-  df$anthesis_filter_status[pass_calendar] <- "Excluded_Other"
-  df$anthesis_filter_status[is_sterile_excluded] <- "Excluded_Sterile"
-  df$anthesis_filter_status[is_fruit_excluded] <- "Excluded_Fruit_Only"
-  df$anthesis_filter_status[is_verified_anthesis] <- "Verified_Anthesis"
-
-  n_verified <- sum(is_verified_anthesis)
-  n_fruit_excl <- sum(is_fruit_excluded)
-  n_sterile <- sum(is_sterile_excluded)
-  message(sprintf("[INFO] Filtered phenology vouchers: %d verified anthesis, %d fruiting-only (excluded), %d sterile (excluded).",
-                  n_verified, n_fruit_excl, n_sterile))
-
-  # Active reference filter for baseline & circular phase tests (excludes unpromoted Tier_3_Bronze, label noise, and quarantined centroids)
-  is_active_ref <- rep(TRUE, nrow(df))
-  is_t_ph <- if ("is_type_specimen" %in% names(df)) as.logical(df$is_type_specimen) else rep(FALSE, nrow(df))
-  is_t_ph[is.na(is_t_ph)] <- FALSE
-  if ("determiner_tier" %in% names(df)) {
-    dt_ph <- as.character(df$determiner_tier); dt_ph[is.na(dt_ph)] <- "Tier_3_Bronze"
-    pr_ph <- rep(FALSE, nrow(df))
-    if ("is_promoted_bronze" %in% names(df)) { p1 <- as.logical(df$is_promoted_bronze); p1[is.na(p1)] <- FALSE; pr_ph <- pr_ph | p1 }
-    cand_act <- grepl("Tier_1|Gold|Tier_2|Silver", dt_ph, ignore.case = TRUE) | pr_ph | is_t_ph
-    if (sum(cand_act & df$is_verified_anthesis) >= 5L || any(cand_act)) {
-      is_active_ref <- cand_act
-    }
-  }
-  if ("is_confident_label_noise" %in% names(df)) {
-    cl_ph <- as.logical(df$is_confident_label_noise); cl_ph[is.na(cl_ph)] <- FALSE
-    is_active_ref <- is_active_ref & (!cl_ph | is_t_ph)
-  }
-  quar_ph_mask <- if (exists("detect_r_centroid_or_inst_quarantine", mode = "function")) {
-    as.logical(detect_r_centroid_or_inst_quarantine(df, is_type_vec = is_t_ph)$is_quarantined)
-  } else if ("is_centroid_or_inst_coord" %in% names(df)) {
-    qv <- as.logical(df$is_centroid_or_inst_coord)
-    !is.na(qv) & qv & !is_t_ph
-  } else {
-    rep(FALSE, nrow(df))
-  }
-  quar_ph_mask[is.na(quar_ph_mask)] <- FALSE
-  quar_ph_mask <- quar_ph_mask & !is_t_ph
-  ph_grp_v <- if ("species_standardized" %in% names(df)) as.character(df$species_standardized) else rep("ALL", nrow(df))
-  ext_ph_mask <- .is_step05_extralimital_non_type(df, group_vec = ph_grp_v, clean_base_mask = is_active_ref & !quar_ph_mask, is_type_vec = is_t_ph)
-  is_active_ref <- is_active_ref & !quar_ph_mask & !ext_ph_mask
-
-  anthesis_cohort <- df[df$is_verified_anthesis & is_active_ref, , drop = FALSE]
-  if (nrow(anthesis_cohort) < 5L) anthesis_cohort <- df[df$is_verified_anthesis & !quar_ph_mask, , drop = FALSE]
-  if (nrow(anthesis_cohort) < 5L) anthesis_cohort <- df[df$is_verified_anthesis, , drop = FALSE]
-  if (nrow(anthesis_cohort) < 5L) {
-    message("[WARN] Verified anthesis cohort has < 5 vouchers; using calendar-gated cohort as baseline fallback.")
-    anthesis_cohort <- df[pass_calendar & is_active_ref, , drop = FALSE]
-    if (nrow(anthesis_cohort) < 5L) anthesis_cohort <- df[pass_calendar & !quar_ph_mask, , drop = FALSE]
-    if (nrow(anthesis_cohort) < 5L) anthesis_cohort <- df[pass_calendar, , drop = FALSE]
-    if (nrow(anthesis_cohort) == 0L) anthesis_cohort <- df[valid_doy & valid_lat, , drop = FALSE]
-  }
-  baseline <- model_latitudinal_spring_baseline(
-    anthesis_cohort,
-    circ_mean_doy = circ_mean_doy,
-    lat_bounds = c(lat_min_gate, lat_max_gate)
-  )
-
-  day_per_rad <- 365.25 / (2.0 * pi)
-  df$expected_doy <- NA_real_
-  df$hopkins_expected <- NA_real_
-  df$is_pheno_uniform_null <- isTRUE(baseline$is_uniform_null)
-  has_lat <- valid_lat
-  theta_pred <- rep(NA_real_, nrow(df))
-  if (any(has_lat) && is.function(baseline$predict_doy_rad)) {
-    theta_pred_sub <- baseline$predict_doy_rad(df[has_lat, , drop = FALSE])
-    theta_pred[has_lat] <- theta_pred_sub
-    exp_doy_sub <- ifelse(is.finite(theta_pred_sub), wrap_doy_365(theta_pred_sub * day_per_rad), NA_real_)
-    df$expected_doy[has_lat] <- exp_doy_sub
-    df$hopkins_expected[has_lat] <- exp_doy_sub
-  }
-
-  df$delta_doy <- NA_real_
-  df$delta_doy_resid <- NA_real_
-  has_both <- valid_doy & df$is_verified_anthesis & !offseason_vernal_mask & is.finite(theta_pred) & is.finite(df$expected_doy)
-  if (any(has_both)) {
-    theta_obs_b <- doy_to_rad(df$doy[has_both])
-    df$delta_doy[has_both] <- wrap_rad(theta_obs_b - theta_pred[has_both]) * day_per_rad
-    df$delta_doy_resid[has_both] <- df$delta_doy[has_both]
-  }
-
-  # Hopkins-adjusted flowering DOY & circular coordinates (sin_doy, cos_doy) standardized to empirical cohort median latitude
-  med_cohort_lat <- if (any(has_lat)) stats::median(df$decimalLatitude[has_lat], na.rm = TRUE) else NA_real_
-  ref_doy_base <- if (is.finite(med_cohort_lat) && is.function(baseline$predict_doy_rad)) {
-    wrap_doy_365(baseline$predict_doy_rad(data.frame(decimalLatitude = med_cohort_lat))[1L] * day_per_rad)
-  } else {
-    circ_mean_doy
-  }
-  if (!is.finite(ref_doy_base)) ref_doy_base <- circ_mean_doy
-  df$hopkins_adjusted_doy <- ifelse(
-    has_both & is.finite(ref_doy_base),
-    wrap_doy_365(ref_doy_base + df$delta_doy),
-    ifelse(valid_doy & df$is_verified_anthesis, df$doy, NA_real_)
-  )
-  valid_hdoy <- !is.na(df$hopkins_adjusted_doy) & is.finite(df$hopkins_adjusted_doy) & df$is_verified_anthesis
-  df$sin_doy <- ifelse(valid_hdoy, round(sin(2.0 * pi * df$hopkins_adjusted_doy / 365.25), 6), NA_real_)
-  df$cos_doy <- ifelse(valid_hdoy, round(cos(2.0 * pi * df$hopkins_adjusted_doy / 365.25), 6), NA_real_)
-
-  is_unif <- isTRUE(baseline$is_uniform_null)
-  df$pheno_timing_category <- "Unknown"
-  if (is_unif) {
-    df$pheno_timing_category[has_both] <- "Aseasonal_Uniform_Null"
-  } else {
-    df$pheno_timing_category[has_both & df$delta_doy < -7.0] <- "Early_Flowering"
-    df$pheno_timing_category[has_both & df$delta_doy > 7.0] <- "Late_Flowering"
-    df$pheno_timing_category[has_both & abs(df$delta_doy) <= 7.0] <- "Synchronous_with_Cline"
-  }
-  df$pheno_timing_category[!df$is_verified_anthesis] <- "Excluded_Non_Anthesis"
-
-  .pheno_write_csv <- function(x_df, path, demo_flag = FALSE) {
-    if (exists("write_csv_atomic", mode = "function")) {
-      return(write_csv_atomic(x_df, path, demo = demo_flag))
-    }
-    dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
-    utils::write.csv(x_df, file = path, row.names = FALSE)
-    TRUE
-  }
-
-  if (!is.null(output_csv) && nzchar(trimws(as.character(output_csv)))) {
-    keep_cols <- c("catalogNumber", "plant_individual_id", "institutionCode", "scientificName", "species_raw",
-                   "species_standardized", "decimalLatitude", "decimalLongitude",
-                   "eventDate", "year", "month", "day", "doy", "expected_doy", "hopkins_expected",
-                   "hopkins_adjusted_doy", "delta_doy", "delta_doy_resid",
-                   "pheno_timing_category", "is_pheno_uniform_null", "is_verified_anthesis", "is_active_anthesis",
-                   "phenological_state", "anthesis_filter_status", "voucher_phenological_state", "regional_group")
-    export_df <- df[, intersect(keep_cols, names(df)), drop = FALSE]
-    if (.pheno_write_csv(export_df, output_csv, demo_flag = demo)) {
-      message(sprintf("Exported %d voucher phenological anomalies to %s.", nrow(export_df), output_csv))
-    }
-  }
-
-  # Statistical divergence testing across target taxa strictly on active verified-anthesis reference cohort
-  active_tx <- if (exists("get_active_packera_taxa", mode = "function")) {
-    get_active_packera_taxa(df$species_standardized)
-  } else {
-    sort(unique(as.character(df$species_standardized[!is.na(df$species_standardized) & nzchar(df$species_standardized)])))
-  }
-  if (!("authority_weight" %in% names(df)) && exists("resolve_ecological_authority_weights", mode = "function")) {
-    df$authority_weight <- resolve_ecological_authority_weights(df)
-  }
-  if (!("spatial_balance_weight" %in% names(df)) && exists("compute_spatial_balance_weights", mode = "function")) {
-    df$spatial_balance_weight <- compute_spatial_balance_weights(df)
-  }
-  tf_mask <- df$species_standardized %in% active_tx & !is.na(df$delta_doy) & df$is_verified_anthesis
-  target_flowering <- if (sum(tf_mask & is_active_ref) >= 5L) {
-    df[tf_mask & is_active_ref, , drop = FALSE]
-  } else {
-    df[tf_mask, , drop = FALSE]
-  }
-
-  circ_grp_theta <- if (nrow(target_flowering) > 0L && "hopkins_adjusted_doy" %in% names(target_flowering) && any(is.finite(target_flowering$hopkins_adjusted_doy))) {
-    doy_to_rad(target_flowering$hopkins_adjusted_doy)
-  } else if (nrow(target_flowering) > 0L) {
-    wrap_rad(doy_to_rad(target_flowering$delta_doy))
-  } else {
-    numeric(0)
-  }
-  circ_phase_test <- run_circular_multigroup_phase_test(circ_grp_theta, target_flowering$species_standardized, B = 999L, seed = 42L)
-
-  summary_records <- list()
-  summary_records[[1]] <- data.frame(
-    Analysis_Section = "Baseline_Regression", Taxon_or_Comparison = "DOY ~ decimalLatitude (Verified Anthesis)",
-    Sample_Size = baseline$n, Mean_Delta_DOY = NA_real_, SD_Delta_DOY = NA_real_,
-    Median_Delta_DOY = NA_real_, IQR_Delta_DOY = NA_real_, CI_Lower_95 = NA_real_, CI_Upper_95 = NA_real_,
-    Statistic_Primary = round(baseline$slope, 3), Statistic_Secondary = round(baseline$intercept, 3), Effect_or_R2 = round(baseline$r_squared, 4),
-    P_Value = if (!is.na(baseline$p_value)) sprintf("%.4e", baseline$p_value) else "NA",
-    Interpretation = if (is_unif) {
-      sprintf("Uniform circular phase null retained (Rayleigh p=%.3e, R_bar=%.3f; selected %s)", baseline$rayleigh_p, baseline$r_bar, baseline$selected_model)
-    } else {
-      sprintf("Circular AICc selected [%s] slope = %+.2f d/deg N (Hopkins circular)", baseline$selected_model, baseline$slope)
-    },
-    stringsAsFactors = FALSE
-  )
-  circ_sum_rows <- summarize_weighted_circular_phenology(
-    target_flowering, active_tx, circ_phase_test,
-    is_unif = is_unif, B = 999L, seed = 42L
-  )
-  summary_report <- if (is.data.frame(circ_sum_rows) && nrow(circ_sum_rows) > 0L) {
-    rbind(summary_records[[1]], circ_sum_rows)
-  } else {
-    summary_records[[1]]
-  }
-  summary_report$Selected_Hopkins_Model <- as.character(baseline$selected_model)
-  summary_report$Hopkins_AICc_Weight <- if (!is.null(baseline$aicc_weight) && is.finite(baseline$aicc_weight)) round(as.numeric(baseline$aicc_weight), 6) else NA_real_
-  summary_report$Rayleigh_R_Bar <- if (!is.null(baseline$r_bar) && is.finite(baseline$r_bar)) round(as.numeric(baseline$r_bar), 6) else NA_real_
-  summary_report$Rayleigh_P <- if (!is.null(baseline$rayleigh_p) && is.finite(baseline$rayleigh_p)) as.numeric(baseline$rayleigh_p) else NA_real_
-  summary_report$Circ_Watson_F <- if (!is.null(circ_phase_test$watson_f) && is.finite(circ_phase_test$watson_f)) round(as.numeric(circ_phase_test$watson_f), 4) else NA_real_
-  summary_report$Circ_Perm_P <- if (!is.null(circ_phase_test$perm_p) && is.finite(circ_phase_test$perm_p)) as.numeric(circ_phase_test$perm_p) else NA_real_
-
-  if (!is.null(summary_csv) && nzchar(trimws(as.character(summary_csv)))) {
-    if (.pheno_write_csv(summary_report, summary_csv, demo_flag = demo)) {
-      message(sprintf("Exported circular phenological anomaly summary to %s.", summary_csv))
-    }
-    if (!is.null(baseline$model_selection_table) && is.data.frame(baseline$model_selection_table) && nrow(baseline$model_selection_table) > 0L) {
-      sel_tbl_csv <- file.path(dirname(summary_csv), "hopkins_circular_model_selection.csv")
-      if (.pheno_write_csv(baseline$model_selection_table, sel_tbl_csv, demo_flag = demo)) {
-        message(sprintf("Exported Hopkins circular AICc model selection table to %s.", sel_tbl_csv))
-      }
-    }
-  }
-  return(list(df = df, baseline = baseline, anova = NULL, tukey = NULL, circular_phase_test = circ_phase_test, summary = summary_report))
-}
-
-export_phenological_latitudinal_figures <- function(df, baseline, out_path) {
-  if (!exists("render_step05b_hopkins_phenology_png", mode = "function")) {
-    for (.f in c("scripts/figures/theme_packera_pub.R", "scripts/figures/step05_figures.R")) {
-      if (file.exists(.f)) source(.f)
-    }
-  }
-  out_png <- if (!is.null(out_path) && nzchar(out_path)) normalize_png_path(out_path) else "outputs/figures/fig05b_hopkins_circular_phenology.png"
-  message(sprintf("Generating 300-DPI circular & Hopkins bioclimatic phenology figure -> %s", out_png))
-  render_step05b_hopkins_phenology_png(
-    df = df,
-    baseline_info = baseline,
-    out_pheno_path = out_png
-  )
-}
-
-
-# ------------------------------------------------------------------------------
-# 3. Cross-Modal Consensus & Conflict Auditing Engine
-# ------------------------------------------------------------------------------
-compute_isolation_by_environment <- function(df, edaph_vars = character(0), clim_vars = character(0), mem_mat = NULL, n_perm = 99L) {
-  # Non-circular Isolation-by-Environment (IBE; Wang & Bradburd 2014) variance decomposition
-  # testing continuous Morphological + Phenological divergence as a function of
-  # [A] Edaphics and [B] Macro-Climate conditioned on [C] Spatial MEMs.
+.step05_anchor_flags <- function(df, min_edaph_n = 6L) {
   n <- nrow(df)
-  empty_ibe <- data.frame(
-    Modality = character(0), N_Specimens = integer(0),
-    Pure_Edaphic_AdjR2 = numeric(0), Pure_Climate_AdjR2 = numeric(0),
-    Pure_Space_MEM_AdjR2 = numeric(0), Total_Explained_AdjR2 = numeric(0),
-    Partial_RDA_F = numeric(0), Partial_RDA_p = numeric(0),
-    IBE_Inference = character(0), stringsAsFactors = FALSE
-  )
-  if (is.null(df) || n < 8L) return(empty_ibe)
+  geo_el <- if (exists("is_fine_edaphic_type_or_anchor_eligible", mode = "function")) tryCatch(is_fine_edaphic_type_or_anchor_eligible(df, max_edaphic_unc_m = 10000.0, max_clim_unc_m = 50000.0), error = function(e) NULL) else NULL
+  elig <- if ("is_training_eligible_coord" %in% names(df)) { e <- as.logical(df$is_training_eligible_coord); e[is.na(e)] <- TRUE; e } else rep(TRUE, n)
+  for (uc in intersect(c("coordinateUncertaintyInMeters", "coordinateUncertainty"), names(df))) { u <- suppressWarnings(as.numeric(df[[uc]])); elig <- elig & (is.na(u) | u <= 10000.0) }
+  if (!is.null(geo_el) && !is.null(geo_el$edaphic_ok) && length(geo_el$edaphic_ok) == n && sum(as.logical(geo_el$edaphic_ok), na.rm = TRUE) >= min_edaph_n) elig <- elig & !is.na(geo_el$edaphic_ok) & as.logical(geo_el$edaphic_ok)
 
-  ed_cols <- intersect(as.character(edaph_vars), names(df))
-  cl_cols <- intersect(setdiff(as.character(clim_vars), "delta_doy"), names(df))
-  clean_block <- function(cols) {
-    if (length(cols) == 0L) return(NULL)
-    M <- matrix(0.0, nrow = n, ncol = length(cols), dimnames = list(NULL, cols))
-    keep <- logical(length(cols))
-    for (j in seq_along(cols)) {
-      v <- suppressWarnings(as.numeric(df[[cols[j]]]))
-      fin <- is.finite(v)
-      if (sum(fin) >= 5L && stats::sd(v[fin]) > 1e-8) {
-        v[!fin] <- stats::median(v[fin], na.rm = TRUE)
-        M[, j] <- as.numeric(scale(v))
-        keep[j] <- TRUE
-      }
-    }
-    if (!any(keep)) return(NULL)
-    M[, keep, drop = FALSE]
-  }
-
-  X_ed <- clean_block(ed_cols)
-  X_cl <- clean_block(cl_cols)
-  if (is.null(X_ed) && is.null(X_cl)) return(empty_ibe)
-
-  if (is.null(mem_mat) || nrow(as.matrix(mem_mat)) != n) {
-    if (all(c("longitude", "latitude") %in% names(df))) {
-      lon <- suppressWarnings(as.numeric(df$longitude)); lat <- suppressWarnings(as.numeric(df$latitude))
-      lon[!is.finite(lon)] <- stats::median(lon, na.rm = TRUE)
-      lat[!is.finite(lat)] <- stats::median(lat, na.rm = TRUE)
-      mem_mat <- scale(cbind(MEM_Lon = lon, MEM_Lat = lat))
-    } else {
-      mem_mat <- matrix(0.0, nrow = n, ncol = 1L, dimnames = list(NULL, "MEM1"))
-    }
-  } else {
-    mem_mat <- scale(as.matrix(mem_mat))
-    mem_mat[!is.finite(mem_mat)] <- 0.0
-  }
-
-  eval_response_block <- function(Y_raw, mod_name) {
-    if (is.null(Y_raw) || ncol(Y_raw) == 0L) return(NULL)
-    Y <- scale(as.matrix(Y_raw))
-    Y[!is.finite(Y)] <- 0.0
-    X_env <- cbind(X_ed, X_cl)
-
-    adj_r2_ols <- function(X_mat) {
-      if (is.null(X_mat) || ncol(X_mat) == 0L) return(0.0)
-      X_d <- cbind(1.0, X_mat)
-      qr_x <- qr(X_d)
-      p_k <- qr_x$rank - 1L
-      if (p_k < 1L || (n - qr_x$rank) < 2L) return(0.0)
-      rss <- sum(qr.resid(qr_x, Y)^2)
-      tss <- sum(sweep(Y, 2L, colMeans(Y), "-")^2)
-      if (tss <= 1e-10) return(0.0)
-      r2 <- max(0.0, 1.0 - rss / tss)
-      1.0 - (1.0 - r2) * ((n - 1.0) / max(1.0, n - p_k - 1.0))
-    }
-
-    r2_all <- adj_r2_ols(cbind(X_ed, X_cl, mem_mat))
-    r2_no_ed <- adj_r2_ols(cbind(X_cl, mem_mat))
-    r2_no_cl <- adj_r2_ols(cbind(X_ed, mem_mat))
-    r2_no_sp <- adj_r2_ols(cbind(X_ed, X_cl))
-
-    pure_ed <- max(0.0, r2_all - r2_no_ed)
-    pure_cl <- max(0.0, r2_all - r2_no_cl)
-    pure_sp <- max(0.0, r2_all - r2_no_sp)
-
-    nw_ibe <- if (exists("resolve_packera_workers", mode = "function")) resolve_packera_workers(64L) else 1L
-    f_obs <- NA_real_; p_perm <- NA_real_
-    if (requireNamespace("vegan", quietly = TRUE) && ncol(X_env) >= 1L && (n - ncol(X_env) - ncol(mem_mat)) >= 4L) {
-      rda_res <- tryCatch({
-        fit_r <- vegan::rda(Y ~ X_env + Condition(mem_mat))
-        an_r <- suppressMessages(suppressWarnings(vegan::anova.cca(fit_r, permutations = as.integer(max(19L, n_perm)), parallel = nw_ibe)))
-        list(F_val = as.numeric(an_r$F[1L]), p_val = as.numeric(an_r$`Pr(>F)`[1L]))
-      }, error = function(e) NULL)
-      if (!is.null(rda_res)) {
-        f_obs <- rda_res$F_val; p_perm <- rda_res$p_val
-      }
-    }
-    if (!is.finite(p_perm)) {
-      X0 <- cbind(1.0, mem_mat)
-      X1 <- cbind(1.0, mem_mat, X_env)
-      q0 <- qr(X0); q1 <- qr(X1)
-      rss0 <- sum(qr.resid(q0, Y)^2); rss1 <- sum(qr.resid(q1, Y)^2)
-      df1 <- max(1L, q1$rank - q0$rank); df2 <- max(1L, n - q1$rank)
-      f_obs <- ((rss0 - rss1) / df1) / max(rss1 / df2, 1e-8)
-      Y_res0 <- qr.resid(q0, Y)
-      perms_ibe <- replicate(n_perm, sample.int(n), simplify = FALSE)
-      eval_ibe_perm <- function(b) {
-        Yp <- Y_res0[perms_ibe[[b]], , drop = FALSE]
-        rss0_b <- sum(qr.resid(q0, Yp)^2)
-        rss1_b <- sum(qr.resid(q1, Yp)^2)
-        ((rss0_b - rss1_b) / df1) / max(rss1_b / df2, 1e-8)
-      }
-      f_null <- if (n_perm >= 99L && nw_ibe > 1L && exists("packera_mclapply", mode = "function")) {
-        unlist(packera_mclapply(seq_len(n_perm), eval_ibe_perm, mc.cores = min(nw_ibe, n_perm)), use.names = FALSE)
-      } else {
-        vapply(seq_len(n_perm), eval_ibe_perm, numeric(1))
-      }
-      p_perm <- (sum(f_null >= f_obs) + 1.0) / (n_perm + 1.0)
-    }
-
-    pure_env <- pure_ed + pure_cl
-    inf_lbl <- if (is.finite(p_perm) && p_perm < 0.01 && pure_env >= 0.05) {
-      "Significant Isolation by Environment (Adaptive Divergence Candidate)"
-    } else if (is.finite(p_perm) && p_perm < 0.05) {
-      "Weak Environmental Cline (Plasticity / Gradual Ecotone)"
-    } else {
-      "Null IBE (Panmictic / Facultative Niche Breadth)"
-    }
-
-    data.frame(
-      Modality = mod_name,
-      N_Specimens = as.integer(n),
-      Pure_Edaphic_AdjR2 = round(pure_ed, 4),
-      Pure_Climate_AdjR2 = round(pure_cl, 4),
-      Pure_Space_MEM_AdjR2 = round(pure_sp, 4),
-      Total_Explained_AdjR2 = round(max(0.0, r2_all), 4),
-      Partial_RDA_F = round(f_obs, 4),
-      Partial_RDA_p = round(p_perm, 4),
-      IBE_Inference = inf_lbl,
-      stringsAsFactors = FALSE
-    )
-  }
-
-  rows_out <- list()
-  morph_cols <- unique(c(
-    grep("^(PC|ECT_PC)[1-4]$", names(df), value = TRUE),
-    intersect(c("aspect_ratio", "petiole_to_blade_ratio", "solidity", "dissection_index"), names(df))
-  ))
-  Y_morph <- clean_block(morph_cols)
-  if (!is.null(Y_morph)) rows_out[[length(rows_out) + 1L]] <- eval_response_block(Y_morph, "Foliar_Morphology_IBE")
-
-  Y_pheno <- clean_block(intersect("delta_doy", names(df)))
-  if (!is.null(Y_pheno)) rows_out[[length(rows_out) + 1L]] <- eval_response_block(Y_pheno, "Anthesis_Phenology_IBE")
-
-  if (length(rows_out) == 0L) return(empty_ibe)
-  do.call(rbind, rows_out)
+  det_t <- if ("determiner_tier" %in% names(df)) ifelse(is.na(df$determiner_tier) | !nzchar(trimws(as.character(df$determiner_tier))), "Tier_3_Bronze", as.character(df$determiner_tier)) else rep("Tier_1_Gold", n)
+  is_t <- if ("is_type_specimen" %in% names(df)) .to_bool_s05(df$is_type_specimen) else rep(FALSE, n)
+  is_prom <- if ("is_promoted_bronze" %in% names(df)) .to_bool_s05(df$is_promoted_bronze) else rep(FALSE, n)
+  cl_noise <- if ("is_confident_label_noise" %in% names(df)) .to_bool_s05(df$is_confident_label_noise) else rep(FALSE, n)
+  quar <- if ("is_centroid_or_inst_coord" %in% names(df)) .to_bool_s05(df$is_centroid_or_inst_coord) else rep(FALSE, n)
+  if (exists("detect_r_centroid_or_inst_quarantine", mode = "function")) { qd <- as.logical(detect_r_centroid_or_inst_quarantine(df, is_type_vec = rep(FALSE, n))$is_quarantined); qd[is.na(qd)] <- FALSE; quar <- quar | qd }
+  if (!is.null(geo_el) && !is.null(geo_el$is_quarantined_type) && length(geo_el$is_quarantined_type) == n) quar <- quar | (!is.na(geo_el$is_quarantined_type) & as.logical(geo_el$is_quarantined_type))
+  open_h <- if (!is.null(geo_el) && !is.null(geo_el$is_open_hyb) && length(geo_el$is_open_hyb) == n) (!is.na(geo_el$is_open_hyb) & as.logical(geo_el$is_open_hyb))
+    else if (exists(".identify_open_or_hybrid_concept_mask", mode = "function")) { m <- as.logical(.identify_open_or_hybrid_concept_mask(df)); m[is.na(m)] <- FALSE; m }
+    else if ("is_open_or_hybrid_concept" %in% names(df)) .to_bool_s05(df$is_open_or_hybrid_concept) else rep(FALSE, n)
+  list(elig = elig, det_t = det_t, is_t = is_t, is_prom = is_prom, cl_noise = cl_noise, quar = quar, open_h = open_h)
 }
 
-resolve_analysis_group <- function(
-  df,
-  intraspecific_mode = FALSE,
-  primary_env_vars = NULL,
-  rf_var_weights = NULL,
-  allow_unimodal_null = NULL
-) {
-  # Strictly Independent Ecological Regime Discovery (K = 1..4):
-  # Resolves intraspecific ecological niche regimes purely from extrinsic environmental
-  # predictors across balanced Lithic/Outcrop, Soil Chemistry/Texture/AWS, Microtopography,
-  # and Hydrothermal/Maritime Climate domains. Never reads or couples to Step 04 morphometrics
-  # (gmm_cluster, PC*, can*, or cda_predicted_taxon), and never penalizes
-  # parapatric Fall Line / outcrop edaphic transitions.
-  if (exists("compute_derived_habitat_predictors", mode = "function")) {
-    df <- compute_derived_habitat_predictors(df)
-  }
+resolve_analysis_group <- function(df, intraspecific_mode = FALSE, primary_env_vars = NULL, rf_var_weights = NULL, allow_unimodal_null = NULL) {
+  if (exists("compute_derived_habitat_predictors", mode = "function")) df <- compute_derived_habitat_predictors(df)
   is_intra <- isTRUE(intraspecific_mode) || (length(unique(stats::na.omit(df$species_standardized))) < 2L)
-  df$is_missing_gmm_cluster <- rep(FALSE, nrow(df))
-  if (!is_intra) {
-    df$analysis_group <- as.character(df$species_standardized)
-    df$ecotype_regime <- as.character(df$species_standardized)
-    attr(df, "is_post_selection_ecotype") <- FALSE
-    return(df)
+  n_rows <- nrow(df); df$is_missing_gmm_cluster <- rep(FALSE, n_rows)
+  if (!is_intra || n_rows == 0L) {
+    df$analysis_group <- if (n_rows == 0L) character(0) else as.character(df$species_standardized)
+    df$ecotype_regime <- df$analysis_group; attr(df, "is_post_selection_ecotype") <- FALSE; return(df)
   }
-
-  n_rows <- nrow(df)
-  if (n_rows == 0L) {
-    df$analysis_group <- character(0)
-    df$ecotype_regime <- character(0)
-    attr(df, "is_post_selection_ecotype") <- FALSE
-    return(df)
-  }
-
   base_taxon <- as.character(stats::na.omit(df$species_standardized))
   base_taxon <- if (length(base_taxon) > 0L && nzchar(trimws(base_taxon[1L]))) trimws(base_taxon[1L]) else "Intraspecific_Lineage"
   allow_k1 <- if (is.null(allow_unimodal_null)) TRUE else isTRUE(allow_unimodal_null)
+  ret_k1 <- function(msg = FALSE) {
+    if (isTRUE(msg)) message(sprintf("[Independent Step 05 ENM] Retaining K=1 unimodal ecological envelope for '%s'.", base_taxon))
+    df$analysis_group <- rep(base_taxon, n_rows); df$ecotype_regime <- df$analysis_group
+    attr(df, "is_post_selection_ecotype") <- FALSE; df
+  }
 
   exclude_cols <- c(
-    "catalogNumber", "plant_individual_id", "latitude", "longitude",
-    "decimalLatitude", "decimalLongitude", "coordinateUncertaintyInMeters",
-    "coordinateUncertainty", "buffer_radius_m", "year", "month", "day", "doy",
-    "hopkins_adjusted_doy", "hopkins_expected_doy", "delta_doy", "delta_doy_resid",
-    "pheno_theta", "authority_weight", "edaphic_coord_weight", "spatial_balance_weight",
-    "Combined_Prior_Weight", "case_wts", "gmm_cluster", "gmm_uncertainty",
-    "mahalanobis_d2", "mahalanobis_pval", "cda_posterior_prob", "cda_posterior_margin",
-    "loocv_accuracy", "spatial_block_cv_acc", "spatial_autocorr_range_km",
-    "rf_predicted_prob", "rf_given_taxon_prob", "multimodal_concordance",
-    "edaphic_z_score", "climatic_z_score", "type_edaphic_z_score", "type_morph_mahal_d2",
-    "self_morph_mahal_d2", "min_congener_mahal_d2", "open_set_novelty_p",
-    "n_observed_modalities", "total_capitula", "n_anthesis", "n_fruiting",
-    "n_bud", "n_senescent", "reproductive_stage_confidence", "dominant_pappus_ratio",
+    "catalogNumber", "plant_individual_id", "latitude", "longitude", "decimalLatitude", "decimalLongitude",
+    "coordinateUncertaintyInMeters", "coordinateUncertainty", "buffer_radius_m", "year", "month", "day", "doy",
+    "hopkins_adjusted_doy", "hopkins_expected_doy", "hopkins_adjusted_doy_resid", "delta_doy", "delta_doy_resid",
+    "pheno_theta", "anthesis_dominance_weight", "allochronic_bimodality_delta_bic", "authority_weight",
+    "edaphic_coord_weight", "spatial_balance_weight", "Combined_Prior_Weight", "case_wts", "gmm_cluster",
+    "gmm_uncertainty", "mahalanobis_d2", "mahalanobis_pval", "cda_posterior_prob", "cda_posterior_margin",
+    "loocv_accuracy", "spatial_block_cv_acc", "spatial_autocorr_range_km", "rf_predicted_prob",
+    "rf_given_taxon_prob", "multimodal_concordance", "edaphic_z_score", "climatic_z_score",
+    "type_edaphic_z_score", "type_morph_mahal_d2", "self_morph_mahal_d2", "min_congener_mahal_d2",
+    "open_set_novelty_p", "n_observed_modalities", "total_capitula", "n_anthesis", "n_fruiting", "n_bud",
+    "n_senescent", "reproductive_stage_confidence", "dominant_pappus_ratio", "radiate_head_fraction",
     "pixels_per_mm", "duplicate_count", "is_rock_outcrop", "is_azonal_lithology",
-    "azonal_lithology_presence_buffer",
+    "azonal_lithology_presence_buffer", "ssurgo_rock_outcrop_pct", "ssurgo_aws_0_50cm",
+    "min_bedrock_depth_buffer_cm", "ph_q10_buffer", "ph_q90_buffer", "max_cfvo_buffer_pct",
     "soil_ca_mg_molar_ratio", "soil_ultramafic_ni_cr_index", "soil_carbonate_c_pct",
-    "ultramafic_calcareous_gradient",
-    "polaris_ph_30m", "polaris_sand_30m", "polaris_clay_30m",
+    "ultramafic_calcareous_gradient", "polaris_ph_30m", "polaris_sand_30m", "polaris_clay_30m",
     "polaris_om_30m", "polaris_bd_30m", "polaris_ksat_30m",
-    "is_nwi_wetland", "nwi_wetland_system", "nwi_wetland_dist_m",
-    "nwpl_indicator_code", "nwpl_wetland_score"
+    "is_nwi_wetland", "nwi_wetland_system", "nwi_wetland_dist_m", "nwpl_indicator_code", "nwpl_wetland_score"
   )
 
-  # Coalesce partial-coverage buffered edaphic NAs onto a working copy (leaving raw df unchanged)
-  # so incomplete buffer coverage never collapses into constant median Dirac spikes
   df_rag <- df
-  if (exists("mask_micro_scale_predictors_by_uncertainty", mode = "function")) {
-    df_rag <- mask_micro_scale_predictors_by_uncertainty(df_rag, max_uncertainty_m = 250.0)
-  }
-  if (exists("sanitize_disabled_polaris_columns", mode = "function")) {
-    df_rag <- sanitize_disabled_polaris_columns(df_rag)
-  }
-  .fill_nonfinite_col <- function(dframe, target_col, fallback_cols) {
-    if (!(target_col %in% names(dframe))) return(dframe)
-    cur <- suppressWarnings(as.numeric(dframe[[target_col]]))
-    for (fc in fallback_cols) {
-      if (fc %in% names(dframe)) {
-        fb <- suppressWarnings(as.numeric(dframe[[fc]]))
-        miss <- !is.finite(cur) & is.finite(fb)
-        if (any(miss)) cur[miss] <- fb[miss]
-      }
-    }
-    dframe[[target_col]] <- cur
-    dframe
-  }
-  df_rag <- .fill_nonfinite_col(df_rag, "min_bedrock_depth_buffer_cm", c("fine_bedrock_depth_cm", "solus_resdept_cm"))
-  df_rag <- .fill_nonfinite_col(df_rag, "ph_q10_buffer", c("fine_soil_ph"))
-  df_rag <- .fill_nonfinite_col(df_rag, "max_cfvo_buffer_pct", c("solus_fragvol_pct", "fine_cfvo_pct"))
-  if (("lithic_outcrop_index" %in% names(df_rag)) && exists("compute_derived_habitat_predictors", mode = "function")) {
-    df_lith <- compute_derived_habitat_predictors(df_rag)
-    if ("lithic_outcrop_index" %in% names(df_lith)) {
-      li_cur <- suppressWarnings(as.numeric(df_rag$lithic_outcrop_index))
-      li_fb <- suppressWarnings(as.numeric(df_lith$lithic_outcrop_index))
-      miss_li <- !is.finite(li_cur) & is.finite(li_fb)
-      if (any(miss_li)) df_rag$lithic_outcrop_index[miss_li] <- li_fb[miss_li]
-    }
-  }
+  if (exists("mask_micro_scale_predictors_by_uncertainty", mode = "function")) df_rag <- mask_micro_scale_predictors_by_uncertainty(df_rag, max_uncertainty_m = 250.0)
+  if (exists("sanitize_disabled_polaris_columns", mode = "function")) df_rag <- sanitize_disabled_polaris_columns(df_rag)
 
-  elig_c <- if ("is_training_eligible_coord" %in% names(df_rag)) as.logical(df_rag$is_training_eligible_coord) else rep(TRUE, n_rows)
-  elig_c[is.na(elig_c)] <- TRUE
-  if ("coordinateUncertaintyInMeters" %in% names(df_rag)) {
-    u_m <- suppressWarnings(as.numeric(df_rag$coordinateUncertaintyInMeters))
-    elig_c <- elig_c & (is.na(u_m) | u_m <= 10000.0)
-  }
-  det_t <- if ("determiner_tier" %in% names(df_rag)) as.character(df_rag$determiner_tier) else rep("Tier_1_Gold", n_rows)
-  det_t[is.na(det_t) | !nzchar(trimws(det_t))] <- "Tier_3_Bronze"
-  is_t_sp <- if ("is_type_specimen" %in% names(df_rag)) as.logical(df_rag$is_type_specimen) else rep(FALSE, n_rows)
-  is_t_sp[is.na(is_t_sp)] <- FALSE
-  quar_rag <- if (exists("detect_r_centroid_or_inst_quarantine", mode = "function")) {
-    as.logical(detect_r_centroid_or_inst_quarantine(df_rag, is_type_vec = is_t_sp)$is_quarantined)
-  } else if ("is_centroid_or_inst_coord" %in% names(df_rag)) {
-    qv <- as.logical(df_rag$is_centroid_or_inst_coord)
-    !is.na(qv) & qv & !is_t_sp
-  } else {
-    rep(FALSE, n_rows)
-  }
-  quar_rag[is.na(quar_rag)] <- FALSE
-  quar_rag <- quar_rag & !is_t_sp
-  cl_rag <- if ("is_confident_label_noise" %in% names(df_rag)) as.logical(df_rag$is_confident_label_noise) else rep(FALSE, n_rows)
-  cl_rag[is.na(cl_rag)] <- FALSE
-  cl_rag_non_type <- cl_rag & !is_t_sp
-  rag_grp_v <- if ("species_standardized" %in% names(df_rag)) {
-    ifelse(!is.na(df_rag$species_standardized) & nzchar(trimws(as.character(df_rag$species_standardized))), as.character(df_rag$species_standardized), base_taxon)
-  } else {
-    rep(base_taxon, n_rows)
-  }
-  ext_rag_mask <- .is_step05_extralimital_non_type(df_rag, group_vec = rag_grp_v, clean_base_mask = elig_c, is_type_vec = is_t_sp)
-  anc_mask <- elig_c & (grepl("Tier_0|Tier_1|Gold|Tier_2|Silver", det_t, ignore.case = TRUE) | is_t_sp) & !quar_rag & !cl_rag_non_type & !ext_rag_mask
-  if (sum(anc_mask) < 8L) anc_mask <- elig_c & !quar_rag & !cl_rag_non_type
-  if (sum(anc_mask) < 8L) anc_mask <- elig_c
+  fl <- .step05_anchor_flags(df_rag, min_edaph_n = 6L)
+  cl_nt <- fl$cl_noise & !fl$is_t
+  rag_grp_v <- if ("species_standardized" %in% names(df_rag)) ifelse(!is.na(df_rag$species_standardized) & nzchar(trimws(as.character(df_rag$species_standardized))), as.character(df_rag$species_standardized), base_taxon) else rep(base_taxon, n_rows)
+  ext_m <- .is_step05_extralimital_non_type(df_rag, group_vec = rag_grp_v, clean_base_mask = fl$elig, is_type_vec = fl$is_t)
+  anc_mask <- fl$elig & (grepl("Tier_0|Tier_1|Gold|Tier_2|Silver", fl$det_t, ignore.case = TRUE) | fl$is_t) & !fl$quar & !fl$open_h & !cl_nt & !ext_m
+  if (sum(anc_mask) < 8L) anc_mask <- fl$elig & !fl$quar & !fl$open_h & !cl_nt
+  if (sum(anc_mask) < 8L) anc_mask <- fl$elig & !fl$quar & !fl$open_h
   if (sum(anc_mask) < 6L) anc_mask <- rep(TRUE, n_rows)
   anc_idx <- which(anc_mask)
 
-  cand_env <- if (!is.null(primary_env_vars) && length(primary_env_vars) > 0L) {
-    setdiff(intersect(as.character(primary_env_vars), names(df_rag)), exclude_cols)
-  } else if (exists("discover_candidate_eco_predictors", mode = "function")) {
-    setdiff(discover_candidate_eco_predictors(df_rag, include_pheno = FALSE, min_finite = 3L), exclude_cols)
-  } else {
-    character(0)
-  }
-
-  for (buf_c in c("min_bedrock_depth_buffer_cm", "ph_q10_buffer", "max_cfvo_buffer_pct")) {
-    if ((buf_c %in% names(df_rag)) && !(buf_c %in% cand_env)) {
-      vb <- suppressWarnings(as.numeric(df_rag[[buf_c]]))
-      if (sum(is.finite(vb)) >= max(4L, ceiling(0.50 * n_rows)) && is.finite(stats::sd(vb, na.rm = TRUE)) && stats::sd(vb, na.rm = TRUE) > 1e-8) {
-        cand_env <- c(cand_env, buf_c)
-      }
-    }
-  }
-
+  cand_env <- if (!is.null(primary_env_vars) && length(primary_env_vars) > 0L) setdiff(intersect(as.character(primary_env_vars), names(df_rag)), exclude_cols)
+    else if (exists("discover_candidate_eco_predictors", mode = "function")) setdiff(discover_candidate_eco_predictors(df_rag, include_pheno = FALSE, min_finite = 3L), exclude_cols)
+    else character(0)
   if (length(cand_env) == 0L) {
-    num_cands <- names(df_rag)[vapply(names(df_rag), function(nm) {
-      if (nm %in% exclude_cols || grepl("^polaris_", nm, ignore.case = TRUE)) return(FALSE)
-      if (grepl("^(PC[0-9]+|ECT_|Cauline_|can[0-9]+|sym_|asym_|MEM[0-9]+|basal_|petiole_|blade_|plant_height|involucre_|capitula_)", nm)) return(FALSE)
+    cand_env <- names(df_rag)[vapply(names(df_rag), function(nm) {
+      if (nm %in% exclude_cols || grepl("^polaris_", nm, ignore.case = TRUE) ||
+          grepl("^(PC[0-9]+|ECT_|Cauline_|can[0-9]+|sym_|asym_|MEM[0-9]+|basal_|petiole_|blade_|plant_height|involucre_|capitula_)", nm)) return(FALSE)
       is.numeric(df_rag[[nm]]) || is.integer(df_rag[[nm]])
     }, logical(1))]
-    cand_env <- num_cands
   }
-
   cand_env <- cand_env[vapply(cand_env, function(cl) {
-    v <- suppressWarnings(as.numeric(df_rag[[cl]]))
-    fin <- is.finite(v)
-    va <- v[anc_idx]
-    fin_a <- is.finite(va)
-    sum(fin) >= max(3L, ceiling(0.40 * n_rows)) &&
-      sum(fin_a) >= max(4L, ceiling(0.75 * length(anc_idx))) &&
-      is.finite(stats::sd(v[fin])) && stats::sd(v[fin]) > 1e-8 &&
-      is.finite(stats::sd(va[fin_a])) && stats::sd(va[fin_a]) > 1e-8
+    v <- suppressWarnings(as.numeric(df_rag[[cl]])); fin <- is.finite(v); va <- v[anc_idx]; fa <- is.finite(va)
+    sum(fin) >= max(3L, ceiling(0.40 * n_rows)) && sum(fa) >= max(4L, ceiling(0.75 * length(anc_idx))) &&
+      is.finite(stats::sd(v[fin])) && stats::sd(v[fin]) > 1e-8 && is.finite(stats::sd(va[fa])) && stats::sd(va[fa]) > 1e-8
   }, logical(1))]
-
-  if (length(cand_env) == 0L || n_rows < 6L) {
-    df$analysis_group <- rep(base_taxon, n_rows)
-    df$ecotype_regime <- df$analysis_group
-    attr(df, "is_post_selection_ecotype") <- FALSE
-    return(df)
-  }
+  if (length(cand_env) == 0L || n_rows < 6L) return(ret_k1())
 
   E_raw <- matrix(0.0, nrow = n_rows, ncol = length(cand_env), dimnames = list(NULL, cand_env))
-  mu_v <- numeric(length(cand_env))
-  sd_v <- numeric(length(cand_env))
   for (j in seq_along(cand_env)) {
-    cl <- cand_env[j]
-    vj <- suppressWarnings(as.numeric(df_rag[[cl]]))
-    va <- vj[anc_idx]
-    med_j <- stats::median(va[is.finite(va)], na.rm = TRUE)
-    if (!is.finite(med_j)) med_j <- stats::median(vj[is.finite(vj)], na.rm = TRUE)
-    if (!is.finite(med_j)) med_j <- 0.0
-    vj[!is.finite(vj)] <- med_j
-    E_raw[, j] <- vj
-    mu_v[j] <- mean(vj[anc_idx])
-    sd_v[j] <- max(stats::sd(vj[anc_idx]), 1e-6)
+    vj <- suppressWarnings(as.numeric(df_rag[[cand_env[j]]])); va <- vj[anc_idx]
+    mj <- stats::median(va[is.finite(va)], na.rm = TRUE)
+    if (!is.finite(mj)) mj <- stats::median(vj[is.finite(vj)], na.rm = TRUE)
+    if (!is.finite(mj)) mj <- 0.0
+    vj[!is.finite(vj)] <- mj; E_raw[, j] <- vj
   }
-  Z_full <- sweep(sweep(E_raw, 2L, mu_v, "-"), 2L, sd_v, "/")
-  Z_full[!is.finite(Z_full)] <- 0.0
+
+  pm_keep <- NULL
+  if (exists("screen_edaphic_point_mass_columns", mode = "function")) {
+    pm_res <- tryCatch(screen_edaphic_point_mass_columns(E_raw, ref_mask = anc_mask, max_tie_frac = 0.25), error = function(e) NULL)
+    if (is.character(pm_res)) pm_keep <- intersect(pm_res, cand_env)
+    else if (is.logical(pm_res) && length(pm_res) == length(cand_env)) pm_keep <- cand_env[!is.na(pm_res) & pm_res]
+    else if (is.numeric(pm_res) && length(pm_res) > 0L) pm_keep <- cand_env[pm_res[pm_res >= 1L & pm_res <= length(cand_env)]]
+    else if (is.matrix(pm_res) || is.data.frame(pm_res)) pm_keep <- intersect(colnames(pm_res), cand_env)
+    else if (is.list(pm_res)) for (kn in c("kept_cols", "kept_vars", "keep_cols", "kept", "selected_cols", "selected_variables", "cols")) {
+      if (!is.null(pm_res[[kn]]) && is.character(pm_res[[kn]])) { pm_keep <- intersect(pm_res[[kn]], cand_env); break }
+    }
+  }
+  if (is.null(pm_keep)) {
+    tie_ok <- vapply(seq_along(cand_env), function(jj) {
+      va <- round(E_raw[anc_idx, jj], 5); va <- va[is.finite(va)]
+      length(va) >= 4L && ((max(tabulate(match(va, unique(va)))) / length(va)) <= 0.25)
+    }, logical(1))
+    pm_keep <- cand_env[tie_ok]
+  }
+  if (length(pm_keep) == 0L) return(ret_k1())
+  cand_env <- pm_keep; E_raw <- E_raw[, cand_env, drop = FALSE]
+  mu_v <- colMeans(E_raw[anc_idx, , drop = FALSE])
+  sd_v <- pmax(apply(E_raw[anc_idx, , drop = FALSE], 2L, stats::sd), 1e-6)
+  Z_full <- sweep(sweep(E_raw, 2L, mu_v, "-"), 2L, sd_v, "/"); Z_full[!is.finite(Z_full)] <- 0.0
 
   assign_eco_domain <- function(vn) {
     vl <- tolower(vn)
@@ -1067,50 +172,29 @@ resolve_analysis_group <- function(
     "Hydrothermal_Maritime_Climate"
   }
   dom_full <- vapply(cand_env, assign_eco_domain, character(1))
-
-  # Deduplicate within-domain collinear predictors (|r| > 0.75) before PCA/k-means
-  # so redundant lithic/climatic rasters do not inflate single-axis microsite splits
-  prio_mech_vars <- c(
-    "lithic_outcrop_index", "wetland_seepage_index",
-    "min_bedrock_depth_buffer_cm", "ssurgo_rock_outcrop_pct",
-    "fine_bedrock_depth_cm", "fine_soil_ph", "ilr_texture_1",
-    "summer_moisture_deficit_idx", "maritime_continentality_idx",
-    "topo_slope_deg", "topo_twi_30m", "bio4_temp_seasonality", "bio15_precip_seasonality"
-  )
+  prio_mech <- c("lithic_outcrop_index", "wetland_seepage_index", "fine_bedrock_depth_cm", "fine_soil_ph", "ilr_texture_1",
+                 "summer_moisture_deficit_idx", "maritime_continentality_idx", "topo_slope_deg", "topo_twi_30m", "bio4_temp_seasonality", "bio15_precip_seasonality")
   keep_idx <- integer(0)
   for (dm in sort(unique(dom_full))) {
-    dm_idx <- which(dom_full == dm)
-    if (length(dm_idx) <= 1L) {
-      keep_idx <- c(keep_idx, dm_idx)
-    } else {
-      is_prio_dm <- cand_env[dm_idx] %in% prio_mech_vars
-      spread_sc <- vapply(dm_idx, function(jj) {
-        zj <- Z_full[anc_idx, jj]
-        iqr_v <- as.numeric(stats::quantile(zj, 0.75, na.rm = TRUE, names = FALSE) - stats::quantile(zj, 0.25, na.rm = TRUE, names = FALSE))
-        q90_10_v <- as.numeric(stats::quantile(zj, 0.90, na.rm = TRUE, names = FALSE) - stats::quantile(zj, 0.10, na.rm = TRUE, names = FALSE))
-        0.5 * iqr_v + 0.5 * q90_10_v
+    dm_idx <- which(dom_full == dm); if (length(dm_idx) <= 1L) { keep_idx <- c(keep_idx, dm_idx); next }
+    sp_sc <- vapply(dm_idx, function(jj) {
+      q <- stats::quantile(Z_full[anc_idx, jj], c(0.10, 0.25, 0.75, 0.90), na.rm = TRUE, names = FALSE)
+      0.5 * (q[3L] - q[2L]) + 0.5 * (q[4L] - q[1L])
+    }, numeric(1))
+    sel_dm <- integer(0)
+    for (jj in dm_idx[order(-as.integer(cand_env[dm_idx] %in% prio_mech), -sp_sc, dm_idx)]) {
+      if (length(sel_dm) == 0L) { sel_dm <- jj; next }
+      cors_j <- vapply(sel_dm, function(ss) {
+        rp <- suppressWarnings(stats::cor(Z_full[anc_idx, jj], Z_full[anc_idx, ss], use = "complete.obs", method = "pearson"))
+        rs <- suppressWarnings(stats::cor(Z_full[anc_idx, jj], Z_full[anc_idx, ss], use = "complete.obs", method = "spearman"))
+        max(c(if (is.finite(rp)) abs(rp) else 0.0, if (is.finite(rs)) abs(rs) else 0.0))
       }, numeric(1))
-      ord_dm <- dm_idx[order(-as.integer(is_prio_dm), -spread_sc, dm_idx)]
-      sel_dm <- integer(0)
-      for (jj in ord_dm) {
-        if (length(sel_dm) == 0L) {
-          sel_dm <- jj
-        } else {
-          cors_j <- vapply(sel_dm, function(ss) {
-            r_val <- suppressWarnings(stats::cor(Z_full[anc_idx, jj], Z_full[anc_idx, ss], use = "complete.obs"))
-            if (is.finite(r_val)) abs(r_val) else 0.0
-          }, numeric(1))
-          if (all(cors_j <= 0.80)) sel_dm <- c(sel_dm, jj)
-        }
-      }
-      keep_idx <- c(keep_idx, sort(sel_dm))
+      if (all(cors_j <= 0.70)) sel_dm <- c(sel_dm, jj)
     }
+    keep_idx <- c(keep_idx, sort(sel_dm))
   }
   keep_idx <- sort(unique(keep_idx))
-  cand_env <- cand_env[keep_idx]
-  E_raw <- E_raw[, keep_idx, drop = FALSE]
-  Z_std <- Z_full[, keep_idx, drop = FALSE]
-  dom_vec <- dom_full[keep_idx]
+  cand_env <- cand_env[keep_idx]; E_raw <- E_raw[, keep_idx, drop = FALSE]; Z_std <- Z_full[, keep_idx, drop = FALSE]; dom_vec <- dom_full[keep_idx]
 
   dom_counts <- table(dom_vec)
   col_dom_wts <- vapply(dom_vec, function(dm) 1.0 / sqrt(max(1.0, as.numeric(dom_counts[[dm]]))), numeric(1))
@@ -1118,1055 +202,236 @@ resolve_analysis_group <- function(
     hit_w <- intersect(cand_env, names(rf_var_weights))
     if (length(hit_w) > 0L) {
       rw <- stats::setNames(rep(stats::median(as.numeric(rf_var_weights), na.rm = TRUE), length(cand_env)), cand_env)
-      rw[hit_w] <- pmax(as.numeric(rf_var_weights[hit_w]), 1e-4)
-      col_dom_wts <- col_dom_wts * sqrt(rw / max(mean(rw), 1e-6))
+      rw[hit_w] <- pmax(as.numeric(rf_var_weights[hit_w]), 1e-4); col_dom_wts <- col_dom_wts * sqrt(rw / max(mean(rw), 1e-6))
     }
   }
-  Z_bal <- sweep(Z_std, 2L, col_dom_wts, "*")
+  Z_bal <- sweep(Z_std, 2L, col_dom_wts, "*"); Z_anc <- Z_bal[anc_idx, , drop = FALSE]; n_anc <- nrow(Z_anc)
 
-  Z_anc <- Z_bal[anc_idx, , drop = FALSE]
-  n_anc <- nrow(Z_anc)
-  if (ncol(Z_anc) >= 2L && n_anc >= 6L) {
-    pca_e <- tryCatch(stats::prcomp(Z_anc, center = TRUE, scale. = FALSE), error = function(e) NULL)
-    if (!is.null(pca_e) && ncol(pca_e$rotation) >= 1L) {
-      ev <- pca_e$sdev^2
-      cum_ev <- cumsum(ev) / max(sum(ev), 1e-12)
-      k_pc <- which(cum_ev >= 0.85)[1L]
-      if (is.na(k_pc)) k_pc <- ncol(pca_e$rotation)
-      k_pc <- max(min(2L, ncol(pca_e$rotation)), min(8L, k_pc, ncol(pca_e$rotation)))
-      rot_e <- pca_e$rotation[, seq_len(k_pc), drop = FALSE]
-      S_anc <- sweep(Z_anc, 2L, pca_e$center, "-") %*% rot_e
-      S_all <- sweep(Z_bal, 2L, pca_e$center, "-") %*% rot_e
-    } else {
-      S_anc <- Z_anc
-      S_all <- Z_bal
+  proj_pca <- function(M_anc, M_all = NULL) {
+    if (ncol(M_anc) >= 2L && nrow(M_anc) >= 6L) {
+      pe <- tryCatch(stats::prcomp(M_anc, center = TRUE, scale. = FALSE), error = function(e) NULL)
+      if (!is.null(pe) && ncol(pe$rotation) >= 1L) {
+        ev <- pe$sdev^2; kp <- which((cumsum(ev) / max(sum(ev), 1e-12)) >= 0.85)[1L]; if (is.na(kp)) kp <- ncol(pe$rotation)
+        rot <- pe$rotation[, seq_len(max(min(2L, ncol(pe$rotation)), min(8L, kp, ncol(pe$rotation)))), drop = FALSE]
+        return(list(S_anc = sweep(M_anc, 2L, pe$center, "-") %*% rot, S_all = if (!is.null(M_all)) sweep(M_all, 2L, pe$center, "-") %*% rot else NULL))
+      }
     }
-  } else {
-    S_anc <- Z_anc
-    S_all <- Z_bal
+    list(S_anc = M_anc, S_all = M_all)
   }
-
+  pp <- proj_pca(Z_anc, Z_bal); S_anc <- pp$S_anc; S_all <- pp$S_all
   tot_ss <- sum(sweep(S_anc, 2L, colMeans(S_anc), "-")^2)
-  if (!is.finite(tot_ss) || tot_ss <= 1e-8) {
-    df$analysis_group <- rep(base_taxon, n_rows)
-    df$ecotype_regime <- df$analysis_group
-    attr(df, "is_post_selection_ecotype") <- FALSE
-    return(df)
-  }
-
-  cfg_s05 <- if (exists("load_step05_macroecology_config", mode = "function")) {
-    load_step05_macroecology_config()
-  } else {
-    list(ecotype_min_silhouette = 0.40, ecotype_min_fold_jaccard = 0.60)
-  }
-  eco_min_sil <- if (!is.null(cfg_s05$ecotype_min_silhouette) && is.finite(cfg_s05$ecotype_min_silhouette)) {
-    as.numeric(cfg_s05$ecotype_min_silhouette)
-  } else {
-    0.40
-  }
-  eco_min_jacc <- if (!is.null(cfg_s05$ecotype_min_fold_jaccard) && is.finite(cfg_s05$ecotype_min_fold_jaccard)) {
-    as.numeric(cfg_s05$ecotype_min_fold_jaccard)
-  } else {
-    0.60
-  }
-
+  cfg_s05 <- if (exists("load_step05_macroecology_config", mode = "function")) load_step05_macroecology_config() else list(ecotype_min_silhouette = 0.40, ecotype_min_fold_jaccard = 0.60)
+  eco_min_sil <- if (!is.null(cfg_s05$ecotype_min_silhouette) && is.finite(cfg_s05$ecotype_min_silhouette)) as.numeric(cfg_s05$ecotype_min_silhouette) else 0.40
+  eco_min_jacc <- if (!is.null(cfg_s05$ecotype_min_fold_jaccard) && is.finite(cfg_s05$ecotype_min_fold_jaccard)) as.numeric(cfg_s05$ecotype_min_fold_jaccard) else 0.60
   min_cl_n <- if (is_intra && n_anc >= 40L) max(15L, as.integer(floor(0.10 * n_anc))) else if (n_anc >= 20L) 4L else 3L
   max_k_cand <- min(4L, as.integer(floor(n_anc / max(min_cl_n, 2L))))
-  if (max_k_cand < 2L) {
-    df$analysis_group <- rep(base_taxon, n_rows)
-    df$ecotype_regime <- df$analysis_group
-    attr(df, "is_post_selection_ecotype") <- FALSE
-    return(df)
-  }
+  if (!is.finite(tot_ss) || tot_ss <= 1e-8 || max_k_cand < 2L) return(ret_k1())
 
   .old_seed_rag <- if (exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)) get(".Random.seed", envir = .GlobalEnv) else NULL
   set.seed(42L)
   on.exit({ if (!is.null(.old_seed_rag)) assign(".Random.seed", .old_seed_rag, envir = .GlobalEnv) }, add = TRUE)
 
   d_anc_mat <- as.matrix(stats::dist(S_anc))
-  calc_mean_sil <- function(cl_int, dist_mat = d_anc_mat) {
-    u_c <- sort(unique(cl_int))
-    if (length(u_c) < 2L) return(0.0)
-    s_vals <- numeric(length(cl_int))
-    for (ii in seq_along(cl_int)) {
-      same_i <- which(cl_int == cl_int[ii] & seq_along(cl_int) != ii)
-      a_i <- if (length(same_i) > 0L) mean(dist_mat[ii, same_i]) else 0.0
-      b_i <- min(vapply(setdiff(u_c, cl_int[ii]), function(ck) mean(dist_mat[ii, cl_int == ck]), numeric(1)))
-      denom_i <- max(a_i, b_i, 1e-9)
-      s_vals[ii] <- (b_i - a_i) / denom_i
-    }
-    mean(s_vals, na.rm = TRUE)
+  calc_sil <- function(cl_i, dm = d_anc_mat) {
+    uc <- sort(unique(cl_i)); if (length(uc) < 2L) return(0.0)
+    mean(vapply(seq_along(cl_i), function(ii) {
+      si <- which(cl_i == cl_i[ii] & seq_along(cl_i) != ii); ai <- if (length(si) > 0L) mean(dm[ii, si]) else 0.0
+      bi <- min(vapply(setdiff(uc, cl_i[ii]), function(ck) mean(dm[ii, cl_i == ck]), numeric(1)))
+      (bi - ai) / max(ai, bi, 1e-9)
+    }, numeric(1)), na.rm = TRUE)
   }
 
-  # Precompute B = 20 parametric unimodal Gaussian null draws N(0, cov(S_anc))
-  d_s <- ncol(S_anc)
-  cov_s <- if (n_anc > 2L) stats::cov(S_anc) else diag(1.0, nrow = d_s, ncol = d_s)
-  cov_s <- 0.5 * (cov_s + t(cov_s))
-  eig_s <- eigen(cov_s, symmetric = TRUE)
+  d_s <- ncol(S_anc); cov_s <- if (n_anc > 2L) stats::cov(S_anc) else diag(1.0, nrow = d_s, ncol = d_s)
+  eig_s <- eigen(0.5 * (cov_s + t(cov_s)), symmetric = TRUE)
   L_s <- eig_s$vectors %*% diag(sqrt(pmax(eig_s$values, 0.0)), nrow = d_s, ncol = d_s)
-  null_draws <- lapply(seq_len(20L), function(b_i) {
-    S_b <- matrix(stats::rnorm(n_anc * d_s), nrow = n_anc, ncol = d_s) %*% t(L_s)
-    tot_b <- sum(sweep(S_b, 2L, colMeans(S_b), "-")^2)
-    list(S_b = S_b, dist_b = as.matrix(stats::dist(S_b)), tot_b = tot_b)
-  })
+  mk_draw <- function(Sb) list(S_b = Sb, dist_b = as.matrix(stats::dist(Sb)), tot_b = sum(sweep(Sb, 2L, colMeans(Sb), "-")^2))
+  gauss_draws <- lapply(seq_len(20L), function(bi) mk_draw(matrix(stats::rnorm(n_anc * d_s), nrow = n_anc, ncol = d_s) %*% t(L_s)))
+  perm_draws <- if (ncol(Z_anc) >= 2L) lapply(seq_len(20L), function(bi) { Zp <- Z_anc; for (jj in seq_len(ncol(Zp))) Zp[, jj] <- Zp[sample.int(n_anc), jj]; mk_draw(proj_pca(Zp)$S_anc) }) else list()
+  eval_null_q95 <- function(dlist, k_tr) {
+    if (length(dlist) == 0L) return(0.0)
+    vals <- vapply(dlist, function(nd) {
+      kmb <- tryCatch(stats::kmeans(nd$S_b, centers = k_tr, nstart = 10L, iter.max = 40L), error = function(e) NULL)
+      if (is.null(kmb)) return(NA_real_)
+      tb <- table(kmb$cluster); if (length(tb) < k_tr || any(tb < min_cl_n)) return(NA_real_)
+      calc_sil(kmb$cluster, nd$dist_b) + 0.35 * (1.0 - kmb$tot.withinss / max(nd$tot_b, 1e-9))
+    }, numeric(1))
+    fv <- vals[is.finite(vals)]; if (length(fv) > 0L) as.numeric(stats::quantile(fv, 0.95, na.rm = TRUE, names = FALSE)) else 0.0
+  }
 
-  .compute_subsample_cluster_jaccard <- function(S_mat, ref_cl, k_tr, n_folds = 5L) {
-    n_obs <- nrow(S_mat)
-    if (n_obs < max(6L, k_tr + 2L)) return(0.0)
-    folds_j <- integer(n_obs)
-    for (ck in sort(unique(ref_cl))) {
-      idx_ck <- which(ref_cl == ck)
-      folds_j[idx_ck] <- ((seq_along(idx_ck) - 1L) %% n_folds) + 1L
-    }
-    f_vals <- vapply(seq_len(n_folds), function(fi) {
-      sub_i <- which(folds_j != fi)
-      if (length(sub_i) < max(k_tr + 2L, 6L)) return(NA_real_)
+  sub_jacc <- function(S_mat, ref_cl, k_tr, n_folds = 5L) {
+    n_obs <- nrow(S_mat); if (n_obs < max(6L, k_tr + 2L)) return(0.0)
+    folds_j <- integer(n_obs); for (ck in sort(unique(ref_cl))) { ix <- which(ref_cl == ck); folds_j[ix] <- ((seq_along(ix) - 1L) %% n_folds) + 1L }
+    fv <- vapply(seq_len(n_folds), function(fi) {
+      sub_i <- which(folds_j != fi); if (length(sub_i) < max(k_tr + 2L, 6L)) return(NA_real_)
       km_f <- tryCatch(stats::kmeans(S_mat[sub_i, , drop = FALSE], centers = k_tr, nstart = 15L, iter.max = 40L), error = function(e) NULL)
       if (is.null(km_f)) return(NA_real_)
-      rc <- ref_cl[sub_i]; sc <- km_f$cluster
-      ur <- sort(unique(rc)); us <- sort(unique(sc))
+      rc <- ref_cl[sub_i]; sc <- km_f$cluster; ur <- sort(unique(rc)); us <- sort(unique(sc))
       jm <- matrix(0.0, nrow = length(ur), ncol = length(us))
-      for (ri in seq_along(ur)) {
-        a <- rc == ur[ri]
-        for (si in seq_along(us)) {
-          b <- sc == us[si]; u_ab <- sum(a | b)
-          if (u_ab > 0L) jm[ri, si] <- sum(a & b) / u_ab
-        }
-      }
-      used_s <- integer(0); jc_best <- numeric(length(ur))
-      for (ri in order(apply(jm, 1L, max), decreasing = TRUE)) {
-        avail <- setdiff(seq_along(us), used_s)
-        if (length(avail) == 0L) next
-        bs <- avail[which.max(jm[ri, avail])[1L]]
-        used_s <- c(used_s, bs); jc_best[ri] <- jm[ri, bs]
-      }
-      mean(jc_best, na.rm = TRUE)
+      for (ri in seq_along(ur)) { a <- rc == ur[ri]; for (si in seq_along(us)) { b <- sc == us[si]; uab <- sum(a | b); if (uab > 0L) jm[ri, si] <- sum(a & b) / uab } }
+      used_s <- integer(0); jb <- numeric(length(ur))
+      for (ri in order(apply(jm, 1L, max), decreasing = TRUE)) { av <- setdiff(seq_along(us), used_s); if (length(av) == 0L) next; bs <- av[which.max(jm[ri, av])[1L]]; used_s <- c(used_s, bs); jb[ri] <- jm[ri, bs] }
+      mean(jb, na.rm = TRUE)
     }, numeric(1))
-    fin_f <- f_vals[is.finite(f_vals)]
-    if (length(fin_f) > 0L) mean(fin_f) else 0.0
+    fv <- fv[is.finite(fv)]; if (length(fv) > 0L) mean(fv) else 0.0
   }
 
-  active_doms <- unique(dom_vec)
-  cand_fits <- list()
+  active_doms <- unique(dom_vec); cand_fits <- list()
   for (k_try in 2L:max_k_cand) {
     km <- tryCatch(stats::kmeans(S_anc, centers = k_try, nstart = 30L, iter.max = 60L), error = function(e) NULL)
-    if (is.null(km)) next
-    cl_tab <- table(km$cluster)
-    if (length(cl_tab) < k_try || any(cl_tab < min_cl_n)) next
-    sil_k <- calc_mean_sil(km$cluster, d_anc_mat)
-    var_red_k <- 1.0 - (km$tot.withinss / max(tot_ss, 1e-9))
-    fold_jacc_k <- .compute_subsample_cluster_jaccard(S_anc, km$cluster, k_try)
+    if (is.null(km) || length(table(km$cluster)) < k_try || any(table(km$cluster) < min_cl_n)) next
+    sil_k <- calc_sil(km$cluster, d_anc_mat); var_red_k <- 1.0 - (km$tot.withinss / max(tot_ss, 1e-9))
+    fold_jacc_k <- sub_jacc(S_anc, km$cluster, k_try)
+    null_q95_combo <- max(eval_null_q95(gauss_draws, k_try), eval_null_q95(perm_draws, k_try))
 
-    null_combos <- vapply(null_draws, function(nd) {
-      km_b <- tryCatch(stats::kmeans(nd$S_b, centers = k_try, nstart = 10L, iter.max = 40L), error = function(e) NULL)
-      if (is.null(km_b)) return(NA_real_)
-      tab_b <- table(km_b$cluster)
-      if (length(tab_b) < k_try || any(tab_b < min_cl_n)) return(NA_real_)
-      sil_b <- calc_mean_sil(km_b$cluster, nd$dist_b)
-      vr_b <- 1.0 - (km_b$tot.withinss / max(nd$tot_b, 1e-9))
-      sil_b + 0.35 * vr_b
-    }, numeric(1))
-    fin_null <- null_combos[is.finite(null_combos)]
-    null_q95_combo <- if (length(fin_null) > 0L) as.numeric(stats::quantile(fin_null, probs = 0.95, na.rm = TRUE, names = FALSE)) else 0.0
-
-    # Pooled within-cluster regularized Mahalanobis separation in S_anc alongside univariate separation
     u_cls <- sort(unique(km$cluster))
-    resid_s <- S_anc - km$centers[km$cluster, , drop = FALSE]
-    sigma_pool <- crossprod(resid_s) / max(n_anc - length(u_cls), 1L) + diag(0.08, nrow = d_s, ncol = d_s)
-    pair_min_mahal_d <- Inf
-    pair_min_best_d <- Inf
-    var_max_pair_d <- rep(0.0, length(cand_env))
-    for (ia in seq_len(length(u_cls) - 1L)) {
-      for (ib in (ia + 1L):length(u_cls)) {
-        ca <- u_cls[ia]
-        cb <- u_cls[ib]
-        diff_mu <- as.numeric(km$centers[ca, ] - km$centers[cb, ])
-        mahal_ab <- tryCatch(sqrt(max(0.0, as.numeric(crossprod(diff_mu, solve(sigma_pool, diff_mu))))), error = function(e) 0.0)
-        if (is.finite(mahal_ab) && mahal_ab < pair_min_mahal_d) pair_min_mahal_d <- mahal_ab
-        best_ab_d <- 0.0
-        for (j in seq_along(cand_env)) {
-          ga <- Z_std[anc_idx[km$cluster == ca], j]
-          gb <- Z_std[anc_idx[km$cluster == cb], j]
-          va <- if (length(ga) > 1L) stats::var(ga, na.rm = TRUE) else 0.0
-          vb <- if (length(gb) > 1L) stats::var(gb, na.rm = TRUE) else 0.0
-          if (!is.finite(va)) va <- 0.0
-          if (!is.finite(vb)) vb <- 0.0
-          d_ab_j <- abs(mean(ga, na.rm = TRUE) - mean(gb, na.rm = TRUE)) / sqrt(0.5 * (va + vb) + 0.04)
-          if (is.finite(d_ab_j)) {
-            if (d_ab_j > best_ab_d) best_ab_d <- d_ab_j
-            if (d_ab_j > var_max_pair_d[j]) var_max_pair_d[j] <- d_ab_j
-          }
-        }
-        if (best_ab_d < pair_min_best_d) pair_min_best_d <- best_ab_d
+    sigma_pool <- crossprod(S_anc - km$centers[km$cluster, , drop = FALSE]) / max(n_anc - length(u_cls), 1L) + diag(0.08, nrow = d_s, ncol = d_s)
+    pair_min_mahal_d <- Inf; pair_min_best_d <- Inf; var_max_pair_d <- rep(0.0, length(cand_env))
+    for (ia in seq_len(length(u_cls) - 1L)) for (ib in (ia + 1L):length(u_cls)) {
+      ca <- u_cls[ia]; cb <- u_cls[ib]; diff_mu <- as.numeric(km$centers[ca, ] - km$centers[cb, ])
+      mab <- tryCatch(sqrt(max(0.0, as.numeric(crossprod(diff_mu, solve(sigma_pool, diff_mu))))), error = function(e) 0.0)
+      if (is.finite(mab) && mab < pair_min_mahal_d) pair_min_mahal_d <- mab
+      best_ab_d <- 0.0
+      for (j in seq_along(cand_env)) {
+        ga <- Z_std[anc_idx[km$cluster == ca], j]; gb <- Z_std[anc_idx[km$cluster == cb], j]
+        va <- if (length(ga) > 1L) stats::var(ga, na.rm = TRUE) else 0.0; vb <- if (length(gb) > 1L) stats::var(gb, na.rm = TRUE) else 0.0
+        dab <- abs(mean(ga, na.rm = TRUE) - mean(gb, na.rm = TRUE)) / sqrt(0.5 * (ifelse(is.finite(va), va, 0.0) + ifelse(is.finite(vb), vb, 0.0)) + 0.04)
+        if (is.finite(dab)) { if (dab > best_ab_d) best_ab_d <- dab; if (dab > var_max_pair_d[j]) var_max_pair_d[j] <- dab }
       }
+      if (best_ab_d < pair_min_best_d) pair_min_best_d <- best_ab_d
     }
 
-    kw_p <- vapply(seq_along(cand_env), function(j) {
-      vj <- Z_std[anc_idx, j]
-      if (stats::sd(vj) <= 1e-6) return(1.0)
+    kw_q <- stats::p.adjust(vapply(seq_along(cand_env), function(j) {
+      vj <- Z_std[anc_idx, j]; if (stats::sd(vj) <= 1e-6) return(1.0)
       tryCatch(suppressWarnings(as.numeric(stats::kruskal.test(vj ~ factor(km$cluster))$p.value)), error = function(e) 1.0)
-    }, numeric(1))
-    kw_q <- stats::p.adjust(kw_p, method = "BH")
-
-    eta2_vec <- numeric(length(cand_env))
-    f_stats <- numeric(length(cand_env))
+    }, numeric(1)), method = "BH")
+    eta2_vec <- numeric(length(cand_env)); f_stats <- numeric(length(cand_env))
     for (j in seq_along(cand_env)) {
-      vj <- Z_std[anc_idx, j]
-      if (stats::sd(vj) <= 1e-6) next
-      ss_tot_j <- sum((vj - mean(vj, na.rm = TRUE))^2)
-      ss_btw_j <- sum(vapply(u_cls, function(cc) {
-        gc <- vj[km$cluster == cc]
-        length(gc) * ((mean(gc, na.rm = TRUE) - mean(vj, na.rm = TRUE))^2)
-      }, numeric(1)))
-      eta2_vec[j] <- ss_btw_j / max(ss_tot_j, 1e-9)
-      f_stats[j] <- tryCatch({
-        af <- summary(stats::aov(vj ~ factor(km$cluster)))[[1]]
-        suppressWarnings(as.numeric(af[["F value"]][1L]))
-      }, error = function(e) 0.0)
+      vj <- Z_std[anc_idx, j]; if (stats::sd(vj) <= 1e-6) next
+      eta2_vec[j] <- sum(vapply(u_cls, function(cc) { gc <- vj[km$cluster == cc]; length(gc) * ((mean(gc, na.rm = TRUE) - mean(vj, na.rm = TRUE))^2) }, numeric(1))) / max(sum((vj - mean(vj, na.rm = TRUE))^2), 1e-9)
+      f_stats[j] <- tryCatch(suppressWarnings(as.numeric(summary(stats::aov(vj ~ factor(km$cluster)))[[1]][["F value"]][1L])), error = function(e) 0.0)
     }
     f_stats[!is.finite(f_stats)] <- 0.0
-
     sig_mask_k <- is.finite(kw_q) & (kw_q < 0.005) & (eta2_vec >= 0.20) & (var_max_pair_d >= 2.15)
-    sig_vars_k <- cand_env[sig_mask_k]
-    n_sig_vars <- length(sig_vars_k)
     n_sig_doms <- length(unique(dom_vec[sig_mask_k]))
-
-    req_sig_vars <- if (length(cand_env) >= 4L) 2L else 1L
-    req_sig_doms <- min(2L, length(active_doms))
-    pass_eco_gate <- (
-      is.finite(sil_k) && sil_k >= eco_min_sil &&
-      is.finite(fold_jacc_k) && fold_jacc_k >= eco_min_jacc &&
-      is.finite(var_red_k) && var_red_k >= (0.30 + 0.05 * (k_try - 2L)) &&
-      is.finite(pair_min_mahal_d) && pair_min_mahal_d >= 2.05 &&
-      is.finite(pair_min_best_d) && pair_min_best_d >= 1.60 &&
-      (sil_k + 0.35 * var_red_k) > null_q95_combo &&
-      n_sig_vars >= req_sig_vars &&
-      n_sig_doms >= req_sig_doms
-    )
-
+    pass_eco <- is.finite(sil_k) && sil_k >= eco_min_sil && is.finite(fold_jacc_k) && fold_jacc_k >= eco_min_jacc &&
+      is.finite(var_red_k) && var_red_k >= (0.30 + 0.05 * (k_try - 2L)) && is.finite(pair_min_mahal_d) && pair_min_mahal_d >= 2.05 &&
+      is.finite(pair_min_best_d) && pair_min_best_d >= 1.60 && (sil_k + 0.35 * var_red_k) > null_q95_combo &&
+      sum(sig_mask_k) >= (if (length(cand_env) >= 4L) 2L else 1L) && n_sig_doms >= min(2L, length(active_doms))
     score_k <- sil_k + 0.35 * var_red_k + 0.05 * min(n_sig_doms, 4L) + 0.02 * min(pair_min_mahal_d, 6.0) - 0.02 * (k_try - 2L)
-    cand_fits[[as.character(k_try)]] <- list(
-      k = k_try,
-      km = km,
-      sil = sil_k,
-      fold_jacc = fold_jacc_k,
-      var_red = var_red_k,
-      null_q95_combo = null_q95_combo,
-      pair_min_mahal_d = pair_min_mahal_d,
-      f_stats = stats::setNames(f_stats, cand_env),
-      n_sig_vars = n_sig_vars,
-      n_sig_doms = n_sig_doms,
-      pass = pass_eco_gate,
-      score = score_k
-    )
+    cand_fits[[as.character(k_try)]] <- list(k = k_try, km = km, sil = sil_k, var_red = var_red_k, f_stats = stats::setNames(f_stats, cand_env), n_sig_doms = n_sig_doms, pass = pass_eco, score = score_k)
   }
 
   valid_fits <- Filter(function(x) isTRUE(x$pass), cand_fits)
-  if (length(valid_fits) == 0L) {
-    if (allow_k1 || length(cand_fits) == 0L) {
-      message(sprintf("[Independent Step 05 ENM] Retaining K=1 unimodal ecological envelope for '%s' (no multi-axis ecological regime partition exceeded coherence thresholds).", base_taxon))
-      df$analysis_group <- rep(base_taxon, n_rows)
-      df$ecotype_regime <- df$analysis_group
-      attr(df, "is_post_selection_ecotype") <- FALSE
-      return(df)
-    }
-    valid_fits <- cand_fits
-  }
-
+  if (length(valid_fits) == 0L) { if (allow_k1 || length(cand_fits) == 0L) return(ret_k1(msg = TRUE)); valid_fits <- cand_fits }
   best_fit <- valid_fits[[which.max(vapply(valid_fits, function(x) x$score, numeric(1)))]]
-  k_opt <- best_fit$k
-  centers_pc <- best_fit$km$centers
-
+  k_opt <- best_fit$k; centers_pc <- best_fit$km$centers
   d2_all <- matrix(0.0, nrow = n_rows, ncol = k_opt)
-  for (kc in seq_len(k_opt)) {
-    diff_kc <- sweep(S_all, 2L, centers_pc[kc, ], "-")
-    d2_all[, kc] <- rowSums(diff_kc^2)
-  }
+  for (kc in seq_len(k_opt)) d2_all[, kc] <- rowSums(sweep(S_all, 2L, centers_pc[kc, ], "-")^2)
   raw_cl <- max.col(-d2_all, ties.method = "first")
-
-  top_disc_var <- names(which.max(best_fit$f_stats))[1L]
-  if (is.na(top_disc_var) || !nzchar(top_disc_var)) top_disc_var <- cand_env[1L]
-  clean_var_tok <- function(vn) gsub("[^A-Za-z0-9_]", "_", vn)
-
+  top_var <- names(which.max(best_fit$f_stats))[1L]; if (is.na(top_var) || !nzchar(top_var)) top_var <- cand_env[1L]
+  clean_tok <- function(vn) gsub("[^A-Za-z0-9_]", "_", vn)
+  ord_cl <- order(tapply(E_raw[anc_idx, top_var], raw_cl[anc_idx], mean, na.rm = TRUE), decreasing = FALSE); lbl_map <- character(k_opt)
   if (k_opt == 2L) {
-    cl_means <- tapply(E_raw[anc_idx, top_disc_var], raw_cl[anc_idx], mean, na.rm = TRUE)
-    ord_cl <- order(cl_means, decreasing = FALSE)
-    lbl_map <- character(2L)
-    lbl_map[ord_cl[1L]] <- sprintf("Ecotype_1_%s_Low", clean_var_tok(top_disc_var))
-    lbl_map[ord_cl[2L]] <- sprintf("Ecotype_2_%s_High", clean_var_tok(top_disc_var))
+    lbl_map[ord_cl[1L]] <- sprintf("Ecotype_1_%s_Low", clean_tok(top_var)); lbl_map[ord_cl[2L]] <- sprintf("Ecotype_2_%s_High", clean_tok(top_var))
   } else {
-    cl_means_primary <- tapply(E_raw[anc_idx, top_disc_var], raw_cl[anc_idx], mean, na.rm = TRUE)
-    ord_cl <- order(cl_means_primary, decreasing = FALSE)
-    lbl_map <- character(k_opt)
-    used_sigs <- character(0)
+    used_s <- character(0)
     for (rk in seq_len(k_opt)) {
-      orig_c <- ord_cl[rk]
-      z_cent <- colMeans(Z_std[anc_idx[raw_cl[anc_idx] == orig_c], , drop = FALSE], na.rm = TRUE)
-      z_cent[!is.finite(z_cent)] <- 0.0
-      cand_order <- order(abs(z_cent), decreasing = TRUE)
-      chosen_sig <- NULL
-      for (cj in cand_order) {
-        v_nm <- clean_var_tok(cand_env[cj])
-        dir_tok <- if (z_cent[cj] >= 0.0) "High" else "Low"
-        sig_try <- paste0(v_nm, "_", dir_tok)
-        if (!(sig_try %in% used_sigs)) {
-          chosen_sig <- sig_try
-          used_sigs <- c(used_sigs, sig_try)
-          break
-        }
-      }
-      if (is.null(chosen_sig)) {
-        chosen_sig <- paste0(clean_var_tok(top_disc_var), "_", if (rk == 1L) "Low" else if (rk == k_opt) "High" else paste0("Mid", rk - 1L))
-      }
-      lbl_map[orig_c] <- sprintf("Ecotype_%d_%s", rk, chosen_sig)
+      oc <- ord_cl[rk]; zc <- colMeans(Z_std[anc_idx[raw_cl[anc_idx] == oc], , drop = FALSE], na.rm = TRUE); zc[!is.finite(zc)] <- 0.0; sig <- NULL
+      for (cj in order(abs(zc), decreasing = TRUE)) { st <- paste0(clean_tok(cand_env[cj]), "_", if (zc[cj] >= 0.0) "High" else "Low"); if (!(st %in% used_s)) { sig <- st; used_s <- c(used_s, st); break } }
+      if (is.null(sig)) sig <- paste0(clean_tok(top_var), "_", if (rk == 1L) "Low" else if (rk == k_opt) "High" else paste0("Mid", rk - 1L))
+      lbl_map[oc] <- sprintf("Ecotype_%d_%s", rk, sig)
     }
   }
-
-  resolved_lbls <- lbl_map[raw_cl]
-  tbl_res <- table(resolved_lbls)
-  message(sprintf(
-    "[Independent Step 05 ENM] Discovered K=%d ecological niche regimes for '%s' (sil=%.3f, var_red=%.1f%%, sig_domains=%d): %s",
-    k_opt, base_taxon, best_fit$sil, 100.0 * best_fit$var_red, best_fit$n_sig_doms,
-    paste(names(tbl_res), as.integer(tbl_res), sep = "=", collapse = ", ")
-  ))
-  df$analysis_group <- as.character(resolved_lbls)
-  df$ecotype_regime <- as.character(resolved_lbls)
-  attr(df, "is_post_selection_ecotype") <- isTRUE(k_opt >= 2L)
-  return(df)
+  resolved_lbls <- lbl_map[raw_cl]; tbl_res <- table(resolved_lbls)
+  message(sprintf("[Independent Step 05 ENM] Discovered K=%d ecological regimes for '%s' (sil=%.3f, var_red=%.1f%%, sig_domains=%d): %s",
+                  k_opt, base_taxon, best_fit$sil, 100.0 * best_fit$var_red, best_fit$n_sig_doms, paste(names(tbl_res), as.integer(tbl_res), sep = "=", collapse = ", ")))
+  df$analysis_group <- as.character(resolved_lbls); df$ecotype_regime <- as.character(resolved_lbls)
+  attr(df, "is_post_selection_ecotype") <- isTRUE(k_opt >= 2L); df
 }
 
 resolve_active_anchor_groups <- function(df, intraspecific_mode = FALSE) {
   if (is.null(df) || !is.data.frame(df) || nrow(df) == 0L) return(character(0))
   n_r <- nrow(df)
-  is_intra <- isTRUE(intraspecific_mode) ||
-    (("species_standardized" %in% names(df)) && length(unique(stats::na.omit(df$species_standardized))) < 2L)
-  g_raw <- if (is_intra && "analysis_group" %in% names(df)) {
-    as.character(df$analysis_group)
-  } else if ("species_standardized" %in% names(df)) {
-    as.character(df$species_standardized)
-  } else if ("analysis_group" %in% names(df)) {
-    as.character(df$analysis_group)
-  } else {
-    rep(NA_character_, n_r)
-  }
-  elig <- if ("is_training_eligible_coord" %in% names(df)) as.logical(df$is_training_eligible_coord) else rep(TRUE, n_r)
-  elig[is.na(elig)] <- TRUE
-  if ("coordinateUncertaintyInMeters" %in% names(df)) {
-    u_m <- suppressWarnings(as.numeric(df$coordinateUncertaintyInMeters))
-    elig <- elig & (is.na(u_m) | u_m <= 10000.0)
-  }
-  has_det_col <- "determiner_tier" %in% names(df)
-  det_t <- if (has_det_col) {
-    ifelse(is.na(df$determiner_tier) | !nzchar(trimws(as.character(df$determiner_tier))), "Tier_3_Bronze", as.character(df$determiner_tier))
-  } else {
-    rep("Tier_1_Gold", n_r)
-  }
-  is_t_anc <- if ("is_type_specimen" %in% names(df)) as.logical(df$is_type_specimen) else rep(FALSE, n_r)
-  is_t_anc[is.na(is_t_anc)] <- FALSE
-  is_prom <- rep(FALSE, n_r)
-
-  if ("is_promoted_bronze" %in% names(df)) {
-    pb <- as.logical(df$is_promoted_bronze); pb[is.na(pb)] <- FALSE; is_prom <- is_prom | pb
-  }
-  cl_noise <- if ("is_confident_label_noise" %in% names(df)) as.logical(df$is_confident_label_noise) else rep(FALSE, n_r)
-  cl_noise[is.na(cl_noise)] <- FALSE
-  not_noise <- (!cl_noise) | is_t_anc
-
-  miss_gmm <- if (is_intra && "is_missing_gmm_cluster" %in% names(df)) {
-    as.logical(df$is_missing_gmm_cluster)
-  } else if (is_intra && "analysis_group" %in% names(df) && all(grepl("^Morphotype_K", stats::na.omit(df$analysis_group))) && "gmm_cluster" %in% names(df)) {
-    is.na(df$gmm_cluster) | !nzchar(trimws(as.character(df$gmm_cluster)))
-  } else {
-    rep(FALSE, n_r)
-  }
-  miss_gmm[is.na(miss_gmm)] <- FALSE
-
-  tier_ok <- grepl("Tier_1|Gold|Tier_2|Silver", det_t, ignore.case = TRUE) | is_prom | is_t_anc
-  valid_g <- !is.na(g_raw) & nzchar(g_raw) & (g_raw != "Unknown") & not_noise
-  ext_anc_m <- .is_step05_extralimital_non_type(df, group_vec = g_raw, clean_base_mask = (tier_ok & elig & valid_g), is_type_vec = is_t_anc)
-  base_anc <- tier_ok & elig & valid_g & !ext_anc_m
+  is_intra <- isTRUE(intraspecific_mode) || (("species_standardized" %in% names(df)) && length(unique(stats::na.omit(df$species_standardized))) < 2L)
+  g_raw <- if (is_intra && "analysis_group" %in% names(df)) as.character(df$analysis_group)
+    else if ("species_standardized" %in% names(df)) as.character(df$species_standardized)
+    else if ("analysis_group" %in% names(df)) as.character(df$analysis_group) else rep(NA_character_, n_r)
+  fl <- .step05_anchor_flags(df, min_edaph_n = 4L)
+  miss_gmm <- if (is_intra && "is_missing_gmm_cluster" %in% names(df)) .to_bool_s05(df$is_missing_gmm_cluster) else rep(FALSE, n_r)
+  tier_ok <- grepl("Tier_1|Gold|Tier_2|Silver", fl$det_t, ignore.case = TRUE) | fl$is_prom | fl$is_t
+  valid_g <- !is.na(g_raw) & nzchar(g_raw) & (g_raw != "Unknown") & ((!fl$cl_noise) | fl$is_t) & !fl$quar & !fl$open_h
+  ext_m <- .is_step05_extralimital_non_type(df, group_vec = g_raw, clean_base_mask = (tier_ok & fl$elig & valid_g), is_type_vec = fl$is_t)
+  base_anc <- tier_ok & fl$elig & valid_g & !ext_m
   is_anc <- base_anc & !miss_gmm
   if (sum(is_anc) < 4L) is_anc <- base_anc
-  if (!any(tier_ok) && sum(is_anc) == 0L) {
-    is_anc <- elig & valid_g & !miss_gmm
-    if (sum(is_anc) == 0L) is_anc <- valid_g
-  }
+  if (!any(tier_ok) && sum(is_anc) == 0L) { is_anc <- fl$elig & valid_g & !miss_gmm; if (sum(is_anc) == 0L) is_anc <- valid_g }
   ifelse(is_anc, g_raw, NA_character_)
 }
 
-select_primary_predictors_from_rf <- function(
-  rf_res = NULL,
-  vif_res = NULL,
-  df_env = NULL,
-  cum_imp_target = NULL,
-  intraspecific_mode = FALSE
-) {
-  if (is.null(cum_imp_target) || !is.finite(cum_imp_target)) {
-    cum_imp_target <- if (exists("load_step05_macroecology_config", mode = "function")) {
-      cfg_ci <- tryCatch(load_step05_macroecology_config()$cumulative_importance_cutoff, error = function(e) NA_real_)
-      if (is.finite(cfg_ci) && cfg_ci > 0.0 && cfg_ci <= 1.0) as.numeric(cfg_ci) else 0.85
-    } else {
-      0.85
-    }
-  }
-  clim_pat <- "^(bio[0-9]*_|summer_moisture_|maritime_continentality_|delta_doy$|doy$|hopkins_|sin_doy$|cos_doy$)"
-  topo_pat <- "^(topo_|elevation($|_)|elev_)"
-
-  cand_vars <- character(0)
-  if (!is.null(vif_res) && is.list(vif_res)) {
-    v_kept <- if (!is.null(vif_res$kept_vars)) vif_res$kept_vars else vif_res$selected_variables
-    if (length(v_kept) > 0L) cand_vars <- as.character(v_kept)
-  }
-  if (length(cand_vars) == 0L && !is.null(rf_res) && is.list(rf_res) && !is.null(rf_res$importance)) {
-    cand_vars <- as.character(rf_res$importance$Predictor)
-  }
-  if (length(cand_vars) == 0L && !is.null(df_env) && is.data.frame(df_env)) {
-    cand_vars <- discover_candidate_eco_predictors(df_env, include_pheno = FALSE, min_finite = 3L)
-  }
-  raw_geochem_hydro_excl <- c(
-    "soil_ca_mg_molar_ratio", "soil_ultramafic_ni_cr_index", "soil_carbonate_c_pct",
-    "ultramafic_calcareous_gradient",
-    "polaris_ph_30m", "polaris_sand_30m", "polaris_clay_30m",
-    "polaris_om_30m", "polaris_bd_30m", "polaris_ksat_30m",
-    "is_nwi_wetland", "nwi_wetland_system", "nwi_wetland_dist_m",
-    "nwpl_indicator_code", "nwpl_wetland_score"
-  )
-  cand_vars <- setdiff(
-    unique(cand_vars[!is.na(cand_vars) & nzchar(cand_vars) & !grepl("^MEM[0-9]*$|^polaris_", cand_vars, ignore.case = TRUE)]),
-    raw_geochem_hydro_excl
-  )
-  if (!is.null(df_env) && is.data.frame(df_env)) {
-    cand_vars <- intersect(cand_vars, names(df_env))
-    cand_vars <- cand_vars[vapply(cand_vars, function(cl) {
-      v <- suppressWarnings(as.numeric(df_env[[cl]]))
-      fin <- is.finite(v)
-      sum(fin) >= min(3L, max(2L, nrow(df_env))) && is.finite(stats::sd(v[fin])) && stats::sd(v[fin]) > 1e-8
-    }, logical(1))]
-  }
-  if (length(cand_vars) == 0L) {
-    return(list(
-      primary_env_vars = character(0),
-      primary_clim_vars = character(0),
-      primary_edaph_vars = character(0),
-      primary_topo_vars = character(0),
-      rf_var_weights = numeric(0),
-      selection_method = "empty"
-    ))
-  }
-
-  mda_map <- stats::setNames(rep(NA_real_, length(cand_vars)), cand_vars)
-  if (!is.null(rf_res) && is.list(rf_res) && !is.null(rf_res$importance) &&
-      all(c("Predictor", "MeanDecreaseAccuracy") %in% names(rf_res$importance))) {
-    imp_df <- rf_res$importance
-    hit_m <- match(cand_vars, as.character(imp_df$Predictor))
-    ok_m <- !is.na(hit_m)
-    mda_map[ok_m] <- suppressWarnings(as.numeric(imp_df$MeanDecreaseAccuracy[hit_m[ok_m]]))
-  }
-
-  pos_vars <- names(mda_map[is.finite(mda_map) & mda_map > 0.0])
-  sel_method <- "rf_permutation_85pct"
-  selected_vars <- character(0)
-  raw_weights <- numeric(0)
-
-  if (length(pos_vars) >= 1L) {
-    ord_pos <- pos_vars[order(mda_map[pos_vars], decreasing = TRUE)]
-    pos_vals <- mda_map[ord_pos]
-    cum_frac <- cumsum(pos_vals) / max(sum(pos_vals), 1e-12)
-    k_cut <- which(cum_frac >= cum_imp_target)[1]
-    if (is.na(k_cut)) k_cut <- length(ord_pos)
-    k_keep <- min(length(ord_pos), max(min(2L, length(ord_pos)), as.integer(k_cut)))
-    selected_vars <- ord_pos[seq_len(k_keep)]
-    raw_weights <- pos_vals[seq_len(k_keep)]
-  } else {
-    # Fallback when RF permutation importance has zero positive features or rf_res is unavailable:
-    # univariate Kruskal-Wallis / ANOVA BH-adjusted p < 0.05 across active reference anchors
-    sel_method <- "univariate_bh_fdr_fallback"
-    anc_grp <- if (!is.null(df_env) && is.data.frame(df_env)) {
-      resolve_active_anchor_groups(df_env, intraspecific_mode = intraspecific_mode)
-    } else {
-      character(0)
-    }
-    p_vals <- stats::setNames(rep(1.0, length(cand_vars)), cand_vars)
-    sep_scores <- if (!is.null(df_env) && is.data.frame(df_env) && exists("compute_anchor_separation_scores", mode = "function")) {
-      compute_anchor_separation_scores(df_env[, cand_vars, drop = FALSE], anchor_groups = anc_grp)
-    } else {
-      stats::setNames(seq(length(cand_vars), 1L), cand_vars)
-    }
-    if (!is.null(df_env) && is.data.frame(df_env) && length(anc_grp) == nrow(df_env)) {
-      for (cl in cand_vars) {
-        v <- suppressWarnings(as.numeric(df_env[[cl]]))
-        ok <- is.finite(v) & !is.na(anc_grp) & nzchar(anc_grp)
-        if (sum(ok) >= 4L && length(unique(anc_grp[ok])) >= 2L) {
-          f_g <- factor(anc_grp[ok])
-          pv_kw <- tryCatch(suppressWarnings(as.numeric(stats::kruskal.test(v[ok] ~ f_g)$p.value)), error = function(e) NA_real_)
-          pv_av <- tryCatch({
-            af <- summary(stats::aov(v[ok] ~ f_g))[[1]]
-            suppressWarnings(as.numeric(af[["Pr(>F)"]][1]))
-          }, error = function(e) NA_real_)
-          pv <- min(c(pv_kw, pv_av), na.rm = TRUE)
-          if (is.finite(pv)) p_vals[[cl]] <- pv
-        }
-      }
-    }
-    p_adj <- stats::p.adjust(p_vals, method = "BH")
-    sig_vars <- names(p_adj[is.finite(p_adj) & p_adj < 0.05])
-    if (length(sig_vars) >= 1L) {
-      selected_vars <- sig_vars[order(sep_scores[sig_vars], decreasing = TRUE)]
-    } else {
-      sel_method <- "anchor_separation_top_fallback"
-      ord_sep <- names(sort(sep_scores, decreasing = TRUE))
-      selected_vars <- ord_sep[seq_len(min(length(ord_sep), max(2L, min(6L, length(ord_sep)))))]
-    }
-    raw_weights <- pmax(as.numeric(sep_scores[selected_vars]), 1e-4)
-    names(raw_weights) <- selected_vars
-  }
-
-  primary_clim <- grep(clim_pat, selected_vars, value = TRUE, ignore.case = TRUE)
-  primary_topo <- setdiff(grep(topo_pat, selected_vars, value = TRUE, ignore.case = TRUE), primary_clim)
-  primary_edaph <- setdiff(selected_vars, unique(c(primary_clim, primary_topo)))
-
-  # If positive-importance predictors existed in a block (climatic or edaphic) just outside the 85% cutoff,
-  # retain the top positive predictor of that block so partitioned climatic vs edaphic tests remain empirically grounded
-  cand_clim_pos <- intersect(grep(clim_pat, cand_vars, value = TRUE, ignore.case = TRUE), pos_vars)
-  if (length(primary_clim) == 0L && length(cand_clim_pos) > 0L) {
-    best_c <- cand_clim_pos[which.max(mda_map[cand_clim_pos])][1]
-    primary_clim <- best_c
-    selected_vars <- unique(c(selected_vars, best_c))
-    raw_weights[[best_c]] <- max(mda_map[[best_c]], 1e-4)
-  }
-  cand_edaph_all <- setdiff(cand_vars, unique(c(
-    grep(clim_pat, cand_vars, value = TRUE, ignore.case = TRUE),
-    grep(topo_pat, cand_vars, value = TRUE, ignore.case = TRUE)
-  )))
-  cand_edaph_pos <- intersect(cand_edaph_all, pos_vars)
-  if (length(primary_edaph) == 0L && length(cand_edaph_pos) > 0L) {
-    best_e <- cand_edaph_pos[which.max(mda_map[cand_edaph_pos])][1]
-    primary_edaph <- best_e
-    selected_vars <- unique(c(selected_vars, best_e))
-    raw_weights[[best_e]] <- max(mda_map[[best_e]], 1e-4)
-  }
-
-  raw_weights <- raw_weights[selected_vars]
-  raw_weights[!is.finite(raw_weights) | raw_weights <= 0.0] <- 1e-4
-  rf_var_weights <- raw_weights / sum(raw_weights)
-  names(rf_var_weights) <- selected_vars
-
-  list(
-    primary_env_vars = selected_vars,
-    primary_clim_vars = primary_clim,
-    primary_edaph_vars = primary_edaph,
-    primary_topo_vars = primary_topo,
-    rf_var_weights = rf_var_weights,
-    selection_method = sel_method
-  )
-}
-
-compute_specimen_edaphic_z <- function(
-  df,
-  primary_edaph_vars = NULL,
-  primary_clim_vars = NULL,
-  primary_env_vars = NULL,
-  rf_var_weights = NULL,
-  intraspecific_mode = FALSE
-) {
+compute_isolation_by_environment <- function(df, edaph_vars = character(0), clim_vars = character(0), mem_mat = NULL, n_perm = 99L) {
   n <- nrow(df)
-  if (is.null(df) || !is.data.frame(df) || n == 0L) {
-    return(list(
-      edaphic_z_score = numeric(0),
-      climatic_z_score = numeric(0),
-      env_z_score = numeric(0),
-      primary_edaph_vars = character(0),
-      primary_clim_vars = character(0),
-      primary_env_vars = character(0),
-      eval_specimen_z = function(idx, target_tx, mode = "edaphic") 0.0
-    ))
-  }
-
-  is_intra <- isTRUE(intraspecific_mode) ||
-    (("species_standardized" %in% names(df)) && length(unique(stats::na.omit(df$species_standardized))) < 2L)
-  if (is_intra && !("analysis_group" %in% names(df))) {
-    df <- resolve_analysis_group(df, intraspecific_mode = TRUE, primary_env_vars = primary_env_vars, rf_var_weights = rf_var_weights)
-  }
-  grp_vec <- if (is_intra && "analysis_group" %in% names(df)) as.character(df$analysis_group) else as.character(df$species_standardized)
-  active_taxa <- sort(unique(grp_vec[!is.na(grp_vec) & nzchar(grp_vec) & grp_vec != "Unknown"]))
-
-  clim_pat <- "^(bio[0-9]*_|summer_moisture_|maritime_continentality_)"
-  cand_all <- discover_candidate_eco_predictors(df, include_pheno = FALSE, min_finite = 3L)
-
-  if (is.null(primary_env_vars) || length(primary_env_vars) == 0L) {
-    primary_env_vars <- unique(c(as.character(primary_edaph_vars), as.character(primary_clim_vars)))
-    if (length(primary_env_vars) == 0L) primary_env_vars <- cand_all
-  }
-  primary_env_vars <- intersect(unique(as.character(primary_env_vars)), names(df))
-  primary_env_vars <- primary_env_vars[vapply(primary_env_vars, function(cl) {
-    v <- suppressWarnings(as.numeric(df[[cl]]))
-    sum(is.finite(v)) >= min(3L, max(2L, n))
-  }, logical(1))]
-
-  if (is.null(primary_clim_vars) || length(primary_clim_vars) == 0L) {
-    primary_clim_vars <- grep(clim_pat, primary_env_vars, value = TRUE, ignore.case = TRUE)
-    if (length(primary_clim_vars) == 0L) {
-      primary_clim_vars <- grep(clim_pat, cand_all, value = TRUE, ignore.case = TRUE)
+  empty_ibe <- data.frame(Modality = character(0), N_Specimens = integer(0), Pure_Edaphic_AdjR2 = numeric(0), Pure_Climate_AdjR2 = numeric(0),
+                          Pure_Space_MEM_AdjR2 = numeric(0), Total_Explained_AdjR2 = numeric(0), Partial_RDA_F = numeric(0),
+                          Partial_RDA_p = numeric(0), IBE_Inference = character(0), stringsAsFactors = FALSE)
+  if (is.null(df) || n < 8L) return(empty_ibe)
+  clean_blk <- function(cols) {
+    if (length(cols) == 0L) return(NULL)
+    M <- matrix(0.0, nrow = n, ncol = length(cols), dimnames = list(NULL, cols)); keep <- logical(length(cols))
+    for (j in seq_along(cols)) {
+      v <- suppressWarnings(as.numeric(df[[cols[j]]])); fin <- is.finite(v)
+      if (sum(fin) >= 5L && stats::sd(v[fin]) > 1e-8) { v[!fin] <- stats::median(v[fin], na.rm = TRUE); M[, j] <- as.numeric(scale(v)); keep[j] <- TRUE }
     }
-  } else {
-    primary_clim_vars <- intersect(unique(as.character(primary_clim_vars)), names(df))
+    if (!any(keep)) NULL else M[, keep, drop = FALSE]
   }
+  X_ed <- clean_blk(intersect(as.character(edaph_vars), names(df)))
+  X_cl <- clean_blk(intersect(setdiff(as.character(clim_vars), "delta_doy"), names(df)))
+  if (is.null(X_ed) && is.null(X_cl)) return(empty_ibe)
+  if (is.null(mem_mat) || nrow(as.matrix(mem_mat)) != n) {
+    if (all(c("longitude", "latitude") %in% names(df))) {
+      lo <- suppressWarnings(as.numeric(df$longitude)); la <- suppressWarnings(as.numeric(df$latitude))
+      lo[!is.finite(lo)] <- stats::median(lo, na.rm = TRUE); la[!is.finite(la)] <- stats::median(la, na.rm = TRUE)
+      mem_mat <- scale(cbind(MEM_Lon = lo, MEM_Lat = la))
+    } else mem_mat <- matrix(0.0, nrow = n, ncol = 1L, dimnames = list(NULL, "MEM1"))
+  } else { mem_mat <- scale(as.matrix(mem_mat)); mem_mat[!is.finite(mem_mat)] <- 0.0 }
 
-  if (is.null(primary_edaph_vars) || length(primary_edaph_vars) == 0L) {
-    primary_edaph_vars <- setdiff(primary_env_vars, grep(clim_pat, primary_env_vars, value = TRUE, ignore.case = TRUE))
-    if (length(primary_edaph_vars) == 0L) {
-      primary_edaph_vars <- setdiff(cand_all, grep(clim_pat, cand_all, value = TRUE, ignore.case = TRUE))
+  eval_blk <- function(Y_raw, mod_name) {
+    if (is.null(Y_raw) || ncol(Y_raw) == 0L) return(NULL)
+    Y <- scale(as.matrix(Y_raw)); Y[!is.finite(Y)] <- 0.0; X_env <- cbind(X_ed, X_cl)
+    adj_r2 <- function(Xm) {
+      if (is.null(Xm) || ncol(Xm) == 0L) return(0.0)
+      qr_x <- qr(cbind(1.0, Xm)); p_k <- qr_x$rank - 1L; if (p_k < 1L || (n - qr_x$rank) < 2L) return(0.0)
+      tss <- sum(sweep(Y, 2L, colMeans(Y), "-")^2); if (tss <= 1e-10) return(0.0)
+      1.0 - (1.0 - max(0.0, 1.0 - sum(qr.resid(qr_x, Y)^2) / tss)) * ((n - 1.0) / max(1.0, n - p_k - 1.0))
     }
-  } else {
-    primary_edaph_vars <- intersect(unique(as.character(primary_edaph_vars)), names(df))
-  }
-
-  all_z_vars <- unique(c(primary_env_vars, primary_edaph_vars, primary_clim_vars))
-  all_z_vars <- all_z_vars[vapply(all_z_vars, function(cl) {
-    (cl %in% names(df)) && sum(is.finite(suppressWarnings(as.numeric(df[[cl]])))) >= min(3L, max(2L, n))
-  }, logical(1))]
-
-  auth_w <- if ("authority_weight" %in% names(df)) suppressWarnings(as.numeric(df$authority_weight)) else resolve_ecological_authority_weights(df)
-  auth_w[!is.finite(auth_w) | auth_w < 0] <- 0.0
-  spat_w <- if ("spatial_balance_weight" %in% names(df)) {
-    suppressWarnings(as.numeric(df$spatial_balance_weight))
-  } else if (exists("compute_spatial_balance_weights", mode = "function")) {
-    compute_spatial_balance_weights(df)
-  } else {
-    rep(1.0, n)
-  }
-  spat_w[!is.finite(spat_w) | spat_w <= 0] <- 1.0
-
-  elig_coord <- if ("is_training_eligible_coord" %in% names(df)) as.logical(df$is_training_eligible_coord) else rep(TRUE, n)
-  elig_coord[is.na(elig_coord)] <- TRUE
-  det_tier <- if ("determiner_tier" %in% names(df)) {
-    ifelse(is.na(df$determiner_tier) | !nzchar(trimws(as.character(df$determiner_tier))), "Tier_3_Bronze", as.character(df$determiner_tier))
-  } else {
-    rep("Tier_1_Gold", n)
-  }
-  is_t_z <- if ("is_type_specimen" %in% names(df)) as.logical(df$is_type_specimen) else rep(FALSE, n)
-  is_t_z[is.na(is_t_z)] <- FALSE
-  is_prom <- rep(FALSE, n)
-
-  if ("is_promoted_bronze" %in% names(df)) {
-    pb <- as.logical(df$is_promoted_bronze); pb[is.na(pb)] <- FALSE; is_prom <- is_prom | pb
-  }
-  cl_z <- if ("is_confident_label_noise" %in% names(df)) as.logical(df$is_confident_label_noise) else rep(FALSE, n)
-  cl_z[is.na(cl_z)] <- FALSE
-  tier_ok_z <- (grepl("Tier_1|Gold|Tier_2|Silver", det_tier, ignore.case = TRUE) | is_prom | is_t_z) & (!cl_z | is_t_z)
-  row_wts <- ifelse(tier_ok_z, pmax(auth_w, 0.25), 0.0) * spat_w
-  is_anchor <- tier_ok_z & elig_coord & (grp_vec %in% active_taxa)
-  if (!any(tier_ok_z)) {
-    is_anchor <- (!cl_z) & elig_coord & (grp_vec %in% active_taxa)
-    row_wts <- spat_w
-  }
-
-  w_mean_z <- function(x, w) {
-    ok <- is.finite(x) & is.finite(w) & w > 0
-    if (!any(ok)) return(mean(x[is.finite(x)], na.rm = TRUE))
-    sum(x[ok] * w[ok]) / sum(w[ok])
-  }
-  w_sd_z <- function(x, w, floor_sd) {
-    ok <- is.finite(x) & is.finite(w) & w > 0
-    if (sum(ok) < 2L) return(max(stats::sd(x[is.finite(x)], na.rm = TRUE), floor_sd, na.rm = TRUE))
-    wm <- sum(x[ok] * w[ok]) / sum(w[ok])
-    denom <- sum(w[ok]) - (sum(w[ok]^2) / sum(w[ok]))
-    wv <- if (denom > 1e-6) sum(w[ok] * (x[ok] - wm)^2) / denom else stats::var(x[ok])
-    max(sqrt(max(wv, 0.0, na.rm = TRUE)), floor_sd, na.rm = TRUE)
-  }
-
-  # Data-driven cohort dispersion floor per variable strictly across active anchors (zero Bronze / label-noise leakage)
-  scale_floors <- stats::setNames(vapply(all_z_vars, function(cl) {
-    v_all <- suppressWarnings(as.numeric(df[[cl]]))
-    v_anc <- v_all[is_anchor]
-    vf <- v_anc[is.finite(v_anc)]
-    if (length(vf) < 2L) vf <- v_all[is.finite(v_all)]
-    if (length(vf) < 2L) return(1e-3)
-    sd_g <- stats::sd(vf)
-    iqr_g <- stats::IQR(vf) / 1.349
-    disp_g <- max(c(sd_g, iqr_g), na.rm = TRUE)
-    if (!is.finite(disp_g) || disp_g <= 1e-8) 1e-3 else max(0.15 * disp_g, 1e-4)
-  }, numeric(1)), all_z_vars)
-
-  z_profiles <- list()
-  if (length(active_taxa) > 0L && length(all_z_vars) > 0L) {
-    for (tx in active_taxa) {
-      idx_tx <- which(is_anchor & grp_vec == tx)
-      if (length(idx_tx) == 0L) idx_tx <- which(tier_ok_z & grp_vec == tx)
-      if (length(idx_tx) == 0L) idx_tx <- which((!cl_z) & elig_coord & grp_vec == tx)
-      if (length(idx_tx) == 0L) idx_tx <- which(grp_vec == tx)
-      w_tx <- pmax(row_wts[idx_tx], 1e-4)
-      mu_v <- stats::setNames(numeric(length(all_z_vars)), all_z_vars)
-      sd_v <- stats::setNames(numeric(length(all_z_vars)), all_z_vars)
-      for (cl in all_z_vars) {
-        x_tx <- suppressWarnings(as.numeric(df[[cl]][idx_tx]))
-        mu_v[[cl]] <- w_mean_z(x_tx, w_tx)
-        sd_v[[cl]] <- w_sd_z(x_tx, w_tx, scale_floors[[cl]])
-      }
-      z_profiles[[tx]] <- list(mu = mu_v, sd = sd_v)
+    r2_all <- adj_r2(cbind(X_ed, X_cl, mem_mat))
+    pure_ed <- max(0.0, r2_all - adj_r2(cbind(X_cl, mem_mat))); pure_cl <- max(0.0, r2_all - adj_r2(cbind(X_ed, mem_mat)))
+    pure_sp <- max(0.0, r2_all - adj_r2(cbind(X_ed, X_cl)))
+    nw_ibe <- if (exists("resolve_packera_workers", mode = "function")) resolve_packera_workers(64L) else 1L
+    f_obs <- NA_real_; p_perm <- NA_real_
+    if (requireNamespace("vegan", quietly = TRUE) && ncol(X_env) >= 1L && (n - ncol(X_env) - ncol(mem_mat)) >= 4L) {
+      rr <- tryCatch({ an <- suppressMessages(suppressWarnings(vegan::anova.cca(vegan::rda(Y ~ X_env + Condition(mem_mat)), permutations = as.integer(max(19L, n_perm)), parallel = nw_ibe))); list(F_val = as.numeric(an$F[1L]), p_val = as.numeric(an$`Pr(>F)`[1L])) }, error = function(e) NULL)
+      if (!is.null(rr)) { f_obs <- rr$F_val; p_perm <- rr$p_val }
     }
-    for (cl in all_z_vars) {
-      bar_sd <- mean(vapply(z_profiles, function(pr) pr$sd[[cl]], numeric(1)), na.rm = TRUE)
-      if (is.finite(bar_sd) && bar_sd > 0) {
-        for (tx in active_taxa) {
-          z_profiles[[tx]]$sd[[cl]] <- max(0.5 * z_profiles[[tx]]$sd[[cl]] + 0.5 * bar_sd, scale_floors[[cl]])
-        }
-      }
+    if (!is.finite(p_perm)) {
+      q0 <- qr(cbind(1.0, mem_mat)); q1 <- qr(cbind(1.0, mem_mat, X_env))
+      rss0 <- sum(qr.resid(q0, Y)^2); rss1 <- sum(qr.resid(q1, Y)^2)
+      df1 <- max(1L, q1$rank - q0$rank); df2 <- max(1L, n - q1$rank); f_obs <- ((rss0 - rss1) / df1) / max(rss1 / df2, 1e-8)
+      Y_r0 <- qr.resid(q0, Y); perms_i <- replicate(n_perm, sample.int(n), simplify = FALSE)
+      ev_p <- function(b) { Yp <- Y_r0[perms_i[[b]], , drop = FALSE]; ((sum(qr.resid(q0, Yp)^2) - sum(qr.resid(q1, Yp)^2)) / df1) / max(sum(qr.resid(q1, Yp)^2) / df2, 1e-8) }
+      f_null <- if (n_perm >= 99L && nw_ibe > 1L && exists("packera_mclapply", mode = "function")) unlist(packera_mclapply(seq_len(n_perm), ev_p, mc.cores = min(nw_ibe, n_perm)), use.names = FALSE) else vapply(seq_len(n_perm), ev_p, numeric(1))
+      p_perm <- (sum(f_null >= f_obs) + 1.0) / (n_perm + 1.0)
     }
+    inf_lbl <- if (is.finite(p_perm) && p_perm < 0.01 && (pure_ed + pure_cl) >= 0.05) "Significant Isolation by Environment (Adaptive Divergence Candidate)"
+      else if (is.finite(p_perm) && p_perm < 0.05) "Weak Environmental Cline (Plasticity / Gradual Ecotone)" else "Null IBE (Panmictic / Facultative Niche Breadth)"
+    data.frame(Modality = mod_name, N_Specimens = as.integer(n), Pure_Edaphic_AdjR2 = round(pure_ed, 4), Pure_Climate_AdjR2 = round(pure_cl, 4),
+               Pure_Space_MEM_AdjR2 = round(pure_sp, 4), Total_Explained_AdjR2 = round(max(0.0, r2_all), 4),
+               Partial_RDA_F = round(f_obs, 4), Partial_RDA_p = round(p_perm, 4), IBE_Inference = inf_lbl, stringsAsFactors = FALSE)
   }
 
-  resolve_subset_weights <- function(vars_sub) {
-    if (length(vars_sub) == 0L) return(numeric(0))
-    w_out <- stats::setNames(rep(1.0 / length(vars_sub), length(vars_sub)), vars_sub)
-    if (!is.null(rf_var_weights) && length(rf_var_weights) > 0L && !is.null(names(rf_var_weights))) {
-      hit <- intersect(vars_sub, names(rf_var_weights))
-      if (length(hit) > 0L) {
-        med_pos <- stats::median(as.numeric(rf_var_weights[rf_var_weights > 0]), na.rm = TRUE)
-        if (!is.finite(med_pos) || med_pos <= 0) med_pos <- 1.0 / length(vars_sub)
-        w_raw <- stats::setNames(rep(0.25 * med_pos, length(vars_sub)), vars_sub)
-        w_hit <- suppressWarnings(as.numeric(rf_var_weights[hit]))
-        w_hit[!is.finite(w_hit) | w_hit <= 0] <- 0.25 * med_pos
-        w_raw[hit] <- w_hit
-        w_out <- w_raw / sum(w_raw)
-      }
-    }
-    w_out
-  }
-
-  edaph_use <- if (length(primary_edaph_vars) > 0L) intersect(primary_edaph_vars, all_z_vars) else intersect(primary_env_vars, all_z_vars)
-  clim_use  <- intersect(primary_clim_vars, all_z_vars)
-  env_use   <- if (length(primary_env_vars) > 0L) intersect(primary_env_vars, all_z_vars) else all_z_vars
-
-  w_edaph <- resolve_subset_weights(edaph_use)
-  w_clim  <- resolve_subset_weights(clim_use)
-  w_env   <- resolve_subset_weights(env_use)
-
-  eval_specimen_z <- function(idx, target_tx, mode = "edaphic") {
-    if (is.na(target_tx) || !(as.character(target_tx) %in% names(z_profiles))) {
-      return(if (identical(mode, "climatic")) NA_real_ else 0.0)
-    }
-    vars_m <- if (identical(mode, "climatic")) clim_use else if (identical(mode, "env")) env_use else edaph_use
-    wts_m  <- if (identical(mode, "climatic")) w_clim else if (identical(mode, "env")) w_env else w_edaph
-    if (length(vars_m) == 0L) return(if (identical(mode, "climatic")) NA_real_ else 0.0)
-    pr <- z_profiles[[as.character(target_tx)]]
-    x_row <- vapply(vars_m, function(cl) suppressWarnings(as.numeric(df[[cl]][idx])), numeric(1))
-    mu_r <- pr$mu[vars_m]
-    sd_r <- pmax(pr$sd[vars_m], scale_floors[vars_m], 1e-4)
-    z_sq <- ((x_row - mu_r) / sd_r)^2
-    ok <- is.finite(z_sq) & is.finite(wts_m) & (wts_m > 0)
-    if (!any(ok)) return(if (identical(mode, "climatic")) NA_real_ else 0.0)
-    sqrt(sum(wts_m[ok] * z_sq[ok]) / sum(wts_m[ok]))
-  }
-
-  edaph_z_vec <- vapply(seq_len(n), function(i) eval_specimen_z(i, grp_vec[i], "edaphic"), numeric(1))
-  clim_z_vec  <- vapply(seq_len(n), function(i) eval_specimen_z(i, grp_vec[i], "climatic"), numeric(1))
-  env_z_vec   <- vapply(seq_len(n), function(i) eval_specimen_z(i, grp_vec[i], "env"), numeric(1))
-
-  list(
-    edaphic_z_score = round(edaph_z_vec, 4),
-    climatic_z_score = round(clim_z_vec, 4),
-    env_z_score = round(env_z_vec, 4),
-    primary_edaph_vars = edaph_use,
-    primary_clim_vars = clim_use,
-    primary_env_vars = env_use,
-    rf_var_weights = w_env,
-    eval_specimen_z = eval_specimen_z
-  )
+  rows_out <- list()
+  Ym <- clean_blk(unique(c(grep("^(PC|ECT_PC)[1-4]$", names(df), value = TRUE), intersect(c("aspect_ratio", "petiole_to_blade_ratio", "solidity", "dissection_index"), names(df)))))
+  if (!is.null(Ym)) rows_out[[length(rows_out) + 1L]] <- eval_blk(Ym, "Foliar_Morphology_IBE")
+  Yp <- clean_blk(intersect("delta_doy", names(df)))
+  if (!is.null(Yp)) rows_out[[length(rows_out) + 1L]] <- eval_blk(Yp, "Anthesis_Phenology_IBE")
+  if (length(rows_out) == 0L) empty_ibe else do.call(rbind, rows_out)
 }
-
-compute_type_locality_ecological_control <- function(
-  df,
-  primary_env_vars = NULL,
-  primary_edaph_vars = NULL,
-  rf_var_weights = NULL,
-  intraspecific_mode = FALSE,
-  max_radius_km = 150.0
-) {
-  n <- if (is.null(df) || !is.data.frame(df)) 0L else nrow(df)
-  if (n == 0L) {
-    return(list(
-      type_edaphic_z_score = numeric(0),
-      nearest_type_niche_taxon = character(0),
-      matches_type_lithology = logical(0)
-    ))
-  }
-
-  t_info <- if (exists(".identify_type_specimen_vec", mode = "function")) {
-    .identify_type_specimen_vec(df)
-  } else {
-    ts_raw <- if ("type_status" %in% names(df)) as.character(df$type_status) else rep("", n)
-    ts_raw[is.na(ts_raw)] <- ""
-    is_t <- grepl("\\b(holotype|lectotype|neotype|epitype|isotype|isolectotype|isoneotype|syntype|isosyntype|paratype|isoparatype|type|cotype)s?\\b", ts_raw, ignore.case = TRUE) &
-      !grepl("not a type|non-type|false type", ts_raw, ignore.case = TRUE)
-    if ("is_type_specimen" %in% names(df)) {
-      b <- as.logical(df$is_type_specimen); b[is.na(b)] <- FALSE
-      is_t <- is_t | b
-    }
-    list(type_rank = ifelse(is_t, 2L, 0L), is_type_specimen = is_t)
-  }
-  is_type_vec <- as.logical(t_info$is_type_specimen)
-  type_rank_vec <- as.integer(t_info$type_rank)
-
-  is_intra <- isTRUE(intraspecific_mode) ||
-    (("species_standardized" %in% names(df)) && length(unique(stats::na.omit(df$species_standardized))) < 2L)
-  grp_vec <- if (is_intra && "analysis_group" %in% names(df)) {
-    as.character(df$analysis_group)
-  } else if ("species_standardized" %in% names(df)) {
-    as.character(df$species_standardized)
-  } else if ("analysis_group" %in% names(df)) {
-    as.character(df$analysis_group)
-  } else {
-    rep("Unknown", n)
-  }
-  active_taxa <- sort(unique(grp_vec[!is.na(grp_vec) & nzchar(grp_vec) & grp_vec != "Unknown"]))
-  if (length(active_taxa) == 0L) active_taxa <- "Unknown"
-
-  if ((is.null(primary_env_vars) || length(primary_env_vars) == 0L) && "primary_env_predictors" %in% names(df)) {
-    raw_pe <- stats::na.omit(as.character(df$primary_env_predictors))
-    if (length(raw_pe) > 0L && nzchar(raw_pe[1L])) primary_env_vars <- trimws(unlist(strsplit(raw_pe[1L], ";", fixed = TRUE)))
-  }
-  if ((is.null(primary_edaph_vars) || length(primary_edaph_vars) == 0L) && "primary_edaph_predictors" %in% names(df)) {
-    raw_ped <- stats::na.omit(as.character(df$primary_edaph_predictors))
-    if (length(raw_ped) > 0L && nzchar(raw_ped[1L])) primary_edaph_vars <- trimws(unlist(strsplit(raw_ped[1L], ";", fixed = TRUE)))
-  }
-  cand_all <- discover_candidate_eco_predictors(df, include_pheno = FALSE, min_finite = 2L)
-  env_use <- if (!is.null(primary_env_vars) && length(primary_env_vars) > 0L) {
-    intersect(as.character(primary_env_vars), names(df))
-  } else {
-    cand_all
-  }
-  if (length(env_use) == 0L) {
-    env_use <- intersect(c("fine_soil_ph", "ilr_texture_1", "ilr_texture_2", "fine_soil_sand", "fine_soil_cec", "soil_ph", "soil_sand", "soil_cec", "bio1_temp_mean", "bio12_precip_annual"), names(df))
-  }
-  clim_pat <- "^(bio[0-9]*_|summer_moisture_|maritime_continentality_)"
-  edaph_use <- if (!is.null(primary_edaph_vars) && length(primary_edaph_vars) > 0L) {
-    intersect(as.character(primary_edaph_vars), names(df))
-  } else {
-    setdiff(env_use, grep(clim_pat, env_use, value = TRUE, ignore.case = TRUE))
-  }
-  if (length(edaph_use) == 0L) edaph_use <- env_use
-  all_vars <- unique(c(env_use, edaph_use))
-  all_vars <- all_vars[vapply(all_vars, function(cl) {
-    (cl %in% names(df)) && sum(is.finite(suppressWarnings(as.numeric(df[[cl]])))) >= 1L
-  }, logical(1))]
-
-  lat_v <- if ("decimalLatitude" %in% names(df)) suppressWarnings(as.numeric(df$decimalLatitude)) else if ("latitude" %in% names(df)) suppressWarnings(as.numeric(df$latitude)) else rep(NA_real_, n)
-  lon_v <- if ("decimalLongitude" %in% names(df)) suppressWarnings(as.numeric(df$decimalLongitude)) else if ("longitude" %in% names(df)) suppressWarnings(as.numeric(df$longitude)) else rep(NA_real_, n)
-  has_xy <- is.finite(lat_v) & is.finite(lon_v)
-  has_unc_col <- ("coordinateUncertaintyInMeters" %in% names(df)) || ("coordinateUncertainty" %in% names(df))
-  unc_v <- if ("coordinateUncertaintyInMeters" %in% names(df)) {
-    suppressWarnings(as.numeric(df$coordinateUncertaintyInMeters))
-  } else if ("coordinateUncertainty" %in% names(df)) {
-    suppressWarnings(as.numeric(df$coordinateUncertainty))
-  } else {
-    rep(NA_real_, n)
-  }
-  yr_tc <- if ("year" %in% names(df)) suppressWarnings(as.numeric(df$year)) else rep(NA_real_, n)
-  has_yr_tc <- ("year" %in% names(df)) && any(is.finite(yr_tc))
-  # Never coerce missing coordinateUncertaintyInMeters on pre-GPS historical types to 0 m (Daru et al. 2018)
-  modern_gps_tc <- if (has_yr_tc) (is.finite(yr_tc) & yr_tc >= 2000) else !has_unc_col
-  is_precise_edaph <- (is.finite(unc_v) & unc_v > 0.0 & unc_v <= 2000.0) | (!is.finite(unc_v) & modern_gps_tc)
-  is_precise_clim <- !is.finite(unc_v) | (unc_v >= 0.0 & unc_v <= 10000.0)
-  reg_v <- if ("regional_group" %in% names(df)) trimws(as.character(df$regional_group)) else rep("", n)
-  reg_v[is.na(reg_v) | tolower(reg_v) %in% c("na", "unknown", "unknown_ecoregion")] <- ""
-  det_t <- if ("determiner_tier" %in% names(df)) {
-    ifelse(is.na(df$determiner_tier) | !nzchar(trimws(as.character(df$determiner_tier))), "Tier_3_Bronze", as.character(df$determiner_tier))
-  } else {
-    rep("Tier_1_Gold", n)
-  }
-  is_gold_v <- grepl("tier_?[01]|gold|type", det_t, ignore.case = TRUE) | is_type_vec
-  is_anc_v <- is_gold_v | grepl("tier_?2|silver", det_t, ignore.case = TRUE)
-  if ("is_promoted_bronze" %in% names(df)) {
-    pb <- as.logical(df$is_promoted_bronze); pb[is.na(pb)] <- FALSE; is_anc_v <- is_anc_v | pb
-  }
-
-  haversine_km <- function(lat1, lon1, lat2_vec, lon2_vec) {
-    rad <- pi / 180.0
-    dlat <- (lat2_vec - lat1) * rad
-    dlon <- (lon2_vec - lon1) * rad
-    a <- sin(dlat / 2.0)^2 + cos(lat1 * rad) * cos(lat2_vec * rad) * sin(dlon / 2.0)^2
-    6371.0 * (2.0 * atan2(sqrt(pmax(0.0, a)), sqrt(pmax(0.0, 1.0 - a))))
-  }
-
-  scale_floors <- stats::setNames(vapply(all_vars, function(cl) {
-    v <- suppressWarnings(as.numeric(df[[cl]]))
-    vf <- v[is.finite(v)]
-    if (length(vf) < 2L) return(1.0)
-    disp_g <- max(c(stats::mad(vf, na.rm = TRUE), stats::sd(vf, na.rm = TRUE), stats::IQR(vf, na.rm = TRUE) / 1.349), na.rm = TRUE)
-    if (!is.finite(disp_g) || disp_g <= 1e-8) 1.0 else max(0.20 * disp_g, 1e-4)
-  }, numeric(1)), all_vars)
-
-  lith_col <- if ("sgmc_lithology_class" %in% names(df)) {
-    "sgmc_lithology_class"
-  } else if ("Dominant_Lithology_Class" %in% names(df)) {
-    "Dominant_Lithology_Class"
-  } else {
-    NULL
-  }
-  lith_vec <- if (!is.null(lith_col)) trimws(as.character(df[[lith_col]])) else rep("", n)
-  lith_vec[is.na(lith_vec) | tolower(lith_vec) %in% c("na", "unknown", "none", "unmapped")] <- ""
-
-  type_profiles <- list()
-  for (tx in active_taxa) {
-    tx_rows <- which(grp_vec == tx)
-    type_rows <- tx_rows[is_type_vec[tx_rows]]
-    loc_rows <- integer(0)
-    loc_wts <- numeric(0)
-    if (length(type_rows) > 0L) {
-      near_gold <- integer(0)
-      gold_cand <- setdiff(tx_rows[is_gold_v[tx_rows]], type_rows)
-      if (length(gold_cand) > 0L) {
-        type_regs <- unique(reg_v[type_rows[nzchar(reg_v[type_rows])]])
-        gold_cand_eco <- gold_cand[is_precise_edaph[gold_cand]]
-        if (length(gold_cand_eco) == 0L) gold_cand_eco <- gold_cand
-        near_eco <- if (length(type_regs) > 0L) gold_cand_eco[reg_v[gold_cand_eco] %in% type_regs] else integer(0)
-        if (length(near_eco) == 0L && length(type_regs) > 0L) {
-          near_eco <- gold_cand[reg_v[gold_cand] %in% type_regs]
-        }
-        near_xy <- integer(0)
-        type_xy <- type_rows[has_xy[type_rows]]
-        cand_xy <- gold_cand[has_xy[gold_cand] & is_precise_edaph[gold_cand]]
-        if (length(cand_xy) == 0L) cand_xy <- gold_cand[has_xy[gold_cand]]
-        if (length(type_xy) > 0L && length(cand_xy) > 0L) {
-          min_d <- rep(Inf, length(cand_xy))
-          for (ti in type_xy) {
-            min_d <- pmin(min_d, haversine_km(lat_v[ti], lon_v[ti], lat_v[cand_xy], lon_v[cand_xy]))
-          }
-          near_xy <- cand_xy[is.finite(min_d) & (min_d <= max_radius_km)]
-        }
-        near_gold <- unique(c(near_eco, near_xy))
-      }
-      loc_rows <- c(type_rows, near_gold)
-      loc_wts <- c(ifelse(type_rank_vec[type_rows] == 2L, 3.5, 2.5), rep(1.0, length(near_gold)))
-    } else {
-      anc_tx <- tx_rows[is_anc_v[tx_rows]]
-      loc_rows <- if (length(anc_tx) >= 1L) anc_tx else tx_rows
-      loc_wts <- rep(1.0, length(loc_rows))
-    }
-
-    mu_tx <- stats::setNames(numeric(length(all_vars)), all_vars)
-    sd_tx <- stats::setNames(numeric(length(all_vars)), all_vars)
-    for (cl in all_vars) {
-      col_v <- suppressWarnings(as.numeric(df[[cl]]))
-      is_edaph_col <- cl %in% edaph_use
-      type_rows_precise <- if (is_edaph_col) type_rows[is_precise_edaph[type_rows]] else type_rows[is_precise_clim[type_rows]]
-      loc_rows_precise <- if (is_edaph_col) loc_rows[is_precise_edaph[loc_rows]] else loc_rows[is_precise_clim[loc_rows]]
-      if (length(loc_rows_precise) == 0L || !any(is.finite(col_v[loc_rows_precise]))) {
-        loc_rows_precise <- loc_rows
-      }
-      t_vals <- if (length(type_rows_precise) > 0L) col_v[type_rows_precise] else numeric(0)
-      t_vals <- t_vals[is.finite(t_vals)]
-      l_vals <- if (length(loc_rows_precise) > 0L) col_v[loc_rows_precise] else numeric(0)
-      l_vals <- l_vals[is.finite(l_vals)]
-      x_all_tx <- col_v[tx_rows]
-
-      if (length(t_vals) > 0L && length(l_vals) > 0L) {
-        mu_tx[[cl]] <- 0.65 * stats::median(t_vals) + 0.35 * stats::median(l_vals)
-      } else if (length(t_vals) > 0L) {
-        mu_tx[[cl]] <- stats::median(t_vals)
-      } else if (length(l_vals) > 0L) {
-        mu_tx[[cl]] <- stats::median(l_vals)
-      } else {
-        t_fallback <- col_v[type_rows]
-        t_fallback <- t_fallback[is.finite(t_fallback)]
-        if (length(t_fallback) > 0L) {
-          mu_tx[[cl]] <- stats::median(t_fallback)
-        } else {
-          mu_tx[[cl]] <- stats::median(x_all_tx[is.finite(x_all_tx)], na.rm = TRUE)
-        }
-      }
-      if (!is.finite(mu_tx[[cl]])) mu_tx[[cl]] <- 0.0
-
-      anc_tx_rows <- tx_rows[is_anc_v[tx_rows]]
-      x_anc_tx <- col_v[anc_tx_rows]
-      pool_x <- if (length(l_vals) >= 2L) {
-        l_vals
-      } else if (sum(is.finite(x_anc_tx)) >= 2L) {
-        x_anc_tx[is.finite(x_anc_tx)]
-      } else {
-        x_all_tx[is.finite(x_all_tx)]
-      }
-      mad_v <- if (length(pool_x) >= 2L) stats::mad(pool_x, center = mu_tx[[cl]], na.rm = TRUE) else NA_real_
-      sd_v <- if (length(pool_x) >= 2L) stats::sd(pool_x, na.rm = TRUE) else NA_real_
-      disp_tx <- if (is.finite(mad_v) && mad_v > 1e-6) mad_v else sd_v
-      sd_tx[[cl]] <- max(c(disp_tx, scale_floors[[cl]]), na.rm = TRUE)
-      if (!is.finite(sd_tx[[cl]]) || sd_tx[[cl]] <= 1e-6) sd_tx[[cl]] <- scale_floors[[cl]]
-    }
-
-    type_lith_rows <- type_rows[is_precise_edaph[type_rows]]
-    lith_ref <- unique(lith_vec[type_lith_rows[nzchar(lith_vec[type_lith_rows])]])
-    if (length(lith_ref) == 0L) {
-      loc_lith_precise <- loc_rows[is_precise_edaph[loc_rows]]
-      l_cand <- lith_vec[loc_lith_precise[nzchar(lith_vec[loc_lith_precise])]]
-      if (length(l_cand) == 0L) {
-        l_cand <- lith_vec[loc_rows[nzchar(lith_vec[loc_rows])]]
-      }
-      if (length(l_cand) == 0L) {
-        l_cand <- lith_vec[type_rows[nzchar(lith_vec[type_rows])]]
-      }
-      if (length(l_cand) > 0L) {
-        tb_l <- table(l_cand)
-        lith_ref <- names(tb_l[tb_l == max(tb_l)])
-      }
-    }
-    type_profiles[[tx]] <- list(mu = mu_tx, sd = sd_tx, lith_ref = lith_ref)
-  }
-
-  get_wts <- function(vars_s) {
-    if (length(vars_s) == 0L) return(numeric(0))
-    w <- stats::setNames(rep(1.0 / length(vars_s), length(vars_s)), vars_s)
-    if (!is.null(rf_var_weights) && length(rf_var_weights) > 0L && !is.null(names(rf_var_weights))) {
-      hit <- intersect(vars_s, names(rf_var_weights))
-      if (length(hit) > 0L) {
-        w_pos <- suppressWarnings(as.numeric(rf_var_weights[hit]))
-        w_pos[!is.finite(w_pos) | w_pos <= 0] <- 1e-4
-        w[hit] <- w_pos
-        w <- w / sum(w)
-      }
-    }
-    w
-  }
-  edaph_v <- intersect(edaph_use, all_vars)
-  env_v <- intersect(env_use, all_vars)
-  w_ed <- get_wts(edaph_v)
-  w_en <- get_wts(env_v)
-
-  calc_z <- function(idx, tx_name, vars_s, wts_s) {
-    if (length(vars_s) == 0L || is.na(tx_name) || !(tx_name %in% names(type_profiles))) return(0.0)
-    pr <- type_profiles[[tx_name]]
-    xv <- vapply(vars_s, function(cl) suppressWarnings(as.numeric(df[[cl]][idx])), numeric(1))
-    z2 <- ((xv - pr$mu[vars_s]) / pmax(pr$sd[vars_s], scale_floors[vars_s], 1e-4))^2
-    ok <- is.finite(z2) & is.finite(wts_s) & (wts_s > 0)
-    if (!any(ok)) return(0.0)
-    sqrt(sum(wts_s[ok] * z2[ok]) / sum(wts_s[ok]))
-  }
-
-  type_edaphic_z <- numeric(n)
-  nearest_type_niche <- character(n)
-  matches_lith <- rep(TRUE, n)
-
-  for (i in seq_len(n)) {
-    g_sp <- grp_vec[i]
-    if (is.na(g_sp) || !(g_sp %in% active_taxa)) g_sp <- active_taxa[1L]
-    z_ed_vec <- vapply(active_taxa, function(tx) calc_z(i, tx, edaph_v, w_ed), numeric(1))
-    z_en_vec <- vapply(active_taxa, function(tx) calc_z(i, tx, env_v, w_en), numeric(1))
-    comb_z <- 0.60 * z_ed_vec + 0.40 * z_en_vec
-    g_pos <- match(g_sp, active_taxa)
-    type_edaphic_z[i] <- round(z_ed_vec[if (is.na(g_pos)) 1L else g_pos], 4)
-    nearest_type_niche[i] <- active_taxa[which.min(comb_z)][1L]
-
-    pr_g <- type_profiles[[g_sp]]
-    if (!is.null(pr_g) && length(pr_g$lith_ref) > 0L && nzchar(lith_vec[i])) {
-      matches_lith[i] <- lith_vec[i] %in% pr_g$lith_ref
-    } else {
-      matches_lith[i] <- type_edaphic_z[i] <= 2.5
-    }
-  }
-
-  list(
-    type_edaphic_z_score = type_edaphic_z,
-    nearest_type_niche_taxon = nearest_type_niche,
-    matches_type_lithology = as.logical(matches_lith)
-  )
-}
-

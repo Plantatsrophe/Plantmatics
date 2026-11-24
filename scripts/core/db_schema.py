@@ -57,6 +57,7 @@ ENVIRONMENTAL_CACHE_COLUMNS: Tuple[str, ...] = (
     "is_rock_outcrop",
     "outcrop_class",
     "ssurgo_rock_outcrop_pct",
+    "ssurgo_lithic_series_pct",
     "ssurgo_bedrock_depth_cm",
     "ssurgo_sand_pct",
     "ssurgo_clay_pct",
@@ -391,12 +392,17 @@ def _build_master_view_ddl() -> str:
         srf.expected_doy AS expected_doy,
         srf.hopkins_expected AS hopkins_expected,
         srf.delta_doy AS delta_doy,
+        srf.hopkins_adjusted_doy_resid AS hopkins_adjusted_doy_resid,
+        srf.anthesis_dominance_weight AS anthesis_dominance_weight,
+        srf.allochronic_bimodality_delta_bic AS allochronic_bimodality_delta_bic,
         srf.pheno_timing_category AS pheno_timing_category,
         srf.anthesis_filter_status AS anthesis_filter_status,
         srf.edaphic_z_score AS edaphic_z_score,
         srf.climatic_z_score AS climatic_z_score,
         srf.type_edaphic_z_score AS type_edaphic_z_score,
         srf.nearest_type_niche_taxon AS nearest_type_niche_taxon,
+        srf.nearest_type_niche_basionym AS nearest_type_niche_basionym,
+        srf.nearest_type_basionym_edaphic_z AS nearest_type_basionym_edaphic_z,
         srf.matches_type_lithology AS matches_type_lithology,
         srf.primary_env_predictors AS primary_env_predictors,
         srf.primary_clim_predictors AS primary_clim_predictors,
@@ -1330,12 +1336,17 @@ def _build_schema_ddl() -> str:
         hopkins_expected REAL,
         delta_doy REAL,
         hopkins_adjusted_doy REAL,
+        hopkins_adjusted_doy_resid REAL,
+        anthesis_dominance_weight REAL,
+        allochronic_bimodality_delta_bic REAL,
         pheno_timing_category TEXT,
         anthesis_filter_status TEXT,
         edaphic_z_score REAL,
         climatic_z_score REAL,
         type_edaphic_z_score REAL,
         nearest_type_niche_taxon TEXT,
+        nearest_type_niche_basionym TEXT,
+        nearest_type_basionym_edaphic_z REAL,
         matches_type_lithology INTEGER,
         primary_env_predictors TEXT,
         primary_clim_predictors TEXT,
@@ -1692,6 +1703,16 @@ _DYNAMIC_TABLE_MIGRATION_SPECS: Dict[str, Tuple[Tuple[str, str], ...]] = {
             ("primary_env_predictors", "TEXT"),
             ("primary_clim_predictors", "TEXT"),
             ("primary_edaph_predictors", "TEXT"),
+            ("ecotype_regime", "TEXT"),
+            ("lithic_outcrop_index", "REAL"),
+            ("summer_moisture_deficit_idx", "REAL"),
+            ("maritime_continentality_idx", "REAL"),
+            ("hopkins_adjusted_doy", "REAL"),
+            ("hopkins_adjusted_doy_resid", "REAL"),
+            ("anthesis_dominance_weight", "REAL"),
+            ("allochronic_bimodality_delta_bic", "REAL"),
+            ("nearest_type_niche_basionym", "TEXT"),
+            ("nearest_type_basionym_edaphic_z", "REAL"),
             ("env_mahal_d2", "REAL"),
             ("env_mcd_outlier_flag", "INTEGER"),
         ]
@@ -2428,9 +2449,10 @@ def init_db_schema(conn: sqlite3.Connection) -> None:
             el_cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(extracted_leaves);").fetchall()}
             leh_cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(leaf_efa_harmonics);").fetchall()}
             om_cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(otu_morphometrics);").fetchall()}
+            ec_cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(environmental_cache);").fetchall()}
             srf_cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(spatial_rf_predictions);").fetchall()}
             mv_cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(v_integrative_triage_master);").fetchall()}
-            req_mv_cols = {"is_passive", "scale_source", "AR_inv_std", "log1p_capitulum_count", "corymb_head_count_est", "radiate_head_fraction", "blade_cie_l_norm", "blade_cie_l_sheet_delta", "blade_cie_a_delta", "blade_cie_b_delta", "basal_cordate_index", "blade_cie_l_q85_sheet_delta", "abaxial_leaf_fraction", "nearest_type_basionym", "reproductive_trait_status", "ecoregion_can1", "ecoregion_can2", "hybrid_zone_cohesion_pass", "hybrid_parent_1", "hybrid_parent_2", "cda_oof_posterior_prob", "self_morph_mahal_d2", "open_set_df", "cryptic_non_clinal_pass", "resurrection_basionym", "w_geno_kappa", "geno_predicted_taxon", "geno_linkage_tier", "is_geno_admixed", "coalescent_gdi", "hybrid_generation_class", "cytonuclear_discordant", "public_plastome_match", "public_its_match", "waxy_lineage_match", "public_backbone_clade", "public_phytop_ils_index", "public_phytop_ih_index", "genomic_propagation_tier", "cluster_propagated_gdi", "cytology_linkage_tier", "voucher_sporophytic_2n", "voucher_ploidy_level", "taxon_reported_cytotypes", "is_multi_cytotype_taxon", "cytotype_reproductive_barrier_pass", "soil_ca_mg_molar_ratio", "soil_ultramafic_ni_cr_index", "soil_carbonate_c_pct", "is_nwi_wetland", "nwi_wetland_system", "nwi_wetland_dist_m", "hydro_edaphic_niche_regime", "wetland_fidelity_concordance", "basionym_synonymy_type", "backbone_basionym_name", "protologue_url", "natureserve_global_rank", "nwpl_indicator_code", "nwpl_wetland_score", "is_centroid_or_inst_coord", "coord_quarantine_reason", "typified_basionym", "verbatim_taxon_concept", "concept_synonymy_status", "identification_year", "is_open_or_hybrid_concept", "env_mahal_d2", "env_mcd_outlier_flag"}
+            req_mv_cols = {"is_passive", "scale_source", "AR_inv_std", "log1p_capitulum_count", "corymb_head_count_est", "radiate_head_fraction", "blade_cie_l_norm", "blade_cie_l_sheet_delta", "blade_cie_a_delta", "blade_cie_b_delta", "basal_cordate_index", "blade_cie_l_q85_sheet_delta", "abaxial_leaf_fraction", "nearest_type_basionym", "reproductive_trait_status", "ecoregion_can1", "ecoregion_can2", "hybrid_zone_cohesion_pass", "hybrid_parent_1", "hybrid_parent_2", "cda_oof_posterior_prob", "self_morph_mahal_d2", "open_set_df", "cryptic_non_clinal_pass", "resurrection_basionym", "w_geno_kappa", "geno_predicted_taxon", "geno_linkage_tier", "is_geno_admixed", "coalescent_gdi", "hybrid_generation_class", "cytonuclear_discordant", "public_plastome_match", "public_its_match", "waxy_lineage_match", "public_backbone_clade", "public_phytop_ils_index", "public_phytop_ih_index", "genomic_propagation_tier", "cluster_propagated_gdi", "cytology_linkage_tier", "voucher_sporophytic_2n", "voucher_ploidy_level", "taxon_reported_cytotypes", "is_multi_cytotype_taxon", "cytotype_reproductive_barrier_pass", "soil_ca_mg_molar_ratio", "soil_ultramafic_ni_cr_index", "soil_carbonate_c_pct", "is_nwi_wetland", "nwi_wetland_system", "nwi_wetland_dist_m", "hydro_edaphic_niche_regime", "wetland_fidelity_concordance", "basionym_synonymy_type", "backbone_basionym_name", "protologue_url", "natureserve_global_rank", "nwpl_indicator_code", "nwpl_wetland_score", "is_centroid_or_inst_coord", "coord_quarantine_reason", "typified_basionym", "verbatim_taxon_concept", "concept_synonymy_status", "identification_year", "is_open_or_hybrid_concept", "env_mahal_d2", "env_mcd_outlier_flag", "ssurgo_lithic_series_pct", "ecotype_regime", "lithic_outcrop_index", "summer_moisture_deficit_idx", "maritime_continentality_idx", "hopkins_adjusted_doy", "hopkins_adjusted_doy_resid", "anthesis_dominance_weight", "allochronic_bimodality_delta_bic", "nearest_type_niche_basionym", "nearest_type_basionym_edaphic_z"}
             if (
                 "leaf_zone" not in el_cols
                 or "area_mm2" not in el_cols
@@ -2461,8 +2483,19 @@ def init_db_schema(conn: sqlite3.Connection) -> None:
                 or "basal_cordate_index" not in om_cols
                 or "blade_cie_l_q85_sheet_delta" not in om_cols
                 or "abaxial_leaf_fraction" not in om_cols
+                or "ssurgo_lithic_series_pct" not in ec_cols
                 or "env_mahal_d2" not in srf_cols
                 or "env_mcd_outlier_flag" not in srf_cols
+                or "ecotype_regime" not in srf_cols
+                or "lithic_outcrop_index" not in srf_cols
+                or "summer_moisture_deficit_idx" not in srf_cols
+                or "maritime_continentality_idx" not in srf_cols
+                or "hopkins_adjusted_doy" not in srf_cols
+                or "hopkins_adjusted_doy_resid" not in srf_cols
+                or "anthesis_dominance_weight" not in srf_cols
+                or "allochronic_bimodality_delta_bic" not in srf_cols
+                or "nearest_type_niche_basionym" not in srf_cols
+                or "nearest_type_basionym_edaphic_z" not in srf_cols
                 or not req_mv_cols.issubset(mv_cols)
             ):
                 _migrate_dynamic_schema_columns(conn, recreate_view=True)

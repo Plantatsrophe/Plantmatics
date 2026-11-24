@@ -314,7 +314,8 @@ render_step05a_ecological_niche_png <- function(
 render_step05b_hopkins_phenology_png <- function(
   df,
   baseline_info = NULL,
-  out_pheno_path = "outputs/figures/fig05b_hopkins_circular_phenology.png"
+  out_pheno_path = "outputs/figures/fig05b_hopkins_circular_phenology.png",
+  pheno_summary = NULL
 ) {
   if (!requireNamespace("ggplot2", quietly = TRUE) || !requireNamespace("patchwork", quietly = TRUE)) {
     return(invisible(""))
@@ -389,50 +390,56 @@ render_step05b_hopkins_phenology_png <- function(
   month_lbls <- c("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
 
   sub_polar <- sub_p[is.finite(sub_p$hop_clean) & (sub_p$hop_clean >= 1.0) & (sub_p$hop_clean <= 366.25) & !is.na(sub_p$plot_group) & nzchar(as.character(sub_p$plot_group)), , drop = FALSE]
+  .pick_scalar <- function(obj, keys) {
+    if (!is.list(obj)) return(NA_real_)
+    hit <- names(obj)[tolower(names(obj)) %in% tolower(keys)]
+    if (length(hit) > 0L) { vv <- suppressWarnings(as.numeric(obj[[hit[1L]]])); vv <- vv[is.finite(vv)]; if (length(vv) > 0L) return(vv[1L]) }
+    NA_real_
+  }
+  w_circ_mean_doy <- .pick_scalar(baseline_info, c("anthesis_weighted_circ_mean_doy", "weighted_circ_mean_doy"))
+  if (!is.finite(w_circ_mean_doy) && nrow(sub_polar) >= 1L) {
+    w_anth <- if ("anthesis_dominance_weight" %in% names(sub_polar)) {
+      wv <- suppressWarnings(as.numeric(sub_polar$anthesis_dominance_weight)); ifelse(is.finite(wv) & wv > 0.0, wv, 1.0)
+    } else if (any(c("n_anthesis", "anthesis_head_count") %in% names(sub_polar))) {
+      na_v <- suppressWarnings(as.numeric(sub_polar[[intersect(c("n_anthesis", "anthesis_head_count"), names(sub_polar))[1L]]]))
+      tc_c <- intersect(c("total_capitula", "corymb_head_count_est"), names(sub_polar))
+      tc_v <- if (length(tc_c) > 0L) suppressWarnings(as.numeric(sub_polar[[tc_c[1L]]])) else na_v
+      ifelse(is.finite(na_v) & na_v > 0.0, pmin(1.0, pmax(0.10, na_v / pmax(ifelse(is.finite(tc_v), tc_v, na_v), na_v, 1.0))), 1.0)
+    } else rep(1.0, nrow(sub_polar))
+    th_p <- 2.0 * pi * sub_polar$hop_clean / 365.25; s_w <- sum(w_anth * sin(th_p), na.rm = TRUE); c_w <- sum(w_anth * cos(th_p), na.rm = TRUE)
+    if (is.finite(s_w) && is.finite(c_w) && sqrt(s_w^2 + c_w^2) > 1e-8) w_circ_mean_doy <- ((atan2(s_w, c_w) * (365.25 / (2.0 * pi)) - 1.0) %% 365.25) + 1.0
+  }
+  delta_bic <- NA_real_
+  for (.src in list(pheno_summary, baseline_info, vdf)) {
+    if (!is.finite(delta_bic)) delta_bic <- .pick_scalar(.src, c("allochronic_bimodality_delta_bic", "Allochronic_Bimodality_Delta_BIC"))
+  }
+  if (!is.finite(delta_bic) && !is.null(attr(df, "allochronic_bimodality_delta_bic"))) delta_bic <- suppressWarnings(as.numeric(attr(df, "allochronic_bimodality_delta_bic"))[1L])
+  p_met <- c(if (is.finite(w_circ_mean_doy)) sprintf("Anthesis-weighted circular mean = DOY %.1f", w_circ_mean_doy) else NULL, if (is.finite(delta_bic)) sprintf("Allochronic bimodal Delta_BIC = %+.2f", delta_bic) else NULL)
+  polar_sub <- if (length(p_met) > 0L) paste(c("Hopkins-adjusted to cohort reference latitude & elevation", paste(p_met, collapse = " | ")), collapse = "\n") else "Hopkins-adjusted to cohort reference\nlatitude & elevation"
   p_polar <- ggplot2::ggplot(sub_polar, ggplot2::aes(x = .data$hop_clean, fill = .data$plot_group, color = .data$plot_group)) +
     ggplot2::geom_histogram(binwidth = 365.25 / 24.0, boundary = 1, position = "identity", alpha = 0.25, linewidth = 0.65, show.legend = FALSE, na.rm = TRUE) +
     ggplot2::coord_polar(start = 0) +
     ggplot2::scale_x_continuous(limits = c(1, 366.25), breaks = month_breaks, labels = month_lbls) +
-    ggplot2::scale_fill_manual(values = pal_map) +
-    ggplot2::scale_color_manual(values = pal_map) +
+    ggplot2::scale_fill_manual(values = pal_map) + ggplot2::scale_color_manual(values = pal_map) +
     theme_packera_pub(base_size = 9.5) +
     ggplot2::theme(plot.title.position = "plot", plot.margin = ggplot2::margin(6, 14, 6, 8, unit = "pt")) +
-    ggplot2::labs(
-      title = "B. Circular Anthesis Clock",
-      subtitle = "Hopkins-adjusted to cohort reference\nlatitude & elevation",
-      x = NULL, y = "Anthesis Count"
-    )
+    ggplot2::labs(title = "B. Circular Anthesis Clock", subtitle = polar_sub, x = NULL, y = "Anthesis Count")
 
   # Panel C: Circular Phenological Anomaly Residuals (Delta DOY)
-  if (!any(is.finite(sub_p$ddoy))) {
-    med_h <- stats::median(sub_p$hop_clean, na.rm = TRUE)
-    sub_p$ddoy <- sub_p$hop_clean - med_h
-  }
+  if (!any(is.finite(sub_p$ddoy))) sub_p$ddoy <- sub_p$hop_clean - stats::median(sub_p$hop_clean, na.rm = TRUE)
   sub_dd <- sub_p[is.finite(sub_p$ddoy), , drop = FALSE]
   p_resid <- ggplot2::ggplot(sub_dd, ggplot2::aes(x = .data$ddoy, y = .data$plot_group)) +
     ggplot2::geom_vline(xintercept = c(-21, 0, 21), linetype = c("dashed", "dotted", "dashed"), color = c("#D55E00", "#9CA3AF", "#D55E00"), linewidth = 0.55) +
     ggplot2::geom_boxplot(fill = NA, color = "#4B5563", outlier.shape = NA, width = if (length(active_groups) <= 1L) 0.32 else 0.55, linewidth = 0.45) +
     ggplot2::geom_jitter(ggplot2::aes(color = .data$plot_group, shape = .data$plot_group), height = 0.16, width = 0, size = 2.0, stroke = 0.8, alpha = 0.82, show.legend = FALSE) +
-    ggplot2::scale_color_manual(values = pal_map) +
-    ggplot2::scale_shape_manual(values = shp_map) +
-    ggplot2::scale_y_discrete(labels = icn_discrete_labeller(abbreviate_genus = TRUE)) +
-    theme_packera_pub() +
-    ggplot2::labs(
-      title = "C. Circular Phenological Residuals (\u0394DOY)",
-      subtitle = "Dashed lines mark \u00b121-day phenological isolation window",
-      x = "Hopkins-Adjusted Anthesis Residual \u0394DOY (days)",
-      y = NULL
-    )
+    ggplot2::scale_color_manual(values = pal_map) + ggplot2::scale_shape_manual(values = shp_map) +
+    ggplot2::scale_y_discrete(labels = icn_discrete_labeller(abbreviate_genus = TRUE)) + theme_packera_pub() +
+    ggplot2::labs(title = "C. Circular Phenological Residuals (\u0394DOY)", subtitle = "Dashed lines mark \u00b121-day phenological isolation window", x = "Hopkins-Adjusted Anthesis Residual \u0394DOY (days)", y = NULL)
 
   dyn_h_05b <- max(8.8, 5.2 + 0.25 * length(active_groups))
-  plate_05b <- ((p_lat | p_polar) / p_resid) +
-    patchwork::plot_layout(heights = c(1.15, 0.95)) +
-    patchwork::plot_annotation(
-      title = "Step 05: Circular Anthesis Phenology & Hopkins Bioclimatic Isolation",
-      theme = ggplot2::theme(plot.title = ggplot2::element_text(face = "bold", size = 12.4))
-    )
-  canon_05b <- file.path(fdir, "fig05b_hopkins_circular_phenology.png")
-  save_packera_png_300(plate_05b, canon_05b, width = 13.8, height = dyn_h_05b, also_copy_to = out_pheno_path)
+  plate_05b <- ((p_lat | p_polar) / p_resid) + patchwork::plot_layout(heights = c(1.15, 0.95)) +
+    patchwork::plot_annotation(title = "Step 05: Circular Anthesis Phenology & Hopkins Bioclimatic Isolation", theme = ggplot2::theme(plot.title = ggplot2::element_text(face = "bold", size = 12.4)))
+  save_packera_png_300(plate_05b, file.path(fdir, "fig05b_hopkins_circular_phenology.png"), width = 13.8, height = dyn_h_05b, also_copy_to = out_pheno_path)
 }
 
 for (.sdm_fig_p in c(

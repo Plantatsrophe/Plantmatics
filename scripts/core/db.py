@@ -115,6 +115,7 @@ ENVIRONMENTAL_CACHE_COLUMNS: Tuple[str, ...] = (
     "is_rock_outcrop",
     "outcrop_class",
     "ssurgo_rock_outcrop_pct",
+    "ssurgo_lithic_series_pct",
     "ssurgo_bedrock_depth_cm",
     "ssurgo_sand_pct",
     "ssurgo_clay_pct",
@@ -2691,10 +2692,12 @@ _SRF_INT_COLS: Tuple[str, ...] = (
     "n_observed_modalities",
 )
 _SRF_STR_COLS: Tuple[str, ...] = (
+    "ecotype_regime",
     "rf_predicted_taxon",
     "rf_prediction_source",
     "edaphic_best_fit_taxon",
     "nearest_type_niche_taxon",
+    "nearest_type_niche_basionym",
     "spatial_block_id",
     "pheno_timing_category",
     "anthesis_filter_status",
@@ -2708,6 +2711,9 @@ _SRF_LIST_STR_COLS: Tuple[str, ...] = (
     "primary_edaph_predictors",
 )
 _SRF_FLOAT_COLS: Tuple[str, ...] = (
+    "lithic_outcrop_index",
+    "summer_moisture_deficit_idx",
+    "maritime_continentality_idx",
     "rf_predicted_prob",
     "rf_given_taxon_prob",
     "spatial_block_cv_acc",
@@ -2717,9 +2723,13 @@ _SRF_FLOAT_COLS: Tuple[str, ...] = (
     "hopkins_expected",
     "delta_doy",
     "hopkins_adjusted_doy",
+    "hopkins_adjusted_doy_resid",
+    "anthesis_dominance_weight",
+    "allochronic_bimodality_delta_bic",
     "edaphic_z_score",
     "climatic_z_score",
     "type_edaphic_z_score",
+    "nearest_type_basionym_edaphic_z",
     "env_mahal_d2",
     *WC_BIO_COLUMNS,
 )

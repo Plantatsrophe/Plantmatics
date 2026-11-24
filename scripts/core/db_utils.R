@@ -188,6 +188,136 @@ PACKERA_DB_WC_BIO_COLS <- c(
   "bio19_precip_coldest_qtr"
 )
 
+PACKERA_DB_ENV_CACHE_COLS <- c(
+  "lat_lon_key",
+  "catalogNumber",
+  "latitude",
+  "longitude",
+  "musym",
+  "muname",
+  "taxsuborder",
+  "taxgreatgroup",
+  "is_rock_outcrop",
+  "outcrop_class",
+  "ssurgo_rock_outcrop_pct",
+  "ssurgo_lithic_series_pct",
+  "ssurgo_bedrock_depth_cm",
+  "ssurgo_sand_pct",
+  "ssurgo_clay_pct",
+  "ssurgo_ph",
+  "ssurgo_om_pct",
+  "ssurgo_cec",
+  "ssurgo_aws_0_50cm",
+  "polaris_ph_30m",
+  "polaris_sand_30m",
+  "polaris_clay_30m",
+  "polaris_om_30m",
+  "polaris_bd_30m",
+  "polaris_ksat_30m",
+  "solus_resdept_cm",
+  "solus_fragvol_pct",
+  "solus_sand_pct",
+  "solus_clay_pct",
+  "solus_silt_pct",
+  "solus_cec",
+  "topo_tpi_30m",
+  "topo_slope_deg",
+  "topo_hli_30m",
+  "topo_twi_30m",
+  "elevation_m",
+  "fine_soil_ph",
+  "fine_soil_sand",
+  "fine_soil_clay",
+  "soil_silt_pct",
+  "ilr_texture_1",
+  "ilr_texture_2",
+  "fine_soil_cec",
+  "fine_cfvo_pct",
+  "fine_bedrock_depth_cm",
+  "sgmc_lithology_class",
+  "is_azonal_lithology",
+  "buffer_radius_m",
+  "high_coord_uncertainty_flag",
+  "is_training_eligible_coord",
+  "is_clim_eligible_coord",
+  "is_edaphic_eligible_coord",
+  "edaphic_coord_weight",
+  "ph_q10_buffer",
+  "ph_q90_buffer",
+  "min_bedrock_depth_buffer_cm",
+  "max_cfvo_buffer_pct",
+  "azonal_lithology_presence_buffer",
+  PACKERA_DB_WC_BIO_COLS,
+  "soil_ph",
+  "soil_cec",
+  "soil_sand",
+  "soil_clay",
+  "soil_silt",
+  "soil_cfvo",
+  "soil_bulk_density",
+  "soil_ph_soilgrids",
+  "soil_cec_soilgrids",
+  "soil_sand_soilgrids",
+  "soil_clay_soilgrids",
+  "soil_silt_soilgrids",
+  "soil_cfvo_soilgrids",
+  "soil_bulk_density_soilgrids",
+  "soil_ca_mg_molar_ratio",
+  "soil_ultramafic_ni_cr_index",
+  "soil_carbonate_c_pct",
+  "is_nwi_wetland",
+  "nwi_wetland_system",
+  "nwi_wetland_dist_m"
+)
+
+PACKERA_DB_SRF_COLS <- c(
+  "run_id",
+  "catalogNumber",
+  "plant_individual_id",
+  "lat_lon_key",
+  "ecotype_regime",
+  "lithic_outcrop_index",
+  "summer_moisture_deficit_idx",
+  "maritime_continentality_idx",
+  "rf_predicted_taxon",
+  "rf_predicted_prob",
+  "rf_given_taxon_prob",
+  "rf_prediction_source",
+  "edaphic_best_fit_taxon",
+  "spatial_block_cv_acc",
+  "spatial_autocorr_range_km",
+  "spatial_block_id",
+  "doy",
+  "expected_doy",
+  "hopkins_expected",
+  "delta_doy",
+  "hopkins_adjusted_doy",
+  "hopkins_adjusted_doy_resid",
+  "anthesis_dominance_weight",
+  "allochronic_bimodality_delta_bic",
+  "pheno_timing_category",
+  "anthesis_filter_status",
+  "edaphic_z_score",
+  "climatic_z_score",
+  "type_edaphic_z_score",
+  "nearest_type_niche_taxon",
+  "nearest_type_niche_basionym",
+  "nearest_type_basionym_edaphic_z",
+  "matches_type_lithology",
+  "primary_env_predictors",
+  "primary_clim_predictors",
+  "primary_edaph_predictors",
+  PACKERA_DB_WC_BIO_COLS,
+  "substrate_specialist_flag",
+  "n_observed_modalities",
+  "multimodal_concordance",
+  "multimodal_conflict_flag",
+  "triage_category",
+  "conflict_discordance_notes",
+  "env_mahal_d2",
+  "env_mcd_outlier_flag"
+)
+
 .normalize_semicolon_col_r <- function(v) {
   if (is.null(v)) {
     return(NULL)
@@ -501,6 +631,12 @@ PACKERA_DB_WC_BIO_COLS <- c(
         lithic_outcrop_index = "REAL",
         summer_moisture_deficit_idx = "REAL",
         maritime_continentality_idx = "REAL",
+        hopkins_adjusted_doy = "REAL",
+        hopkins_adjusted_doy_resid = "REAL",
+        anthesis_dominance_weight = "REAL",
+        allochronic_bimodality_delta_bic = "REAL",
+        nearest_type_niche_basionym = "TEXT",
+        nearest_type_basionym_edaphic_z = "REAL",
         env_mahal_d2 = "REAL",
         env_mcd_outlier_flag = "INTEGER"
       )
@@ -510,6 +646,7 @@ PACKERA_DB_WC_BIO_COLS <- c(
     return(c(
       stats::setNames(rep("REAL", length(PACKERA_DB_WC_BIO_COLS)), PACKERA_DB_WC_BIO_COLS),
       c(
+        ssurgo_lithic_series_pct = "REAL",
         solus_sand_pct = "REAL",
         solus_clay_pct = "REAL",
         solus_silt_pct = "REAL",
@@ -875,12 +1012,26 @@ connect_packera_db <- function(
   vrp_fields_chk <- if (db_table_exists_safe(conn, "voucher_reproductive_phenology")) tryCatch(DBI::dbListFields(conn, "voucher_reproductive_phenology"), error = function(e) character(0)) else c("corymb_head_count_est", "radiate_head_fraction")
   leh_fields_chk <- if (db_table_exists_safe(conn, "leaf_efa_harmonics")) tryCatch(DBI::dbListFields(conn, "leaf_efa_harmonics"), error = function(e) character(0)) else c("scale_source", "bbox_x1", "lamina_trace_length_mm", "basal_cordate_index", "blade_cie_l_q85_sheet_delta", "is_abaxial_pressed_leaf")
   om_fields_chk <- if (db_table_exists_safe(conn, "otu_morphometrics")) tryCatch(DBI::dbListFields(conn, "otu_morphometrics"), error = function(e) character(0)) else c("cauline_leaf_count", "ECT_PC1", "scale_source", "basal_cordate_index", "blade_cie_l_q85_sheet_delta", "abaxial_leaf_fraction")
+  ec_fields_chk <- if (db_table_exists_safe(conn, "environmental_cache")) tryCatch(DBI::dbListFields(conn, "environmental_cache"), error = function(e) character(0)) else c("ssurgo_lithic_series_pct")
+  srf_fields_chk <- if (db_table_exists_safe(conn, "spatial_rf_predictions")) tryCatch(DBI::dbListFields(conn, "spatial_rf_predictions"), error = function(e) character(0)) else c(
+    "ecotype_regime", "lithic_outcrop_index", "summer_moisture_deficit_idx", "maritime_continentality_idx",
+    "hopkins_adjusted_doy", "hopkins_adjusted_doy_resid", "anthesis_dominance_weight",
+    "allochronic_bimodality_delta_bic", "nearest_type_niche_basionym", "nearest_type_basionym_edaphic_z",
+    "env_mahal_d2", "env_mcd_outlier_flag"
+  )
   mv_fields_chk <- if (db_table_exists_safe(conn, "v_integrative_triage_master")) tryCatch(DBI::dbListFields(conn, "v_integrative_triage_master"), error = function(e) character(0)) else character(0)
   v_has_concept <- all(c("typified_basionym", "verbatim_taxon_concept", "concept_synonymy_status", "identification_year", "is_open_or_hybrid_concept") %in% v_fields_chk)
   el_has_zone <- all(c("leaf_zone", "ect_path", "bbox_x1", "basal_cordate_index", "blade_cie_l_q85_sheet_delta", "is_abaxial_pressed_leaf") %in% el_fields_chk)
   vrp_has_latest <- all(c("corymb_head_count_est", "radiate_head_fraction") %in% vrp_fields_chk)
   leh_has_latest <- all(c("scale_source", "bbox_x1", "lamina_trace_length_mm", "basal_cordate_index", "blade_cie_l_q85_sheet_delta", "is_abaxial_pressed_leaf") %in% leh_fields_chk)
   om_has_cauline <- all(c("cauline_leaf_count", "ECT_PC1", "scale_source", "basal_cordate_index", "blade_cie_l_q85_sheet_delta", "abaxial_leaf_fraction") %in% om_fields_chk)
+  ec_has_latest <- all(c("ssurgo_lithic_series_pct") %in% ec_fields_chk)
+  srf_has_latest <- all(c(
+    "ecotype_regime", "lithic_outcrop_index", "summer_moisture_deficit_idx", "maritime_continentality_idx",
+    "hopkins_adjusted_doy", "hopkins_adjusted_doy_resid", "anthesis_dominance_weight",
+    "allochronic_bimodality_delta_bic", "nearest_type_niche_basionym", "nearest_type_basionym_edaphic_z",
+    "env_mahal_d2", "env_mcd_outlier_flag"
+  ) %in% srf_fields_chk)
   mv_has_latest <- identical(eff_path, ":memory:") || all(c(
     "is_passive", "scale_source", "AR_inv_std", "reproductive_trait_status",
     "corymb_head_count_est", "radiate_head_fraction",
@@ -901,10 +1052,15 @@ connect_packera_db <- function(
     "is_centroid_or_inst_coord", "coord_quarantine_reason",
     "typified_basionym", "verbatim_taxon_concept", "concept_synonymy_status",
     "identification_year", "is_open_or_hybrid_concept",
-    "env_mahal_d2", "env_mcd_outlier_flag"
+    "env_mahal_d2", "env_mcd_outlier_flag",
+    "ssurgo_lithic_series_pct",
+    "ecotype_regime", "lithic_outcrop_index", "summer_moisture_deficit_idx", "maritime_continentality_idx",
+    "hopkins_adjusted_doy", "hopkins_adjusted_doy_resid", "anthesis_dominance_weight",
+    "allochronic_bimodality_delta_bic", "nearest_type_niche_basionym", "nearest_type_basionym_edaphic_z"
   ) %in% mv_fields_chk)
   if (cur_ver >= PLANTMATICS_SCHEMA_USER_VERSION &&
-    v_has_concept && el_has_zone && vrp_has_latest && leh_has_latest && om_has_cauline && mv_has_latest &&
+    v_has_concept && el_has_zone && vrp_has_latest && leh_has_latest && om_has_cauline &&
+    ec_has_latest && srf_has_latest && mv_has_latest &&
     (identical(eff_path, ":memory:") || (
       db_table_exists_safe(conn, "v_integrative_triage_master") &&
         db_table_exists_safe(conn, "genomic_samples") &&
@@ -960,7 +1116,11 @@ connect_packera_db <- function(
         "is_centroid_or_inst_coord", "coord_quarantine_reason",
         "typified_basionym", "verbatim_taxon_concept", "concept_synonymy_status",
         "identification_year", "is_open_or_hybrid_concept",
-        "env_mahal_d2", "env_mcd_outlier_flag"
+        "env_mahal_d2", "env_mcd_outlier_flag",
+        "ssurgo_lithic_series_pct",
+        "ecotype_regime", "lithic_outcrop_index", "summer_moisture_deficit_idx", "maritime_continentality_idx",
+        "hopkins_adjusted_doy", "hopkins_adjusted_doy_resid", "anthesis_dominance_weight",
+        "allochronic_bimodality_delta_bic", "nearest_type_niche_basionym", "nearest_type_basionym_edaphic_z"
       )
       if (length(v_cols) > 0L && !all(req_v_cols %in% v_cols)) {
         view_needs_refresh <- TRUE
@@ -3140,8 +3300,9 @@ upsert_environmental_cache_sqlite <- function(
   }
 
   env_df <- as.data.frame(df, stringsAsFactors = FALSE)
-  for (bc in intersect(PACKERA_DB_WC_BIO_COLS, names(env_df))) {
-    env_df[[bc]] <- suppressWarnings(as.numeric(env_df[[bc]]))
+  for (bc in intersect(c("ssurgo_lithic_series_pct", PACKERA_DB_WC_BIO_COLS), names(env_df))) {
+    v_bc <- env_df[[bc]]
+    env_df[[bc]] <- if (is.factor(v_bc)) suppressWarnings(as.numeric(as.character(v_bc))) else suppressWarnings(as.numeric(v_bc))
   }
   if (!("latitude" %in% names(env_df)) && "decimalLatitude" %in% names(env_df)) {
     env_df$latitude <- suppressWarnings(as.numeric(env_df$decimalLatitude))
@@ -3209,8 +3370,18 @@ persist_step05_to_sqlite <- function(
   for (pc in intersect(c("primary_env_predictors", "primary_clim_predictors", "primary_edaph_predictors"), names(srf_df))) {
     srf_df[[pc]] <- .normalize_semicolon_col_r(srf_df[[pc]])
   }
-  for (nc in intersect(c("edaphic_z_score", "climatic_z_score", "type_edaphic_z_score", "env_mahal_d2", "lithic_outcrop_index", "summer_moisture_deficit_idx", "maritime_continentality_idx", PACKERA_DB_WC_BIO_COLS), names(srf_df))) {
-    srf_df[[nc]] <- suppressWarnings(as.numeric(srf_df[[nc]]))
+  for (sc in intersect(c("ecotype_regime", "nearest_type_niche_basionym"), names(srf_df))) {
+    srf_df[[sc]] <- as.character(srf_df[[sc]])
+  }
+  for (nc in intersect(c(
+    "edaphic_z_score", "climatic_z_score", "type_edaphic_z_score", "env_mahal_d2",
+    "lithic_outcrop_index", "summer_moisture_deficit_idx", "maritime_continentality_idx",
+    "hopkins_adjusted_doy", "hopkins_adjusted_doy_resid", "anthesis_dominance_weight",
+    "allochronic_bimodality_delta_bic", "nearest_type_basionym_edaphic_z",
+    PACKERA_DB_WC_BIO_COLS
+  ), names(srf_df))) {
+    v_nc <- srf_df[[nc]]
+    srf_df[[nc]] <- if (is.factor(v_nc)) suppressWarnings(as.numeric(as.character(v_nc))) else suppressWarnings(as.numeric(v_nc))
   }
   if ("env_mcd_outlier_flag" %in% names(srf_df)) {
     v_mcd <- srf_df$env_mcd_outlier_flag
@@ -3357,11 +3528,16 @@ try_fetch_master_view_for_cohort <- function(
   }
   if (!isTRUE(require_step05) && !isTRUE(require_step07)) {
     stale_srf_cols <- c(
-      "rf_predicted_taxon", "rf_predicted_prob", "rf_given_taxon_prob", "rf_prediction_source",
+      "ecotype_regime", "lithic_outcrop_index", "summer_moisture_deficit_idx",
+      "maritime_continentality_idx", "rf_predicted_taxon", "rf_predicted_prob",
+      "rf_given_taxon_prob", "rf_prediction_source",
       "edaphic_best_fit_taxon", "spatial_block_cv_acc", "spatial_autocorr_range_km",
       "spatial_block_id", "expected_doy", "hopkins_expected", "hopkins_adjusted_doy",
-      "delta_doy", "pheno_timing_category", "anthesis_filter_status", "edaphic_z_score",
+      "hopkins_adjusted_doy_resid", "anthesis_dominance_weight",
+      "allochronic_bimodality_delta_bic", "delta_doy", "pheno_timing_category",
+      "anthesis_filter_status", "edaphic_z_score",
       "climatic_z_score", "type_edaphic_z_score", "nearest_type_niche_taxon",
+      "nearest_type_niche_basionym", "nearest_type_basionym_edaphic_z",
       "matches_type_lithology", "primary_env_predictors", "primary_clim_predictors",
       "primary_edaph_predictors", "substrate_specialist_flag", "n_observed_modalities",
       "multimodal_concordance", "multimodal_conflict_flag", "triage_category",
