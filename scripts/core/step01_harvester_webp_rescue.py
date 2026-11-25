@@ -11,6 +11,11 @@ import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple, Union
 
+from scripts.core.step01_media_qc_cache import (
+    audit_voucher_images_parallel,
+    rescue_failed_exsiccatae_in_waves,
+)
+
 if TYPE_CHECKING:
     import pandas as pd
 
@@ -206,20 +211,30 @@ def download_and_validate_voucher_media(
         f"Auditing specimen image quality (min_megapixels={harvester_self.min_megapixels} MP, "
         f"min_file_size_kb={harvester_self.min_file_size_kb} KB)..."
     )
+    raw_dir_attr = getattr(harvester_self, "raw_dir", None)
+    qc_cache_path = (
+        Path(raw_dir_attr).parent / ".voucher_image_qc_cache.json"
+        if raw_dir_attr is not None and Path(raw_dir_attr).parent.is_dir()
+        else None
+    )
+    primary_rows = [row for _, row in df.iterrows()]
+    primary_paths = [harvester_self.workspace_dir / row["image_path"] for row in primary_rows]
+    primary_qc = audit_voucher_images_parallel(
+        image_paths=primary_paths,
+        min_megapixels=harvester_self.min_megapixels,
+        min_file_size_kb=harvester_self.min_file_size_kb,
+        check_sharpness=harvester_self.check_sharpness,
+        min_sharpness=harvester_self.min_sharpness,
+        cache_path=qc_cache_path,
+        logger=harvester_self.logger,
+    )
+
     valid_rows: List[pd.Series] = []
     failed_exsiccatae_keys: List[str] = []
     quality_rejected = 0
-    mp_values = []
+    mp_values: List[float] = []
 
-    for _, row in df.iterrows():
-        img_dest = harvester_self.workspace_dir / row["image_path"]
-        is_valid, q_metrics = _harv.validate_image_quality(
-            image_path=img_dest,
-            min_megapixels=harvester_self.min_megapixels,
-            min_file_size_kb=harvester_self.min_file_size_kb,
-            check_sharpness=harvester_self.check_sharpness,
-            min_sharpness=harvester_self.min_sharpness,
-        )
+    for row, img_dest, (is_valid, q_metrics) in zip(primary_rows, primary_paths, primary_qc):
         if is_valid:
             valid_rows.append(row)
             if "megapixels" in q_metrics:
@@ -243,70 +258,17 @@ def download_and_validate_voucher_media(
         str(r.get("exsiccatae_key", "")).strip() for r in valid_rows if r.get("exsiccatae_key")
     }
 
-    # Attempt secondary duplicate rescue for any collection event with zero surviving sheets after image QC
-    if (
-        failed_exsiccatae_keys
-        and harvester_self._secondary_duplicate_pool is not None
-        and not harvester_self._secondary_duplicate_pool.empty
-        and "exsiccatae_key" in harvester_self._secondary_duplicate_pool.columns
-        and "_image_url" in harvester_self._secondary_duplicate_pool.columns
-    ):
-        rescued_n = 0
-        tier_prio = {"Tier_1_Gold": 3, "Tier_2_Silver": 2, "Tier_3_Bronze": 1}
-        for ek in dict.fromkeys(failed_exsiccatae_keys):
-            if ek in surviving_eks:
-                continue
-            cand_dups = harvester_self._secondary_duplicate_pool[
-                harvester_self._secondary_duplicate_pool["exsiccatae_key"].astype(str) == ek
-            ].copy()
-            if cand_dups.empty:
-                continue
-            cand_dups["_tp"] = cand_dups["determiner_tier"].astype(str).map(lambda t: tier_prio.get(t, 1))
-            cand_dups = cand_dups.sort_values(by="_tp", ascending=False).drop(columns=["_tp"])
-            for _, dup_row in cand_dups.iterrows():
-                dup_cat = str(dup_row.get("catalogNumber", "")).strip()
-                if dup_cat and dup_cat in surviving_cats:
-                    continue
-                dup_dest = harvester_self.workspace_dir / str(dup_row["image_path"])
-                dup_stats = asyncio.run(
-                    _harv.download_all_voucher_images(
-                        records_to_download=[(str(dup_row["_image_url"]), dup_dest)],
-                        concurrency_limit=1,
-                        force=harvester_self.force,
-                        webp_quality=harvester_self.webp_quality,
-                        logger=harvester_self.logger,
-                    )
-                )
-                dup_ok, dup_m = _harv.validate_image_quality(
-                    image_path=dup_dest,
-                    min_megapixels=harvester_self.min_megapixels,
-                    min_file_size_kb=harvester_self.min_file_size_kb,
-                    check_sharpness=harvester_self.check_sharpness,
-                    min_sharpness=harvester_self.min_sharpness,
-                )
-                if dup_ok:
-                    promoted = dup_row.copy()
-                    promoted["is_primary_duplicate"] = True
-                    valid_rows.append(promoted)
-                    if dup_cat:
-                        surviving_cats.add(dup_cat)
-                    surviving_eks.add(ek)
-                    stats["success"] = int(stats.get("success", 0)) + int(dup_stats.get("success", 0))
-                    if "megapixels" in dup_m:
-                        mp_values.append(dup_m["megapixels"])
-                    rescued_n += 1
-                    break
-                for cand_unlink in (dup_dest, _harv.resolve_voucher_image_path(dup_dest)):
-                    if cand_unlink and cand_unlink.is_file():
-                        try:
-                            cand_unlink.unlink()
-                        except Exception:
-                            pass
-        if rescued_n > 0:
-            harvester_self.logger.info(
-                f"Exsiccatae Media Rescue: Promoted {rescued_n} valid secondary duplicate sheet(s) "
-                f"after primary image download/QC failure."
-            )
+    # Wave-based concurrent secondary duplicate rescue for failed collection events
+    rescue_failed_exsiccatae_in_waves(
+        harvester_self=harvester_self,
+        failed_exsiccatae_keys=failed_exsiccatae_keys,
+        valid_rows=valid_rows,
+        surviving_cats=surviving_cats,
+        surviving_eks=surviving_eks,
+        mp_values=mp_values,
+        stats=stats,
+        qc_cache_path=qc_cache_path,
+    )
 
     harvester_self.logger.info(
         f"Quality Audit Complete: Retained {len(valid_rows)} vouchers meeting quality standards "

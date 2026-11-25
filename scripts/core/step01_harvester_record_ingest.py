@@ -31,6 +31,7 @@ def ingest_gbif_occurrence_record(
     catalog_to_inst: Dict[str, str],
     counters: Dict[str, int],
     require_type: bool = False,
+    seen_gbif_keys: Optional[Set[str]] = None,
 ) -> None:
     """Validate, standardize, score, and append a single GBIF occurrence record."""
     import scripts.core.harvester as _harv
@@ -41,6 +42,9 @@ def ingest_gbif_occurrence_record(
         return
 
     counters["harvested"] = counters.get("harvested", 0) + 1
+    early_gbif_key = str(rec.get("key") or "").strip()
+    if early_gbif_key and seen_gbif_keys is not None and early_gbif_key in seen_gbif_keys:
+        return
 
     # 0. Cultivated / Captive / Greenhouse Filter (exempting nomenclatural types)
     if not is_rec_type and _is_cultivated_occurrence(rec):
@@ -435,4 +439,6 @@ def ingest_gbif_occurrence_record(
         "_raw_habitat": str(raw_hab_val or "").strip(),
     }
     all_curated_records.append(curated_record)
+    if gbif_key and seen_gbif_keys is not None:
+        seen_gbif_keys.add(gbif_key)
     counters["retained"] = counters.get("retained", 0) + 1

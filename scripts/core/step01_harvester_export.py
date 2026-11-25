@@ -268,6 +268,7 @@ _CONFLICT_STOP_TOKENS: Set[str] = {
     "ms", "mrs", "herb", "univ", "bot", "ny", "ph", "ncu",
 }
 _NEGATED_TAXON_RE = re.compile(r"\b(?:not|non|nec|formerly|misapplied|excl\.?)\s+$", flags=re.IGNORECASE)
+_MENTION_RE_CACHE: Dict[Tuple[str, ...], re.Pattern[str]] = {}
 
 
 def _detect_verbatim_identification_conflict(
@@ -288,12 +289,16 @@ def _detect_verbatim_identification_conflict(
 
     target_genus = (resolve_target_genus() or "Packera").strip().capitalize()
     allowed_genera = {target_genus, "Packera"} | set(_SYNONYM_GENERA)
-    genus_alt = "|".join(sorted((re.escape(g) for g in allowed_genera), key=len, reverse=True))
-    mention_re = re.compile(
-        rf"\b({genus_alt})(?:\s*×\s*|\s+[x×]\s+|\s+)([a-z][a-z-]{{1,}})"
-        r"(?:\s+(var|subsp|ssp|f)\.?\s+([a-z][a-z-]{1,}))?\b",
-        flags=re.IGNORECASE,
-    )
+    cache_key = tuple(sorted(allowed_genera))
+    mention_re = _MENTION_RE_CACHE.get(cache_key)
+    if mention_re is None:
+        genus_alt = "|".join(sorted((re.escape(g) for g in allowed_genera), key=len, reverse=True))
+        mention_re = re.compile(
+            rf"\b({genus_alt})(?:\s*×\s*|\s+[x×]\s+|\s+)([a-z][a-z-]{{1,}})"
+            r"(?:\s+(var|subsp|ssp|f)\.?\s+([a-z][a-z-]{1,}))?\b",
+            flags=re.IGNORECASE,
+        )
+        _MENTION_RE_CACHE[cache_key] = mention_re
 
     def _norm_tx(raw_val: Any) -> Optional[str]:
         if raw_val is None or (isinstance(raw_val, float) and math.isnan(raw_val)):

@@ -11,6 +11,23 @@ if TYPE_CHECKING:
     import pandas as pd
 
 
+def _extract_page_gbif_keys(results: List[Dict[str, Any]]) -> Tuple[Set[int], List[str]]:
+    """Extract distinct speciesKey/acceptedTaxonKey ints and non-empty GBIF occurrence keys from a page."""
+    sp_keys: Set[int] = set()
+    occ_keys: List[str] = []
+    for rec in results:
+        sk_raw = rec.get("speciesKey") or rec.get("acceptedTaxonKey")
+        if sk_raw is not None:
+            try:
+                sp_keys.add(int(sk_raw))
+            except (TypeError, ValueError):
+                pass
+        ok_raw = str(rec.get("key") or "").strip()
+        if ok_raw:
+            occ_keys.append(ok_raw)
+    return sp_keys, occ_keys
+
+
 def execute_gbif_harvest_loop(harvester_self: Any) -> pd.DataFrame:
     """Harvests and normalizes Darwin Core occurrence records across configured taxa."""
     import scripts.core.harvester as _harv
@@ -19,15 +36,22 @@ def execute_gbif_harvest_loop(harvester_self: Any) -> pd.DataFrame:
     pd_mod = _harv.pd
     all_curated_records: List[Dict[str, Any]] = []
     seen_catalog_keys: Set[Tuple[str, str]] = set()
+    seen_gbif_keys: Set[str] = set()
+    visited_country_gbif_keys: Dict[Optional[str], Set[str]] = {}
+    exhausted_gbif_species_keys: Set[Tuple[Optional[str], int]] = set()
     catalog_to_inst: Dict[str, str] = {}
     country_targets: List[Optional[str]] = list(harvester_self.countries) if harvester_self.countries else [None]
     current_year = datetime.date.today().year + 1
 
+    occ_ref = _harv.occ
+    is_gbif_mocked = (
+        _harv._is_gbif_species_mocked() or occ_ref is None or getattr(occ_ref, "_is_missing_pygbif", False)
+        or getattr(occ_ref, "search", None) is None or hasattr(occ_ref.search, "_mock_name")
+        or hasattr(occ_ref.search, "assert_called")
+    )
+
     try:
-        us_spatial_graph = load_us_county_spatial_graph(
-            county_path=harvester_self.usda_county_geojson_path,
-            allow_download=False,
-        )
+        us_spatial_graph = load_us_county_spatial_graph(county_path=harvester_self.usda_county_geojson_path, allow_download=False)
     except Exception:
         us_spatial_graph = {}
 
@@ -45,28 +69,27 @@ def execute_gbif_harvest_loop(harvester_self: Any) -> pd.DataFrame:
             _harv.ingest_gbif_occurrence_record(
                 harvester_self, rec, taxon, is_direct_genus_query, current_year,
                 us_spatial_graph, all_curated_records, seen_catalog_keys,
-                catalog_to_inst, counters, require_type=require_type,
+                catalog_to_inst, counters, require_type=require_type, seen_gbif_keys=seen_gbif_keys,
             )
 
         use_server_lon_filter = bool(harvester_self.exclude_western and not harvester_self.harvest_full_continental_range)
         eff_query_west_lon = harvester_self.western_longitude_threshold
         limit = 300
-        n_countries = max(1, len(country_targets))
-        pass1_quota = max(1, math.ceil(harvester_self.max_records_per_taxon / n_countries))
+        pass1_quota = max(1, math.ceil(harvester_self.max_records_per_taxon / max(1, len(country_targets))))
         country_offsets: Dict[Optional[str], int] = {c: 0 for c in country_targets}
         country_retained: Dict[Optional[str], int] = {c: 0 for c in country_targets}
         country_exhausted: Dict[Optional[str], bool] = {c: False for c in country_targets}
+        country_dup_exhausted: Dict[Optional[str], bool] = {c: False for c in country_targets}
+        country_sp_keys: Dict[Optional[str], Set[int]] = {c: set() for c in country_targets}
 
         def _run_country_pages(country_code: Optional[str], stop_at_country_quota: Optional[int]) -> None:
+            visited_for_country = visited_country_gbif_keys.setdefault(country_code, set())
             while counters["retained"] < harvester_self.max_records_per_taxon and not country_exhausted[country_code]:
                 if stop_at_country_quota is not None and country_retained[country_code] >= stop_at_country_quota:
                     break
                 offset = country_offsets[country_code]
                 search_kwargs: Dict[str, Any] = {
-                    "basisOfRecord": "PRESERVED_SPECIMEN",
-                    "mediaType": "StillImage",
-                    "limit": limit,
-                    "offset": offset,
+                    "basisOfRecord": "PRESERVED_SPECIMEN", "mediaType": "StillImage", "limit": limit, "offset": offset,
                 }
                 if is_direct_genus_query and genus_key is not None:
                     search_kwargs["taxonKey"] = genus_key
@@ -79,9 +102,7 @@ def execute_gbif_harvest_loop(harvester_self: Any) -> pd.DataFrame:
                 try:
                     response = _harv.occ.search(**search_kwargs)
                 except Exception as e:
-                    harvester_self.logger.error(
-                        f"GBIF API query error for '{taxon}' (country={country_code}) at offset {offset}: {e}"
-                    )
+                    harvester_self.logger.error(f"GBIF API query error for '{taxon}' (country={country_code}) at offset {offset}: {e}")
                     country_exhausted[country_code] = True
                     break
 
@@ -94,6 +115,17 @@ def execute_gbif_harvest_loop(harvester_self: Any) -> pd.DataFrame:
                     country_exhausted[country_code] = True
                     break
 
+                page_sp_keys, page_occ_keys = _extract_page_gbif_keys(results)
+                country_sp_keys[country_code].update(page_sp_keys)
+                if (
+                    not is_gbif_mocked and offset == 0 and page_sp_keys and page_occ_keys
+                    and all((country_code, sk) in exhausted_gbif_species_keys for sk in page_sp_keys)
+                    and all(ok in visited_for_country for ok in page_occ_keys)
+                ):
+                    country_exhausted[country_code] = True
+                    country_dup_exhausted[country_code] = True
+                    break
+
                 eff_count = int(raw_count) if raw_count is not None else (offset + len(results))
                 page_processed = 0
                 for rec in results:
@@ -103,6 +135,9 @@ def execute_gbif_harvest_loop(harvester_self: Any) -> pd.DataFrame:
                         break
                     pre_ret = counters["retained"]
                     _ingest(rec, require_type=False)
+                    ok_rec = str(rec.get("key") or "").strip()
+                    if ok_rec:
+                        visited_for_country.add(ok_rec)
                     page_processed += 1
                     if counters["retained"] > pre_ret:
                         country_retained[country_code] += (counters["retained"] - pre_ret)
@@ -110,7 +145,13 @@ def execute_gbif_harvest_loop(harvester_self: Any) -> pd.DataFrame:
                 country_offsets[country_code] = offset + page_processed
                 if (page_processed == len(results) and country_offsets[country_code] >= eff_count) or page_processed == 0:
                     country_exhausted[country_code] = True
-                _harv.time.sleep(0.1)
+                    if (
+                        not is_gbif_mocked and page_processed == len(results)
+                        and len(country_sp_keys[country_code]) == 1
+                        and counters["retained"] < harvester_self.max_records_per_taxon
+                    ):
+                        exhausted_gbif_species_keys.add((country_code, next(iter(country_sp_keys[country_code]))))
+                _harv.time.sleep(0.05)
 
         for country_code in country_targets:
             if counters["retained"] >= harvester_self.max_records_per_taxon:
@@ -124,11 +165,19 @@ def execute_gbif_harvest_loop(harvester_self: Any) -> pd.DataFrame:
                 if not country_exhausted[country_code]:
                     _run_country_pages(country_code, None)
 
+        all_countries_dup_exhausted = bool(
+            not is_gbif_mocked
+            and counters["retained"] == 0
+            and any(country_dup_exhausted.values())
+            and all(country_dup_exhausted[c] or not country_sp_keys[c] for c in country_targets)
+        )
+
         # Ungeoreferenced (hasCoordinate=False) Cis-Mississippi State Rescue Pass for historical sheets
         if (
             use_server_lon_filter
             and harvester_self.include_ungeoreferenced_state_vouchers
             and counters["retained"] < harvester_self.max_records_per_taxon
+            and not all_countries_dup_exhausted
         ):
             for country_code in country_targets:
                 if counters["retained"] >= harvester_self.max_records_per_taxon:
@@ -191,16 +240,10 @@ def execute_gbif_harvest_loop(harvester_self: Any) -> pd.DataFrame:
         if harvester_self.countries and None not in type_country_targets:
             type_country_targets.append(None)
         for country_code in type_country_targets:
-            type_search_kwargs: Dict[str, Any] = {
-                "basisOfRecord": "PRESERVED_SPECIMEN",
-                "typeStatus": "*",
-                "limit": 300,
-                "offset": 0,
-            }
-            if is_direct_genus_query and genus_key is not None:
-                type_search_kwargs["taxonKey"] = genus_key
-            else:
-                type_search_kwargs["scientificName"] = taxon
+            type_search_kwargs: Dict[str, Any] = {"basisOfRecord": "PRESERVED_SPECIMEN", "typeStatus": "*", "limit": 300, "offset": 0}
+            type_search_kwargs["taxonKey" if (is_direct_genus_query and genus_key is not None) else "scientificName"] = (
+                genus_key if (is_direct_genus_query and genus_key is not None) else taxon
+            )
             if country_code:
                 type_search_kwargs["country"] = country_code
             try:
@@ -261,13 +304,12 @@ def execute_gbif_harvest_loop(harvester_self: Any) -> pd.DataFrame:
                             cis_longitude_threshold=harvester_self.cis_mississippi_longitude_threshold,
                         )
                         for st_v, lat_v, lon_v in zip(
-                            df.get("stateProvince", pd_mod.Series([""] * len(df))),
-                            df.get("decimalLatitude", pd_mod.Series([None] * len(df))),
-                            df.get("decimalLongitude", pd_mod.Series([None] * len(df))),
+                            df.get("stateProvince", [""] * len(df)),
+                            df.get("decimalLatitude", [None] * len(df)),
+                            df.get("decimalLongitude", [None] * len(df)),
                         )
                     ],
-                    index=df.index,
-                    dtype=bool,
+                    index=df.index, dtype=bool,
                 )
                 eff_min_res = (
                     harvester_self.min_eastern_residency_records
@@ -314,15 +356,6 @@ def execute_gbif_harvest_loop(harvester_self: Any) -> pd.DataFrame:
         if raw_audit_cols:
             df = df.drop(columns=raw_audit_cols)
 
-        occ_ref = _harv.occ
-        is_gbif_mocked = (
-            _harv._is_gbif_species_mocked()
-            or occ_ref is None
-            or getattr(occ_ref, "_is_missing_pygbif", False)
-            or getattr(occ_ref, "search", None) is None
-            or hasattr(occ_ref.search, "_mock_name")
-            or hasattr(occ_ref.search, "assert_called")
-        )
         default_usda_cache = Path(harvester_self.workspace_dir) / "data" / "environmental" / "usda_plants"
         has_local_usda_cache = (
             harvester_self.usda_cache_dir is not None

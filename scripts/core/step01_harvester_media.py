@@ -6,14 +6,18 @@ import asyncio
 import logging
 import os
 import re
-import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from urllib.parse import urlsplit
 
 from scripts.core.config import (
     DEFAULT_MIN_FILE_SIZE_KB,
     DEFAULT_MIN_MEGAPIXELS,
     DEFAULT_MIN_SHARPNESS_LAPLACIAN,
+)
+from scripts.core.step01_media_qc_cache import (
+    encode_and_write_image_bytes as _encode_and_write_image_bytes,
+    interleave_records_by_host as _interleave_records_by_host,
 )
 
 if TYPE_CHECKING:
@@ -151,8 +155,8 @@ def validate_image_quality(
                 y0, y1 = int(ch * 0.15), max(int(ch * 0.85), 1)
                 x0, x1 = int(cw * 0.15), max(int(cw * 0.85), 1)
                 roi_cv = img_cv[y0:y1, x0:x1] if (y1 > y0 and x1 > x0) else img_cv
-                lap_roi = cv2.Laplacian(roi_cv, cv2.CV_64F)
-                global_lap_var = float(lap_roi.var())
+                lap_roi = cv2.Laplacian(roi_cv, cv2.CV_32F)
+                global_lap_var = float(lap_roi.var(dtype=_harv.np.float64))
                 rh, rw = lap_roi.shape[:2]
                 tile_vars: List[float] = []
                 if rh >= 8 and rw >= 8:
@@ -162,7 +166,7 @@ def validate_image_quality(
                         for tj in range(8):
                             tile = lap_roi[ys[ti]:ys[ti + 1], xs[tj]:xs[tj + 1]]
                             if tile.size > 0:
-                                tile_vars.append(float(tile.var()))
+                                tile_vars.append(float(tile.var(dtype=_harv.np.float64)))
                 tile_p90_lap_var = float(_harv.np.percentile(tile_vars, 90)) if tile_vars else global_lap_var
                 sharpness_score = round(max(global_lap_var, tile_p90_lap_var), 2)
                 if sharpness_score < min_sharpness:
@@ -189,6 +193,10 @@ def validate_image_quality(
     }
 
 
+_PERMANENT_HTTP_ERRORS = frozenset({401, 403, 404, 410})
+_DEAD_HOST_CONSEC_LIMIT = 6
+
+
 async def download_single_image(
     session: aiohttp.ClientSession,
     image_url: str,
@@ -198,6 +206,9 @@ async def download_single_image(
     force: bool = False,
     webp_quality: int = 92,
     logger: Optional[logging.Logger] = None,
+    host_semaphore: Optional[asyncio.Semaphore] = None,
+    host_health: Optional[Dict[str, Dict[str, int]]] = None,
+    encode_semaphore: Optional[asyncio.Semaphore] = None,
 ) -> Tuple[bool, bool]:
     """Asynchronously downloads a single voucher image file to local storage with retry logic.
 
@@ -221,76 +232,101 @@ async def download_single_image(
                 )
             return True, True
 
-    async with semaphore:
-        for attempt in range(1, max_retries + 1):
-            temp_path: Optional[Path] = None
-            try:
-                if session is None:
-                    req = _harv.urllib.request.Request(
-                        image_url,
-                        headers={"User-Agent": "PackeraResearchBot/1.0 (UNC Chapel Hill Herbarium)"},
-                    )
-
-                    def _fetch_urllib() -> Tuple[int, str, bytes]:
-                        with _harv.urllib.request.urlopen(req, timeout=45) as resp:
-                            st = int(getattr(resp, "status", 200))
-                            ct = str(resp.headers.get("Content-Type", "")).lower()
-                            return st, ct, resp.read()
-
-                    status_code, content_type, content = await asyncio.to_thread(_fetch_urllib)
-                else:
-                    timeout = _harv.aiohttp.ClientTimeout(total=45, connect=15) if _harv.aiohttp is not None else 45
-                    async with session.get(image_url, timeout=timeout) as response:
-                        status_code = response.status
-                        content_type = response.headers.get("Content-Type", "").lower() if response.status == 200 else ""
-                        content = await response.read() if response.status == 200 else b""
-                if status_code == 200:
-                    if len(content) > 1024 and (
-                        not content_type
-                        or "image" in content_type
-                        or "octet-stream" in content_type
-                        or content[:3] == b"\xff\xd8\xff"
-                    ):
-                        payload_to_write = content
-                        if destination_path.suffix.lower() == ".webp" and _harv.Image is not None:
-                            try:
-                                import io
-                                with _harv.Image.open(io.BytesIO(content)) as img:
-                                    rgb_img = img.convert("RGB")
-                                    buf = io.BytesIO()
-                                    rgb_img.save(buf, format="WEBP", quality=int(webp_quality), method=4)
-                                    webp_bytes = buf.getvalue()
-                                    if len(webp_bytes) > 0:
-                                        payload_to_write = webp_bytes
-                            except Exception:
-                                payload_to_write = content
-
-                        destination_path.parent.mkdir(parents=True, exist_ok=True)
-                        temp_file = tempfile.NamedTemporaryFile(
-                            dir=destination_path.parent,
-                            prefix=f"{destination_path.stem}_",
-                            suffix=".tmp",
-                            delete=False,
-                        )
-                        temp_path = Path(temp_file.name)
-                        temp_file.write(payload_to_write)
-                        temp_file.flush()
-                        os.fsync(temp_file.fileno())
-                        temp_file.close()
-                        temp_path.replace(destination_path)
-                        return True, False
-                elif status_code in {404, 410}:
-                    return False, False
-            except (*_harv._AIOHTTP_CLIENT_ERRORS, asyncio.TimeoutError, Exception):
-                if temp_path and temp_path.exists():
-                    try:
-                        temp_path.unlink()
-                    except Exception:
-                        pass
-                if attempt == max_retries:
-                    return False, False
-                await asyncio.sleep(1.0 * (2 ** (attempt - 1)))
+    host = urlsplit(str(image_url)).netloc.lower() or "__unknown__"
+    h_entry = host_health.setdefault(host, {"consec_net_err": 0, "success": 0, "tripped": 0}) if host_health is not None else None
+    if h_entry is not None and h_entry["tripped"]:
         return False, False
+
+    eff_retries = max(1, int(max_retries))
+    if h_entry is not None and h_entry["success"] == 0:
+        eff_retries = 1 if h_entry["consec_net_err"] >= 3 else min(eff_retries, 2)
+
+    async def _fetch_once() -> Tuple[int, str, bytes]:
+        if session is None:
+            req = _harv.urllib.request.Request(
+                image_url,
+                headers={"User-Agent": "PackeraResearchBot/1.0 (UNC Chapel Hill Herbarium)"},
+            )
+
+            def _fetch_urllib() -> Tuple[int, str, bytes]:
+                with _harv.urllib.request.urlopen(req, timeout=40) as resp:
+                    st = int(getattr(resp, "status", 200))
+                    ct = str(resp.headers.get("Content-Type", "")).lower()
+                    return st, ct, resp.read()
+
+            return await asyncio.to_thread(_fetch_urllib)
+        timeout = (
+            _harv.aiohttp.ClientTimeout(total=45, connect=12, sock_connect=12, sock_read=30)
+            if _harv.aiohttp is not None
+            else 45
+        )
+        async with session.get(image_url, timeout=timeout) as response:
+            st = response.status
+            ct = response.headers.get("Content-Type", "").lower() if st == 200 else ""
+            body = await response.read() if st == 200 else b""
+            return st, ct, body
+
+    for attempt in range(1, eff_retries + 1):
+        if h_entry is not None and h_entry["tripped"]:
+            return False, False
+        net_failed = False
+        try:
+            if host_semaphore is not None:
+                async with host_semaphore:
+                    if h_entry is not None and h_entry["tripped"]:
+                        return False, False
+                    async with semaphore:
+                        status_code, content_type, content = await _fetch_once()
+            else:
+                async with semaphore:
+                    status_code, content_type, content = await _fetch_once()
+
+            if status_code == 200:
+                if h_entry is not None:
+                    h_entry["consec_net_err"] = 0
+                    h_entry["success"] += 1
+                is_valid_img = len(content) > 1024 and (
+                    not content_type
+                    or "image" in content_type
+                    or "octet-stream" in content_type
+                    or content[:3] == b"\xff\xd8\xff"
+                )
+                if not is_valid_img:
+                    return False, False
+                if encode_semaphore is not None:
+                    async with encode_semaphore:
+                        ok_write = await asyncio.to_thread(
+                            _encode_and_write_image_bytes, content, destination_path, webp_quality, _harv.Image
+                        )
+                else:
+                    ok_write = await asyncio.to_thread(
+                        _encode_and_write_image_bytes, content, destination_path, webp_quality, _harv.Image
+                    )
+                if ok_write:
+                    return True, False
+            elif status_code in _PERMANENT_HTTP_ERRORS:
+                if h_entry is not None:
+                    h_entry["consec_net_err"] = 0
+                return False, False
+        except (*_harv._AIOHTTP_CLIENT_ERRORS, asyncio.TimeoutError, Exception) as exc:
+            net_failed = True
+            dns_err = "dns" in type(exc).__name__.lower() or "name or service not known" in str(exc).lower()
+            if dns_err:
+                attempt = eff_retries
+
+        if attempt >= eff_retries:
+            if net_failed and h_entry is not None:
+                h_entry["consec_net_err"] += 1
+                if h_entry["success"] == 0 and h_entry["consec_net_err"] >= _DEAD_HOST_CONSEC_LIMIT and not h_entry["tripped"]:
+                    h_entry["tripped"] = 1
+                    if logger:
+                        logger.warning(
+                            f"Host '{host}' unreachable after {h_entry['consec_net_err']} consecutive "
+                            f"connection/timeout failures; fast-failing remaining queued URLs for this host."
+                        )
+            return False, False
+        await asyncio.sleep(1.0 * (2 ** (attempt - 1)))
+    return False, False
 
 
 async def download_all_voucher_images(
@@ -303,14 +339,17 @@ async def download_all_voucher_images(
     """Coordinates asynchronous batch downloading of voucher images with concurrency control."""
     import scripts.core.harvester as _harv
 
-    semaphore = asyncio.Semaphore(concurrency_limit)
+    eff_conc = max(1, int(concurrency_limit))
+    per_host_limit = max(1, min(eff_conc, 6))
+    semaphore = asyncio.Semaphore(eff_conc)
+    encode_semaphore = asyncio.Semaphore(min(16, max(4, os.cpu_count() or 4)))
     headers = {
         "User-Agent": "PackeraResearchBot/1.0 (UNC Chapel Hill Herbarium; Evolutionary Morphometrics Lab)"
     }
     total_records = len(records_to_download)
     stats = {"success": 0, "skipped": 0, "failed": 0, "total": total_records}
 
-    pending = []
+    pending: List[Tuple[str, Path]] = []
     for url, dest in records_to_download:
         dest_p = Path(dest)
         existing_dest = (
@@ -320,10 +359,8 @@ async def download_all_voucher_images(
         )
         if not force and existing_dest.is_file() and os.path.getsize(existing_dest) > 0:
             if logger:
-                logger.info(
-                    f"Retaining existing voucher image: {existing_dest.name} "
-                    f"({os.path.getsize(existing_dest)} bytes)."
-                )
+                log_fn = logger.info if total_records <= 20 else logger.debug
+                log_fn(f"Retaining existing voucher image: {existing_dest.name} ({os.path.getsize(existing_dest)} bytes).")
             stats["skipped"] += 1
         else:
             pending.append((url, dest))
@@ -336,40 +373,45 @@ async def download_all_voucher_images(
             )
         return stats
 
+    pending = _interleave_records_by_host(pending)
+    host_semaphores: Dict[str, asyncio.Semaphore] = {}
+    host_health: Dict[str, Dict[str, int]] = {}
+    for url, _ in pending:
+        host = urlsplit(str(url)).netloc.lower() or "__unknown__"
+        if host not in host_semaphores:
+            host_semaphores[host] = asyncio.Semaphore(per_host_limit)
+
     if logger:
         logger.info(
-            f"Initiating asynchronous download of {len(pending)} pending images (Concurrency: {concurrency_limit})... "
+            f"Initiating asynchronous download of {len(pending)} pending images "
+            f"(Concurrency: {eff_conc}, Per-Host: {per_host_limit})... "
             f"[Processed: 0 | Skipped: {stats['skipped']} | Total: {total_records}]"
         )
 
     aiohttp_mod = _harv.aiohttp
     tqdm_mod = _harv.async_tqdm
-    if aiohttp_mod is not None:
-        connector = aiohttp_mod.TCPConnector(limit=concurrency_limit, limit_per_host=5, ssl=False)
-        async with aiohttp_mod.ClientSession(headers=headers, connector=connector) as session:
-            tasks = [
-                _harv.download_single_image(
-                    session, url, dest, semaphore, force=force, webp_quality=webp_quality, logger=logger
-                )
-                for url, dest in pending
-            ]
-            results = (
-                await tqdm_mod.gather(*tasks, desc="Downloading Voucher Sheets", unit="img")
-                if tqdm_mod is not None
-                else await asyncio.gather(*tasks)
-            )
-    else:
+
+    async def _run_batch(session_obj: Any) -> List[Tuple[bool, bool]]:
         tasks = [
             _harv.download_single_image(
-                None, url, dest, semaphore, force=force, webp_quality=webp_quality, logger=logger
+                session_obj, url, dest, semaphore, force=force, webp_quality=webp_quality, logger=logger,
+                host_semaphore=host_semaphores[urlsplit(str(url)).netloc.lower() or "__unknown__"],
+                host_health=host_health, encode_semaphore=encode_semaphore,
             )
             for url, dest in pending
         ]
-        results = (
-            await tqdm_mod.gather(*tasks, desc="Downloading Voucher Sheets", unit="img")
-            if tqdm_mod is not None
-            else await asyncio.gather(*tasks)
+        if tqdm_mod is not None:
+            return await tqdm_mod.gather(*tasks, desc="Downloading Voucher Sheets", unit="img")
+        return await asyncio.gather(*tasks)
+
+    if aiohttp_mod is not None:
+        connector = aiohttp_mod.TCPConnector(
+            limit=eff_conc, limit_per_host=per_host_limit, ttl_dns_cache=300, ssl=False
         )
+        async with aiohttp_mod.ClientSession(headers=headers, connector=connector) as session:
+            results = await _run_batch(session)
+    else:
+        results = await _run_batch(None)
 
     for success, was_skipped in results:
         if success:
@@ -383,7 +425,7 @@ async def download_all_voucher_images(
     if logger:
         logger.info(
             f"Voucher Download Summary: "
-            f"[Processed: {stats['success']} | Skipped: {stats['skipped']} | Total: {total_records}]"
+            f"[Processed: {stats['success']} | Skipped: {stats['skipped']} | Failed: {stats['failed']} | Total: {total_records}]"
         )
 
     return stats
