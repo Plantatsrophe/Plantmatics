@@ -377,17 +377,11 @@ class TestStep02AuditAndFigures12Plate(unittest.TestCase):
             self.assertGreaterEqual(len(list((fig_dir / "lm3_sheet_overlays").glob("*.png"))), 1)
 
         expected_r_pngs = {
-            "fig03a_efa_morphospace_and_harmonics.png",
-            "fig03b_topological_ect_and_heteroblasty.png",
-            "fig04a_foliar_allometry_audit.png",
-            "fig04b_gmm_cda_morphometrics.png",
-            "fig04c_ecoregion_and_batch_audit.png",
-            "fig05a_ecological_niche_and_rf_importance.png",
-            "fig05b_hopkins_circular_phenology.png",
-            "fig05c_sdm_suitability_and_distribution_map.png",
-            "fig06a_genomic_pcoa_tree_concordance.png",
-            "fig06b_reticulation_gdi_landscape.png",
-            "fig07a_integrative_taxonomic_synthesis.png",
+            "fig03a_efa_morphospace_and_harmonics.png", "fig03b_topological_ect_and_heteroblasty.png",
+            "fig04a_foliar_allometry_audit.png", "fig04b_gmm_cda_morphometrics.png", "fig04c_ecoregion_and_batch_audit.png",
+            "fig05a_ecological_niche_and_rf_importance.png", "fig05b_hopkins_circular_phenology.png",
+            "fig05c_sdm_suitability_and_distribution_map.png", "fig06a_genomic_pcoa_tree_concordance.png",
+            "fig06b_reticulation_gdi_landscape.png", "fig07a_integrative_taxonomic_synthesis.png",
             "fig07b_taxon_complex_delimitation_network.png",
         }
         r_fig_dir = PROJECT_ROOT / "scripts" / "figures"
@@ -395,8 +389,48 @@ class TestStep02AuditAndFigures12Plate(unittest.TestCase):
         import re
         for png_name in expected_r_pngs:
             self.assertIn(png_name, combined_r_src)
-        combined_no_null = re.sub(r"grDevices::pdf\(\s*NULL\s*\)", "", combined_r_src)
-        self.assertNotIn("grDevices::pdf(", combined_no_null)
+        self.assertNotIn("grDevices::pdf(", re.sub(r"grDevices::pdf\(\s*NULL\s*\)", "", combined_r_src))
+
+    def test_step01_cohort_figure_and_narrow_overlay_headers(self) -> None:
+        """Verify fig01 300-DPI PNG + centroid quarantine, ICN flush ×, TOL_OKABE_24, and narrow wrapped overlays."""
+        from PIL import Image
+        from scripts.vision.step01_figures import generate_step01_cohort_audit_figure
+        from scripts.vision.step02_fig_sheet_overlays import export_lm3_sheet_diagnostic_overlays
+        from scripts.vision.step02_fig_style_assets import TOL_OKABE_24, _standardize_packera_species_py, format_icn_taxon_mathtext
+
+        self.assertEqual(len(TOL_OKABE_24), 24)
+        self.assertEqual(_standardize_packera_species_py("Packera x memmingeri"), "Packera ×memmingeri")
+        self.assertEqual(format_icn_taxon_mathtext("Packera × memmingeri", abbreviate_genus=True), r"$\it{P.}$ ×$\it{memmingeri}$")
+        self.assertIn(" × ", format_icn_taxon_mathtext("Packera aurea x Packera anonyma"))
+
+        with tempfile.TemporaryDirectory() as tmp_d:
+            run_p = Path(tmp_d) / "run_demo"
+            v_csv = run_p / "data" / "tables" / "curated_vouchers.csv"
+            v_csv.parent.mkdir(parents=True, exist_ok=True)
+            pd.DataFrame([
+                {"catalogNumber": "NCU1", "species_standardized": "Packera dubia", "decimalLatitude": 35.9, "decimalLongitude": -79.0, "determiner_tier": "Tier_1_Gold", "is_type_specimen": 1, "is_centroid_or_inst_coord": 0, "regional_group": "Piedmont", "year": 1995, "sharpness_score": 420.0},
+                {"catalogNumber": "NCU2", "species_standardized": "Packera anonyma", "decimalLatitude": 35.5, "decimalLongitude": -80.2, "determiner_tier": "Tier_2_Silver", "is_type_specimen": 0, "is_centroid_or_inst_coord": 1, "regional_group": "Piedmont", "year": 2004, "sharpness_score": 310.0},
+                {"catalogNumber": "NCU3", "species_standardized": "Packera × memmingeri", "decimalLatitude": 36.1, "decimalLongitude": -81.5, "determiner_tier": "Tier_3_Bronze", "is_type_specimen": 0, "is_centroid_or_inst_coord": 0, "regional_group": "Blue Ridge", "year": 2012, "sharpness_score": 510.0},
+            ]).to_csv(v_csv, index=False)
+            fig01 = generate_step01_cohort_audit_figure(v_csv)
+            self.assertEqual(fig01, run_p / "outputs" / "figures" / "fig01_cohort_biogeography_and_authority.png")
+            self.assertTrue(fig01 is not None and fig01.is_file() and fig01.stat().st_size > 15000)
+            self.assertEqual(list((run_p / "outputs" / "figures").rglob("*.pdf")), [])
+            with Image.open(fig01) as im1:
+                self.assertAlmostEqual(im1.info.get("dpi", (0, 0))[0], 300.0, delta=2.0)
+
+            narrow_img = run_p / "narrow.png"
+            cv2.imwrite(str(narrow_img), np.full((260, 260, 3), 240, dtype=np.uint8))
+            with patch.object(cv2, "putText", wraps=cv2.putText) as mock_put:
+                ov_list = export_lm3_sheet_diagnostic_overlays(
+                    pd.DataFrame([{"catalogNumber": "NCU_UNBOXED", "leaf_id": 1, "species_standardized": "Packera paupercula subsp. pseudotomentosa", "determiner_tier": "Tier_1_Gold", "pixels_per_mm": 12.0, "is_calibrated_mm": False, "scale_source": "tick_lattice_unboxed", "image_path": str(narrow_img)}]),
+                    None, None, run_p / "outputs" / "figures",
+                )
+            self.assertEqual(len(ov_list), 1)
+            self.assertGreater(cv2.imread(str(ov_list[0])).shape[0] - 260, 64)
+            joined = " ".join(str(c.args[1]) for c in mock_put.call_args_list if len(c.args) > 1)
+            self.assertIn("tick_lattice_unboxed", joined)
+            self.assertNotIn("px/mm", joined)
 
 
 if __name__ == "__main__":

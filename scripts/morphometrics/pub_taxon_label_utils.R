@@ -72,7 +72,8 @@ format_predictor_labels <- function(var_vec) {
     "soil_carbonate_c_pct"             = "Soil Carbonate Carbon (%)",
     "nwi_wetland_dist_m"               = "NWI Wetland Distance (m)",
     "ultramafic_calcareous_gradient"   = "Ultramafic-Calcareous Geochem Gradient",
-    "wetland_seepage_index"            = "Wetland & Hydrologic Seepage Index"
+    "wetland_seepage_index"            = "Wetland & Hydrologic Seepage Index (0-1)",
+    "hopkins_adjusted_doy_resid"       = "Hopkins-Adjusted Anthesis Residual (days)"
   )
   vapply(as.character(var_vec), function(v) {
     if (is.na(v) || !nzchar(v)) return("Unknown Predictor")
@@ -275,7 +276,14 @@ get_dynamic_packera_palette <- function(taxa_vec = NULL, preserve_order = FALSE)
   if (is.null(taxa_vec) || length(taxa_vec) == 0L) return(c("Unknown" = "#7F7F7F"))
   u_non_unk <- .order_unique_packera_taxa(taxa_vec, preserve_order = preserve_order)
   if (length(u_non_unk) == 0L) return(c("Unknown" = "#7F7F7F"))
-  pal_pool <- c("#0072B2", "#D55E00", "#009E73", "#CC79A7", EXTENDED_COLORBLIND_HEX)
+  pal_pool <- if (exists("PACKERA_TOL_OKABE_24")) {
+    as.character(PACKERA_TOL_OKABE_24)
+  } else {
+    c("#0072B2", "#D55E00", "#009E73", "#CC79A7", "#E69F00", "#56B4E9",
+      "#332288", "#882255", "#44AA99", "#999933", "#666666", "#117733",
+      "#DDCC77", "#661100", "#6699CC", "#D95F02", "#7570B3", "#E7298A",
+      "#66A61E", "#E6AB02", "#A6761D", "#008080", "#88CCEE", "#AA4499")
+  }
   if (length(u_non_unk) > length(pal_pool)) {
     more_n <- length(u_non_unk) - length(pal_pool)
     hcl_ext <- toupper(grDevices::hcl.colors(more_n + 8L, palette = "Dark 3"))

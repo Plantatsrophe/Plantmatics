@@ -23,19 +23,23 @@ if str(PROJECT_ROOT) not in sys.path:
 
 import scripts.vision.lm3_compat  # noqa: F401
 
-# 12-hue Tol + Okabe-Ito colorblind-safe categorical palette
-TOL_OKABE_12: Tuple[str, ...] = (
-    "#0072B2", "#D55E00", "#009E73", "#CC79A7",  # Blue, Vermilion, Bluish green, Reddish purple
-    "#E69F00", "#56B4E9", "#332288", "#882255",  # Orange, Sky blue, Indigo, Wine
-    "#44AA99", "#999933", "#888888", "#117733",  # Teal, Olive, Slate, Forest green
+# 24-hue Tol + Okabe-Ito colorblind-safe categorical palette (matching R PACKERA_TOL_OKABE_24)
+TOL_OKABE_24: Tuple[str, ...] = (
+    "#0072B2", "#D55E00", "#009E73", "#CC79A7", "#E69F00", "#56B4E9",
+    "#332288", "#882255", "#44AA99", "#999933", "#666666", "#117733",
+    "#DDCC77", "#661100", "#6699CC", "#D95F02", "#7570B3", "#E7298A",
+    "#66A61E", "#E6AB02", "#A6761D", "#008080", "#88CCEE", "#AA4499",
 )
+TOL_OKABE_12: Tuple[str, ...] = TOL_OKABE_24[:12]
 
-# 5 unfilled/hollow marker geometries -> 12 x 5 = 60 unique taxon combinations
+# 5 unfilled/hollow marker geometries -> 24 x 5 = 120 unique taxon combinations
 HOLLOW_MARKERS_5: Tuple[str, ...] = ("o", "^", "D", "s", "v")
 
 ICN_ROMAN_TOKENS: Set[str] = {
     "subsp.", "subsp", "ssp.", "ssp", "var.", "var", "f.", "forma",
     "×", "x", "aff.", "aff", "cf.", "cf", "sp.", "sp", "s.s.", "s.l.", "ined.",
+    "sect.", "sect", "ser.", "ser", "subgen.", "subgen", "nov.", "nov",
+    "comb.", "auct.", "non", "p.p.",
 }
 
 _ASSET_ANCHOR_DIRS = ("masks", "contours", "cropped_patches", "raw_vouchers")
@@ -44,6 +48,7 @@ _INFRA_RANK_RE = re.compile(r"\b(subsp\.?|ssp\.?|var\.?|f\.?|forma)\s+([a-z][a-z
 _ICN_RANK_MAP: Dict[str, str] = {
     "x": "×", "×": "×", "subsp": "subsp.", "ssp": "subsp.", "subsp.": "subsp.",
     "ssp.": "subsp.", "var": "var.", "var.": "var.", "f": "f.", "f.": "f.", "forma": "f.",
+    "sect": "sect.", "ser": "ser.", "subgen": "subgen.", "nov": "nov.",
 }
 
 
@@ -108,6 +113,17 @@ def _standardize_packera_species_py(raw_val: Any, infraspecific_val: Any = None)
     if not infra_suffix:
         infra_suffix = _extract_infra_suffix(s_raw)
 
+    # Preserve explicit two-parent hybrid formulas with spaces around ×
+    m_hyb_f = re.match(
+        r"^([A-Za-z][a-z]+)\s+([a-z][a-z-]+)\s+[xX×]\s+([A-Za-z][a-z]*\.?)\s+([a-z][a-z-]+)\b",
+        s_raw.split("(")[0].strip(),
+    )
+    if m_hyb_f:
+        g1, ep1, g2_raw, ep2 = m_hyb_f.groups()
+        g2 = g1.capitalize() if (g2_raw.endswith(".") and g2_raw[0].lower() == g1[0].lower()) else g2_raw.capitalize()
+        return f"{g1.capitalize()} {ep1.lower()} × {g2} {ep2.lower()}"
+
+    is_notho = bool(re.match(r"^[A-Za-z][a-z]+\s+(?:×\s*|[xX]\s+)[a-z][a-z-]+\b", s_raw))
     base_std = None
     try:
         from scripts.core.harvester import standardize_packera_taxon
@@ -119,21 +135,18 @@ def _standardize_packera_species_py(raw_val: Any, infraspecific_val: Any = None)
         base_std = None
 
     if base_std is None:
-        m_binom = re.match(r"^([A-Za-z][a-z]+)\s+(?:([x×])\s+)?([a-z][a-z-]+)\b", s_raw.split("(")[0].strip())
+        m_binom = re.match(r"^([A-Za-z][a-z]+)\s+(?:(×)\s*|([xX])\s+)?([a-z][a-z-]+)\b", s_raw.split("(")[0].strip())
         if m_binom:
-            hyb = "× " if m_binom.group(2) else ""
-            base_std = f"{m_binom.group(1).capitalize()} {hyb}{m_binom.group(3).lower()}"
-
-    if base_std and re.search(r"(?:^|\s)[×x]\s+[a-z]", s_raw) and "×" not in base_std:
-        b_parts = base_std.split()
-        if len(b_parts) >= 2:
-            base_std = f"{b_parts[0]} × {' '.join(b_parts[1:])}"
+            hyb = "×" if (m_binom.group(2) or m_binom.group(3)) else ""
+            base_std = f"{m_binom.group(1).capitalize()} {hyb}{m_binom.group(4).lower()}"
 
     if base_std:
-        if infra_suffix and infra_suffix.split()[-1] not in base_std.split()[1:2]:
-            return f"{base_std}{infra_suffix}"
-        # Retain autonym if explicitly present in raw input
-        if infra_suffix and re.search(r"\b(subsp\.?|ssp\.?|var\.?|f\.?)\s+", s_raw, flags=re.I):
+        base_std = re.sub(r"^([A-Z][a-z]+)\s+[×x]\s+([a-z][a-z-]+)\b", r"\1 ×\2", base_std)
+        if is_notho and "×" not in base_std:
+            b_parts = base_std.split()
+            if len(b_parts) >= 2:
+                base_std = f"{b_parts[0]} ×{' '.join(b_parts[1:])}"
+        if infra_suffix and (infra_suffix.split()[-1] not in base_std.replace("×", "").split()[1:2] or re.search(r"\b(subsp\.?|ssp\.?|var\.?|f\.?)\s+", s_raw, flags=re.I)):
             return f"{base_std}{infra_suffix}"
         return base_std
     return "Unassigned_Packera"
@@ -151,27 +164,39 @@ def format_icn_taxon_mathtext(label_raw: Any, abbreviate_genus: bool = False) ->
         return s.replace("_", " ")
 
     out_parts = []
-    for idx, tok in enumerate(tokens):
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i]
         low = tok.lower()
-        if idx == 0:
+        if i == 0:
             g_txt = f"{tok[0]}." if abbreviate_genus else tok
             out_parts.append(rf"$\it{{{g_txt}}}$")
+        elif i == 1 and low in {"×", "x"} and i + 1 < len(tokens) and re.match(r"^[a-z][a-z-]+$", tokens[i + 1]) and tokens[i + 1].lower() not in ICN_ROMAN_TOKENS:
+            out_parts.append(rf"×$\it{{{tokens[i + 1]}}}$")
+            i += 2
+            continue
+        elif re.match(r"^×[a-z][a-z-]+$", tok):
+            out_parts.append(rf"×$\it{{{tok[1:]}}}$")
         elif low in ICN_ROMAN_TOKENS:
             out_parts.append(_ICN_RANK_MAP.get(low, tok))
+        elif i >= 3 and out_parts and out_parts[-1] == "×" and re.match(r"^[A-Z](?:[a-z]+|\.)$", tok):
+            g2_txt = f"{tok[0]}." if abbreviate_genus else tok
+            out_parts.append(rf"$\it{{{g2_txt}}}$")
         elif re.match(r"^[a-z][a-z-]+$", tok):
             out_parts.append(rf"$\it{{{tok}}}$")
         else:
             out_parts.append(tok)
+        i += 1
     return " ".join(out_parts)
 
 
 def get_combinatorial_taxon_style(taxa_seq: Sequence[str]) -> Dict[str, Tuple[str, str]]:
-    """Map an arbitrary number of taxa (1..60+) to distinct (color, hollow_marker) pairs."""
+    """Map an arbitrary number of taxa (1..120+) to distinct (color, hollow_marker) pairs."""
     unique_taxa = list(dict.fromkeys(str(t) for t in taxa_seq if str(t).strip()))
-    n_c, n_m = len(TOL_OKABE_12), len(HOLLOW_MARKERS_5)
+    n_c, n_m = len(TOL_OKABE_24), len(HOLLOW_MARKERS_5)
     return {
         tx: (
-            TOL_OKABE_12[idx % n_c],
+            TOL_OKABE_24[idx % n_c],
             HOLLOW_MARKERS_5[(idx // n_c) % n_m] if len(unique_taxa) > 8 else HOLLOW_MARKERS_5[idx % n_m],
         )
         for idx, tx in enumerate(unique_taxa)
@@ -421,7 +446,7 @@ def _load_mask_or_contour_u8(row: pd.Series, out_dir: Path) -> Tuple[Optional[np
 
 
 __all__ = [
-    "PROJECT_ROOT", "TOL_OKABE_12", "HOLLOW_MARKERS_5", "ICN_ROMAN_TOKENS",
+    "PROJECT_ROOT", "TOL_OKABE_24", "TOL_OKABE_12", "HOLLOW_MARKERS_5", "ICN_ROMAN_TOKENS",
     "_ASSET_ANCHOR_DIRS", "_resolve_facade_hook", "_atomic_save_matplotlib_fig",
     "_standardize_packera_species_py", "format_icn_taxon_mathtext", "get_combinatorial_taxon_style",
     "_parse_bool_val", "_resolve_asset_path", "_is_valid_smooth_closed_mask",

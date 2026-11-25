@@ -44,6 +44,7 @@ def _render_lm3_silhouette_card(
     is_calibrated: bool = False,
     card_size: int = 320,
     prefer_rgb: bool = True,
+    is_type: bool = False,
 ) -> np.ndarray:
     """Render square RGB card with masked RGB cutout or silhouette, midrib vector, and 10 mm scale bar."""
     card = np.full((card_size, card_size, 3), 255, dtype=np.uint8)
@@ -87,7 +88,9 @@ def _render_lm3_silhouette_card(
             p0 = (int(round(x_base + t0 * (x_tip - x_base))), int(round(y_base + t0 * (y_tip - y_base))))
             p1 = (int(round(x_base + t1 * (x_tip - x_base))), int(round(y_base + t1 * (y_tip - y_base))))
             cv2.line(card, p0, p1, (75, 85, 99), 1, cv2.LINE_AA)
-        cv2.circle(card, (x_base, y_base), 5, (213, 94, 0), 2, cv2.LINE_AA)
+        cv2.circle(card, (x_base, y_base), 6, (255, 255, 255), -1, cv2.LINE_AA)
+        cv2.circle(card, (x_base, y_base), 6, (213, 94, 0), 2, cv2.LINE_AA)
+        cv2.circle(card, (x_tip, y_tip), 4, (255, 255, 255), -1, cv2.LINE_AA)
         cv2.circle(card, (x_tip, y_tip), 4, acc_rgb, 1, cv2.LINE_AA)
 
     # Physical 10 mm scale bar on ruler-calibrated specimens
@@ -96,11 +99,22 @@ def _render_lm3_silhouette_card(
         if bar_px > int(card_size * 0.45):
             bar_px, bar_mm = int(round(5.0 * float(pixels_per_mm) * scale)), 5
         if 12 <= bar_px <= int(card_size * 0.60):
-            bx0, bx1, by = card_size - bar_px - 14, card_size - 14, card_size - 14
+            bx0, bx1, by = card_size - bar_px - 14, card_size - 14, card_size - 12
             cv2.line(card, (bx0, by), (bx1, by), (30, 30, 30), 2, cv2.LINE_AA)
             cv2.line(card, (bx0, by - 3), (bx0, by + 3), (30, 30, 30), 1, cv2.LINE_AA)
             cv2.line(card, (bx1, by - 3), (bx1, by + 3), (30, 30, 30), 1, cv2.LINE_AA)
-            cv2.putText(card, f"{bar_mm} mm", (max(6, bx0 - 2), by - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (30, 30, 30), 1, cv2.LINE_AA)
+            lbl_bar = f"{bar_mm} mm"
+            (tw_b, th_b), _ = cv2.getTextSize(lbl_bar, cv2.FONT_HERSHEY_SIMPLEX, 0.44, 1)
+            tx_b = max(6, min(card_size - tw_b - 6, bx0 + (bar_px - tw_b) // 2))
+            ty_b = by - 8
+            cv2.rectangle(card, (tx_b - 3, ty_b - th_b - 2), (tx_b + tw_b + 3, ty_b + 2), (255, 255, 255), -1)
+            cv2.putText(card, lbl_bar, (tx_b, ty_b), cv2.FONT_HERSHEY_SIMPLEX, 0.44, (20, 20, 20), 1, cv2.LINE_AA)
+
+    if is_type:
+        tag = "[TYPE]"
+        (tw_t, th_t), _ = cv2.getTextSize(tag, cv2.FONT_HERSHEY_SIMPLEX, 0.42, 1)
+        cv2.rectangle(card, (6, 6), (6 + tw_t + 10, 6 + th_t + 8), (51, 34, 136), -1)
+        cv2.putText(card, tag, (11, 6 + th_t + 3), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (255, 255, 255), 1, cv2.LINE_AA)
 
     return card
 
@@ -177,7 +191,7 @@ def export_taxon_ect_exemplars(
         try:
             v_df = pd.read_csv(vouchers_csv, dtype=str)
             if "catalogNumber" in v_df.columns:
-                for col_v in ("species_standardized", "scientificName", "infraspecific_taxon", "image_path"):
+                for col_v in ("species_standardized", "scientificName", "infraspecific_taxon", "image_path", "is_type_specimen", "type_status"):
                     if col_v in v_df.columns and col_v not in df_work.columns:
                         v_map = dict(zip(v_df["catalogNumber"].astype(str).str.strip(), v_df[col_v]))
                         df_work[col_v] = df_work["catalogNumber"].astype(str).str.strip().map(v_map)
@@ -295,11 +309,15 @@ def export_taxon_ect_exemplars(
             px_arg = float(px_mm) if pd.notna(px_mm) else None
             is_cal = _parse_bool_val(best_row.get("is_calibrated_mm", False)) and str(
                 best_row.get("scale_source", "")
-            ).strip().lower() not in {"mp_estimated", "predicted_from_megapixels", "uncalibrated"}
-            sil_card = render_sil_fn(mask_u8, None, accent_hex=acc_col, pixels_per_mm=px_arg, is_calibrated=is_cal, card_size=320, prefer_rgb=False)
+            ).strip().lower() not in {"mp_estimated", "predicted_from_megapixels", "uncalibrated", "tick_lattice_unboxed"}
+            is_type_row = bool(_parse_bool_val(best_row.get("is_type_specimen", False))) or (
+                str(best_row.get("type_status", "")).strip().lower() not in {"", "none", "nan", "na", "not a type"}
+            )
+            sil_kw = {"is_type": is_type_row} if render_sil_fn is _render_lm3_silhouette_card else {}
+            sil_card = render_sil_fn(mask_u8, None, accent_hex=acc_col, pixels_per_mm=px_arg, is_calibrated=is_cal, card_size=320, prefer_rgb=False, **sil_kw)
             cv2.imwrite(str(out_sil_png), cv2.cvtColor(sil_card, cv2.COLOR_RGB2BGR))
             if rgb_patch is not None:
-                cut_card = render_sil_fn(mask_u8, rgb_patch, accent_hex=acc_col, pixels_per_mm=px_arg, is_calibrated=is_cal, card_size=320, prefer_rgb=True)
+                cut_card = render_sil_fn(mask_u8, rgb_patch, accent_hex=acc_col, pixels_per_mm=px_arg, is_calibrated=is_cal, card_size=320, prefer_rgb=True, **sil_kw)
                 cv2.imwrite(str(out_rgb_png), cv2.cvtColor(cut_card, cv2.COLOR_RGB2BGR))
         elif out_ect_png.exists() and out_ect_png.stat().st_size > 500:
             wrote_ect = True

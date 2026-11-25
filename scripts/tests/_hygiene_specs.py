@@ -144,7 +144,7 @@ RAW_STRICT_LINE_CEILINGS: Tuple[Tuple[str, int], ...] = (
     ("scripts/tests/test_step02_taxonomic_clarity.py", 400),
     # Step 02B pipeline, rescorer, figure facades, submodules, & split test suites
     ("scripts/pipeline/02_segment_and_extract.py", 470), ("scripts/vision/rescore_step02_qc_and_zones.py", 260),
-    ("scripts/vision/step02_figures.py", 270), ("scripts/vision/step02_pipe_init_checkpoint.py", 430),
+    ("scripts/vision/step01_figures.py", 320), ("scripts/vision/step02_figures.py", 270), ("scripts/vision/step02_pipe_init_checkpoint.py", 430),
     ("scripts/vision/step02_pipe_stage1_candidates.py", 380), ("scripts/vision/step02_pipe_stage2_inference.py", 430),
     ("scripts/vision/step02_pipe_repro_clustering.py", 350), ("scripts/vision/step02_pipe_leaf_readout_a.py", 455),
     ("scripts/vision/step02_pipe_leaf_readout_b.py", 475), ("scripts/vision/step02_pipe_manifest_flush.py", 380),
@@ -235,7 +235,7 @@ RAW_STRICT_LINE_CEILINGS: Tuple[Tuple[str, int], ...] = (
     ("scripts/morphometrics/dissect_mcd_and_ect.R", 440), ("scripts/morphometrics/dissect_cauline_track.R", 440), ("scripts/morphometrics/dissect_scalars_permanova.R", 440),
     ("scripts/morphometrics/pub_ecoregion_manova_utils.R", 100), ("scripts/morphometrics/ecoregion_epa_spatial.R", 420), ("scripts/morphometrics/ecoregion_supervised_cda.R", 420),
     ("scripts/morphometrics/ecoregion_manova_stats.R", 400), ("scripts/morphometrics/ecoregion_manova_plot.R", 400), ("scripts/morphometrics/pub_figures_utils.R", 420),
-    ("scripts/morphometrics/pub_taxon_label_utils.R", 420), ("scripts/figures/theme_packera_pub.R", 400), ("scripts/figures/basemap_exemplar_utils.R", 240),
+    ("scripts/morphometrics/pub_taxon_label_utils.R", 420), ("scripts/figures/theme_packera_pub.R", 400), ("scripts/figures/icn_palette_utils.R", 230), ("scripts/figures/basemap_exemplar_utils.R", 240),
     # Core SQLite Python/R bridges, config, CLI, shell, & Warm-R session (Buckets 3 & 4)
     ("scripts/core/db_schema.py", 240), ("scripts/core/db_schema_env_cols.py", 450), ("scripts/core/db_schema_master_view_a.py", 360),
     ("scripts/core/db_schema_master_view_b.py", 360), ("scripts/core/db_schema_ddl_tier_a.py", 440), ("scripts/core/db_schema_ddl_tier_b.py", 440),
@@ -263,6 +263,7 @@ RAW_STRICT_LINE_CEILINGS: Tuple[Tuple[str, int], ...] = (
     ("scripts/tests/test_step04_type_controls_and_basionyms.py", 430), ("scripts/tests/test_step04_plasticity_osr_and_traits.py", 430), ("scripts/tests/test_cli_parser_and_env_doctor.py", 440),
     ("scripts/tests/test_cli_run_pipeline_preflight.py", 440), ("scripts/tests/test_cli_purge_and_compute_flags.py", 440), ("scripts/tests/test_sql_ddl_wal_and_contours.py", 440),
     ("scripts/tests/test_sql_multiplant_and_master_view.py", 440), ("scripts/tests/test_sql_consolidation_and_migration.py", 440), ("scripts/tests/test_sql_schema_20261127_roundtrip.py", 440),
+    ("scripts/tests/test_pub_figure_audit_suite.py", 420),
 )
 
 EXTRA_500_LINE_BOUNDED_MODULES: Tuple[str, ...] = (

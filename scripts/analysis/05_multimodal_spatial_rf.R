@@ -56,6 +56,7 @@ parse_args_robust <- function(cli_args = commandArgs(trailingOnly = TRUE)) {
     output_flags = rp("data/tables/multimodal_conflict_flags.csv"), output_plot = rp("outputs/figures/fig05a_ecological_niche_and_rf_importance.png"),
     output_summary = rp("outputs/reports/multimodal_spatial_rf_summary.csv"), pheno_anomalies = rp("data/tables/phenological_anomalies.csv"),
     pheno_summary = rp("outputs/reports/phenological_anomaly_summary.csv"), pheno_plot = rp("outputs/figures/fig05b_hopkins_circular_phenology.png"),
+    sdm_plot = rp("outputs/figures/fig05c_sdm_suitability_and_distribution_map.png"),
     ssurgo_cache = "data/environmental/ssurgo_cache", ssurgo_table = rp("data/tables/ssurgo_edaphic_validation.csv"),
     contingency_table = rp("outputs/reports/micro_edaphic_outcrop_contingency.csv"), batch_size = 75L,
     permutations = 100L, n_trees = 500L, intraspecific_mode = FALSE, focal_taxon = "", demo = FALSE
@@ -73,6 +74,7 @@ parse_args_robust <- function(cli_args = commandArgs(trailingOnly = TRUE)) {
       optparse::make_option(c("--pheno-anomalies"), type = "character", default = defs$pheno_anomalies),
       optparse::make_option(c("--pheno-summary"), type = "character", default = defs$pheno_summary),
       optparse::make_option(c("--pheno-plot"), type = "character", default = defs$pheno_plot),
+      optparse::make_option(c("--sdm-plot"), type = "character", default = defs$sdm_plot),
       optparse::make_option(c("--ssurgo-cache"), type = "character", default = defs$ssurgo_cache),
       optparse::make_option(c("--ssurgo-table"), type = "character", default = defs$ssurgo_table),
       optparse::make_option(c("--contingency-table"), type = "character", default = defs$contingency_table),
@@ -89,7 +91,7 @@ parse_args_robust <- function(cli_args = commandArgs(trailingOnly = TRUE)) {
   fmap <- c("-v" = "vouchers", "--vouchers" = "vouchers", "-m" = "morphometrics", "--morphometrics" = "morphometrics", "--pheno-states" = "pheno_states",
             "-e" = "env_dir", "--env-dir" = "env_dir", "-f" = "output_flags", "--output-flags" = "output_flags", "-p" = "output_plot", "--output-plot" = "output_plot",
             "-s" = "output_summary", "--output-summary" = "output_summary", "--pheno-anomalies" = "pheno_anomalies", "--pheno-summary" = "pheno_summary",
-            "--pheno-plot" = "pheno_plot", "--ssurgo-cache" = "ssurgo_cache", "--ssurgo-table" = "ssurgo_table", "--contingency-table" = "contingency_table",
+            "--pheno-plot" = "pheno_plot", "--sdm-plot" = "sdm_plot", "--ssurgo-cache" = "ssurgo_cache", "--ssurgo-table" = "ssurgo_table", "--contingency-table" = "contingency_table",
             "--ssurgo-batch-size" = "batch_size", "-k" = "permutations", "--permutations" = "permutations", "-t" = "n_trees", "--n-trees" = "n_trees", "--focal-taxon" = "focal_taxon")
   i <- 1L
   while (i <= length(raw_args)) {
@@ -309,7 +311,7 @@ main <- function(cli_args = commandArgs(trailingOnly = TRUE)) {
   }
 
   pheno_res <- compute_phenological_anomalies(vdf, output_csv = opts$pheno_anomalies, summary_csv = opts$pheno_summary, demo = dm)
-  vdf <- pheno_res$df; if (!skip_f) export_phenological_latitudinal_figures(vdf, pheno_res$baseline, opts$pheno_plot)
+  vdf <- pheno_res$df; if (!skip_f) export_phenological_latitudinal_figures(vdf, pheno_res$baseline, opts$pheno_plot, pheno_summary = pheno_res$summary, bimod_info = pheno_res$allochronic_bimodality)
   cand_eco <- discover_candidate_eco_predictors(vdf, include_pheno = FALSE, min_finite = 3L)
   for (ev in cand_eco) if (ev %in% names(vdf)) vdf[[ev]] <- suppressWarnings(as.numeric(vdf[[ev]]))
   is_intra <- isTRUE(opts$intraspecific_mode) || (length(unique(stats::na.omit(vdf$species_standardized))) < 2L)
@@ -358,7 +360,7 @@ main <- function(cli_args = commandArgs(trailingOnly = TRUE)) {
 
   sdm_dir <- dirname(dirname(opts$output_plot)); if (is.null(sdm_dir) || !nzchar(sdm_dir) || identical(sdm_dir, ".")) sdm_dir <- "outputs"
   ftx <- if (!is.null(opts$focal_taxon) && nzchar(trimws(opts$focal_taxon))) standardize_packera_taxon(opts$focal_taxon) else "Packera dubia"
-  sdm_res <- if (!skip_f) tryCatch(fit_and_project_maxent_sdm_maps(geo_vdf, srf, opts$env_dir, sdm_dir, kept_rf, psel$primary_clim_vars, psel$primary_edaph_vars, ftx, is_intra, dm), error = function(e) { warning("Step 05 SDM warning: ", e$message); NULL }) else NULL
+  sdm_res <- if (!skip_f) tryCatch(fit_and_project_maxent_sdm_maps(geo_vdf, srf, opts$env_dir, sdm_dir, kept_rf, psel$primary_clim_vars, psel$primary_edaph_vars, ftx, is_intra, dm, out_sdm_plot = opts$sdm_plot), error = function(e) { warning("Step 05 SDM warning: ", e$message); NULL }) else NULL
 
   .pm <- function(pdf, cols) { if (!is.data.frame(pdf) || nrow(pdf) == 0L) return(NA_real_); for (cc in intersect(cols, names(pdf))) { v <- suppressWarnings(as.numeric(pdf[[cc]])); v <- v[is.finite(v)]; if (length(v) > 0L) return(round(mean(v), 4)) }; NA_real_ }
   oob_o <- if (!is.null(srf$OOB_Accuracy) && is.finite(srf$OOB_Accuracy)) round(as.numeric(srf$OOB_Accuracy), 4) else NA_real_

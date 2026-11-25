@@ -292,12 +292,13 @@ render_fig04c_supervised_ecoregion_cda <- function(
   figures_dir = NULL,
   output_plot_path = NULL,
   manova_res = NULL,
-  batch_csv = NULL
+  batch_csv = NULL,
+  ecoregion_plot_path = NULL
 ) {
   fdir <- if (!is.null(figures_dir) && nzchar(figures_dir)) {
     as.character(figures_dir)
   } else if (exists("resolve_active_figures_dir", mode = "function")) {
-    resolve_active_figures_dir(NULL, output_plot_path)
+    resolve_active_figures_dir(NULL, if (!is.null(output_plot_path)) output_plot_path else ecoregion_plot_path)
   } else {
     "outputs/figures"
   }
@@ -311,6 +312,7 @@ render_fig04c_supervised_ecoregion_cda <- function(
     gmm_res = gmm_res,
     figures_dir = fdir,
     manova_res = manova_res,
-    batch_csv = batch_csv
+    batch_csv = batch_csv,
+    output_path = ecoregion_plot_path
   )
 }

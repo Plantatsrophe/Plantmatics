@@ -61,23 +61,28 @@ render_focal_revision_synthesis_plate_png <- function(df, out_png, full_df = NUL
     nb_cent <- nb_cent[order(-as.integer(nb_cnt[nb_cent$species_standardized])), , drop = FALSE]; nb_cent$lbl <- abbreviate_icn_taxon(nb_cent$species_standardized, abbreviate_genus = TRUE)
     p_a <- p_a + ggplot2::geom_point(data = nb_df, ggplot2::aes(x = .data$mx, y = .data$my), shape = 1, size = 1.6, stroke = 0.55, color = "#94A3B8", alpha = 0.42)
   }
+  t_icn <- function(pre, sfx = "") if (exists("format_icn_title_expr", mode = "function")) format_icn_title_expr(pre, foc_name, sfx, bold_all = TRUE) else paste0(pre, foc_name, sfx)
   p_a <- p_a + ggplot2::geom_point(data = foc_m, ggplot2::aes(x = .data$mx, y = .data$my, color = .data$treatment_call, shape = .data$treatment_call), size = 2.4, stroke = 0.9, alpha = 0.88) +
     ggplot2::scale_color_manual(values = PACKERA_TREATMENT_PALETTE, labels = function(x) gsub("_", " ", x), name = "Treatment") +
     ggplot2::scale_shape_manual(values = PACKERA_TREATMENT_HOLLOW_SHAPES, labels = function(x) gsub("_", " ", x), name = "Treatment") + theme_packera_pub(base_size = 9.4) +
-    ggplot2::labs(title = bquote("A." ~ italic(.(foc_name)) ~ "vs. Complex Neighbors Morphospace"),
-                  subtitle = if (nrow(nb_df) > 0L) "Grey circles = congeneric complex; colored hollow symbols = focal treatments (* = Type)" else "Colored hollow symbols = focal treatments (* = Type)",
+    ggplot2::labs(title = t_icn("A. ", " vs. Complex Neighbors Morphospace"),
+                  subtitle = if (nrow(nb_df) > 0L) "Grey circles = congeneric complex; hollow symbols = focal treatments (double-ring = Type)" else "Hollow symbols = focal treatments (double-ring = Type)",
                   x = if (mx_col == "can1") "Canonical Variate 1 (Can1)" else format_morph_trait_labels(mx_col), y = if (my_col == "can2") "Canonical Variate 2 (Can2)" else format_morph_trait_labels(my_col))
-  if ("is_type_specimen" %in% names(foc_m) && any(!is.na(foc_m$is_type_specimen) & as.logical(foc_m$is_type_specimen))) p_a <- p_a + ggplot2::geom_point(data = foc_m[!is.na(foc_m$is_type_specimen) & as.logical(foc_m$is_type_specimen), , drop = FALSE], ggplot2::aes(x = .data$mx, y = .data$my), shape = 8, size = 3.8, stroke = 1.2, color = "#111827")
+  if (nrow(foc_m) > 0L && exists("add_nomenclatural_type_layer_gg", mode = "function")) p_a <- add_nomenclatural_type_layer_gg(p_a, foc_m, x_col = "mx", y_col = "my", show_uncertain_coord = FALSE)
   if (!is.null(nb_cent) && nrow(nb_cent) > 0L) p_a <- add_centroid_repel_labels_gg(p_a, utils::head(nb_cent, 8L), "mx", "my", "lbl", size = 2.50)
   lon_col <- if ("decimalLongitude" %in% names(foc_df)) "decimalLongitude" else "longitude"; lat_col <- if ("decimalLatitude" %in% names(foc_df)) "decimalLatitude" else "latitude"
-  m_ctx <- build_na_projected_basemap_gg(foc_df[[lon_col]], foc_df[[lat_col]]); pts_g <- project_lonlat_points_r(foc_df, m_ctx, lon_col = lon_col, lat_col = lat_col); p_b <- m_ctx$plot
-  if (nrow(pts_g) > 0L) {
-    p_b <- p_b + ggplot2::geom_point(data = pts_g, ggplot2::aes(x = .data$map_x, y = .data$map_y, color = .data$treatment_call, shape = .data$treatment_call), size = 2.3, stroke = 0.85, alpha = 0.86, show.legend = FALSE) +
-      ggplot2::scale_color_manual(values = PACKERA_TREATMENT_PALETTE) + ggplot2::scale_shape_manual(values = PACKERA_TREATMENT_HOLLOW_SHAPES)
-    if ("is_type_specimen" %in% names(pts_g) && any(!is.na(pts_g$is_type_specimen) & as.logical(pts_g$is_type_specimen))) p_b <- p_b + ggplot2::geom_point(data = pts_g[!is.na(pts_g$is_type_specimen) & as.logical(pts_g$is_type_specimen), , drop = FALSE], ggplot2::aes(x = .data$map_x, y = .data$map_y), shape = 8, size = 3.8, stroke = 1.2, color = "#111827")
-  }
-  p_b <- p_b + ggplot2::labs(title = "B. Geographic Distribution & Type Localities (EPSG:5070)", subtitle = "Projected CONUS Albers; star = nomenclatural type control")
-  ed_col <- intersect(c("lithic_outcrop_index", "fine_bedrock_depth_cm", "fine_soil_ph", "soil_ph"), names(foc_df))[1L]; ph_col <- intersect(c("delta_doy_resid", "hopkins_adjusted_doy", "doy"), names(foc_df))[1L]
+  mf <- if (exists("filter_map_occurrences_r", mode = "function") && all(c(lon_col, lat_col) %in% names(foc_df))) filter_map_occurrences_r(foc_df, lon_col = lon_col, lat_col = lat_col) else list(clean_df = foc_df, uncertain_type_df = foc_df[0L, , drop = FALSE], n_quarantined_non_type = 0L)
+  all_m <- if (nrow(mf$uncertain_type_df) > 0L) rbind(mf$clean_df, mf$uncertain_type_df) else mf$clean_df
+  m_ctx <- build_na_projected_basemap_gg(all_m[[lon_col]], all_m[[lat_col]]); pts_g <- if (nrow(mf$clean_df) > 0L) project_lonlat_points_r(mf$clean_df, m_ctx, lon_col = lon_col, lat_col = lat_col) else mf$clean_df[0L, , drop = FALSE]
+  pts_u <- if (nrow(mf$uncertain_type_df) > 0L) project_lonlat_points_r(mf$uncertain_type_df, m_ctx, lon_col = lon_col, lat_col = lat_col) else mf$uncertain_type_df[0L, , drop = FALSE]
+  pts_t <- if (nrow(pts_g) > 0L && nrow(pts_u) > 0L) rbind(pts_g, pts_u) else if (nrow(pts_u) > 0L) pts_u else pts_g; p_b <- m_ctx$plot
+  if (nrow(pts_g) > 0L) p_b <- p_b + ggplot2::geom_point(data = pts_g, ggplot2::aes(x = .data$map_x, y = .data$map_y, color = .data$treatment_call, shape = .data$treatment_call), size = 2.3, stroke = 0.85, alpha = 0.86, show.legend = FALSE) + ggplot2::scale_color_manual(values = PACKERA_TREATMENT_PALETTE) + ggplot2::scale_shape_manual(values = PACKERA_TREATMENT_HOLLOW_SHAPES)
+  if (nrow(pts_t) > 0L && exists("add_nomenclatural_type_layer_gg", mode = "function")) p_b <- add_nomenclatural_type_layer_gg(p_b, pts_t, x_col = "map_x", y_col = "map_y", show_uncertain_coord = TRUE)
+  n_q_b <- if (is.null(mf$n_quarantined_non_type)) 0L else as.integer(mf$n_quarantined_non_type)
+  p_b <- p_b + ggplot2::labs(title = "B. Geographic Distribution & Type Localities (EPSG:5070)", subtitle = if (is.finite(n_q_b) && n_q_b > 0L) sprintf("CONUS Albers (EPSG:5070) | %d centroid/inst. excluded", n_q_b) else "CONUS Albers (EPSG:5070); double-ring = Type control")
+  ed_col <- intersect(c("lithic_outcrop_index", "fine_bedrock_depth_cm", "fine_soil_ph", "soil_ph"), names(foc_df))[1L]
+  ph_cands <- intersect(c("hopkins_adjusted_doy_resid", "delta_doy_resid", "delta_doy", "hopkins_adjusted_doy", "doy"), names(foc_df))
+  ph_col <- ph_cands[vapply(ph_cands, function(cl) any(is.finite(suppressWarnings(as.numeric(foc_df[[cl]])))), logical(1))][1L]; is_ph_res <- ph_col %in% c("hopkins_adjusted_doy_resid", "delta_doy_resid", "delta_doy")
   p_c <- if (!is.na(ed_col) && !is.na(ph_col)) {
     foc_df$ex_v <- suppressWarnings(as.numeric(foc_df[[ed_col]])); foc_df$ph_v <- suppressWarnings(as.numeric(foc_df[[ph_col]]))
     ec <- foc_df[is.finite(foc_df$ex_v) & is.finite(foc_df$ph_v), , drop = FALSE]; pe <- ggplot2::ggplot()
@@ -86,11 +91,11 @@ render_focal_revision_synthesis_plate_png <- function(df, out_png, full_df = NUL
       nb_e$ex_v <- suppressWarnings(as.numeric(nb_e[[ed_col]])); nb_e$ph_v <- suppressWarnings(as.numeric(nb_e[[ph_col]])); nb_e <- nb_e[is.finite(nb_e$ex_v) & is.finite(nb_e$ph_v), , drop = FALSE]
       if (nrow(nb_e) > 0L) pe <- pe + ggplot2::geom_point(data = nb_e, ggplot2::aes(x = .data$ex_v, y = .data$ph_v), shape = 1, size = 1.6, stroke = 0.5, color = "#94A3B8", alpha = 0.35)
     }
-    if (ph_col == "delta_doy_resid") pe <- pe + ggplot2::geom_hline(yintercept = c(-21, 0, 21), linetype = c("dashed", "dotted", "dashed"), color = c("#D55E00", "#9CA3AF", "#D55E00"), linewidth = 0.5)
+    if (is_ph_res) pe <- pe + ggplot2::geom_hline(yintercept = c(-21, 0, 21), linetype = c("dashed", "dotted", "dashed"), color = c("#D55E00", "#9CA3AF", "#D55E00"), linewidth = 0.5)
     pe + ggplot2::geom_point(data = ec, ggplot2::aes(x = .data$ex_v, y = .data$ph_v, color = .data$treatment_call, shape = .data$treatment_call), size = 2.3, stroke = 0.85, alpha = 0.85, show.legend = FALSE) +
       ggplot2::scale_color_manual(values = PACKERA_TREATMENT_PALETTE) + ggplot2::scale_shape_manual(values = PACKERA_TREATMENT_HOLLOW_SHAPES) + theme_packera_pub(base_size = 9.4) +
       ggplot2::labs(title = "C. Rhizosphere Edaphic & Hopkins Phenology Envelope", subtitle = "Focal vouchers vs. complex background along edaphic & phenological axes",
-                    x = if (exists("format_predictor_labels", mode = "function")) format_predictor_labels(ed_col) else ed_col, y = if (ph_col == "delta_doy_resid") "Hopkins Phenological Anomaly (Delta DOY, d)" else "Hopkins-Adjusted Anthesis DOY")
+                    x = if (exists("format_predictor_labels", mode = "function")) format_predictor_labels(ed_col) else ed_col, y = if (is_ph_res) "Hopkins Phenological Anomaly (Delta DOY, d)" else "Hopkins-Adjusted Anthesis DOY")
   } else ggplot2::ggplot() + theme_packera_pub() + ggplot2::labs(title = "C. Rhizosphere Edaphic & Phenology Envelope")
   trt_tab <- as.data.frame(table(treatment_call = foc_df$treatment_call), stringsAsFactors = FALSE); trt_tab$pct <- 100.0 * trt_tab$Freq / max(1L, sum(trt_tab$Freq)); trt_tab <- trt_tab[order(trt_tab$Freq), , drop = FALSE]
   trt_tab$lbl <- factor(gsub("_", " ", trt_tab$treatment_call), levels = gsub("_", " ", trt_tab$treatment_call)); trt_tab$txt <- sprintf("%d (%.1f%%)", trt_tab$Freq, trt_tab$pct)
@@ -100,9 +105,9 @@ render_focal_revision_synthesis_plate_png <- function(df, out_png, full_df = NUL
   p_d <- ggplot2::ggplot(trt_tab, ggplot2::aes(x = .data$Freq, y = .data$lbl, fill = .data$treatment_call)) + ggplot2::geom_col(width = 0.62, color = "white", linewidth = 0.35, show.legend = FALSE) +
     ggplot2::geom_text(ggplot2::aes(label = .data$txt), hjust = -0.10, size = 2.8, color = "#111827") + ggplot2::scale_fill_manual(values = PACKERA_TREATMENT_PALETTE) +
     ggplot2::scale_x_continuous(expand = ggplot2::expansion(mult = c(0, 0.25))) + theme_packera_pub(base_size = 9.4) +
-    ggplot2::labs(title = bquote("D." ~ italic(.(foc_name)) ~ .(sprintf("Treatment Breakdown (N = %d)", nrow(foc_df)))),
+    ggplot2::labs(title = t_icn("D. ", sprintf(" Treatment Breakdown (N = %d)", nrow(foc_df))),
                   subtitle = paste(c(sprintf("Basal_Rosette = %d / %d", n_basal_src, nrow(foc_df)), if (nzchar(pcs_med)) pcs_med else NULL), collapse = " | "), x = "Voucher Count", y = NULL)
   plate_f <- ((p_a | p_b) / (p_c | p_d)) + patchwork::plot_layout(heights = c(1.12, 1.0)) +
-    patchwork::plot_annotation(title = bquote(bold("Integrative Taxonomic Revision Plate:" ~ italic(.(foc_name)))), theme = ggplot2::theme(plot.title = ggplot2::element_text(face = "bold", size = 12.5)))
+    patchwork::plot_annotation(title = t_icn("Integrative Taxonomic Revision Plate: "), theme = ggplot2::theme(plot.title = ggplot2::element_text(face = "bold", size = 12.5)))
   save_packera_png_300(plate_f, normalize_png_path(out_png), width = 14.4, height = 10.6)
 }

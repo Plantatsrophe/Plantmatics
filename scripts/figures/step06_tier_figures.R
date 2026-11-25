@@ -63,11 +63,17 @@ if (!exists("save_packera_png_300", mode = "function")) {
     theme_packera_pub(base_size = 9.0) +
     ggplot2::theme(legend.position = "none", axis.text.y = ggplot2::element_blank(), axis.ticks.y = ggplot2::element_blank(), panel.grid.major.y = ggplot2::element_blank())
   if (isTRUE(show_support) && !is.null(tr_u$node.label) && length(tr_u$node.label) > 0L) {
-    nd_lbl <- trimws(as.character(tr_u$node.label)); nd_ids <- nt + seq_along(nd_lbl)
-    ok_nd <- nzchar(nd_lbl) & nd_lbl != "NA"
-    if (any(ok_nd)) {
-      ndf <- data.frame(x = dx[nd_ids[ok_nd]], y = yp[nd_ids[ok_nd]], lbl = nd_lbl[ok_nd], stringsAsFactors = FALSE)
-      p <- p + ggplot2::geom_text(data = ndf, ggplot2::aes(x = .data$x, y = .data$y, label = .data$lbl), hjust = 1.15, vjust = -0.35, size = 2.2, color = "#475569")
+    nd_raw <- trimws(as.character(tr_u$node.label))
+    nd_num <- suppressWarnings(as.numeric(sub("/.*$", "", nd_raw)))
+    fin_nd <- is.finite(nd_num) & (nt + seq_along(nd_raw) <= tot)
+    if (any(fin_nd)) {
+      is_bs <- max(nd_num[fin_nd], na.rm = TRUE) > 1.5
+      ok_nd <- fin_nd & (if (is_bs) nd_num >= 50.0 else nd_num >= 0.70)
+      if (any(ok_nd)) {
+        nd_ids <- nt + which(ok_nd)
+        ndf <- data.frame(x = dx[nd_ids], y = yp[nd_ids], lbl = if (is_bs) sprintf("%.0f", nd_num[ok_nd]) else sprintf("%.2f", nd_num[ok_nd]), stringsAsFactors = FALSE)
+        p <- p + ggplot2::geom_text(data = ndf, ggplot2::aes(x = .data$x, y = .data$y, label = .data$lbl), hjust = 1.15, vjust = -0.35, size = 2.2, color = "#475569")
+      }
     }
   }
   p
@@ -94,6 +100,7 @@ if (!exists("save_packera_png_300", mode = "function")) {
   gd <- gdi_df[is.finite(gdi_df$coalescent_gdi), , drop = FALSE]
   gd$taxon <- factor(gd$taxon, levels = gd$taxon[order(gd$coalescent_gdi)])
   cls <- sort(unique(gd$gdi_classification))
+  lab_fn <- if (exists("icn_discrete_labeller", mode = "function")) icn_discrete_labeller(abbreviate_genus = TRUE) else ggplot2::waiver()
   ggplot2::ggplot(gd, ggplot2::aes(x = .data$coalescent_gdi, y = .data$taxon, color = .data$gdi_classification, shape = .data$gdi_classification)) +
     ggplot2::geom_vline(xintercept = 0.20, linetype = "dashed", color = "#DC2626") +
     ggplot2::geom_vline(xintercept = 0.70, linetype = "dashed", color = "#059669") +
@@ -101,10 +108,11 @@ if (!exists("save_packera_png_300", mode = "function")) {
     ggplot2::geom_point(size = 3.0, stroke = 1.1, fill = NA) +
     ggplot2::scale_color_manual(values = get_combinatorial_palette_r(cls), name = "MSC Gate") +
     ggplot2::scale_shape_manual(values = stats::setNames(rep(c(1L, 2L, 5L, 0L), length.out = length(cls)), cls), name = "MSC Gate") +
+    ggplot2::scale_y_discrete(labels = lab_fn) +
     ggplot2::scale_x_continuous(limits = c(0, 1.02)) +
     ggplot2::labs(title = title_txt, subtitle = sub_txt, x = "Genealogical Divergence Index (gdi +/- 95% CI)", y = NULL) +
     theme_packera_pub(base_size = 9.0) +
-    ggplot2::theme(axis.text.y = ggplot2::element_text(face = "italic", size = 8.2))
+    ggplot2::theme(axis.text.y = ggplot2::element_text(size = 8.2))
 }
 
 .tier_cytology_gg <- function(cyto_rec, cyto_sum, active_taxa, title_txt) {
@@ -138,6 +146,8 @@ if (!exists("save_packera_png_300", mode = "function")) {
   if (!is.data.frame(geo_df) || nrow(geo_df) == 0L || !all(c("decimalLongitude", "decimalLatitude") %in% names(geo_df))) {
     return(.tier_empty(title_txt, "Zero georeferenced coordinates staged", sub_txt))
   }
+  if (exists("filter_map_occurrences_r", mode = "function")) geo_df <- filter_map_occurrences_r(geo_df, lon_col = "decimalLongitude", lat_col = "decimalLatitude")$clean_df
+  if (nrow(geo_df) == 0L) return(.tier_empty(title_txt, "Zero clean non-centroid coordinates staged", sub_txt))
   geo_df$lon <- suppressWarnings(as.numeric(geo_df$decimalLongitude)); geo_df$lat <- suppressWarnings(as.numeric(geo_df$decimalLatitude))
   geo_df <- geo_df[is.finite(geo_df$lon) & is.finite(geo_df$lat), , drop = FALSE]
   if (nrow(geo_df) == 0L) return(.tier_empty(title_txt, "Zero finite lon/lat points", sub_txt))
@@ -149,7 +159,8 @@ if (!exists("save_packera_png_300", mode = "function")) {
     pts <- project_lonlat_points_r(geo_df, ctx, lon_col = "lon", lat_col = "lat")
     return(ctx$plot + ggplot2::geom_point(data = pts, ggplot2::aes(x = .data$map_x, y = .data$map_y, color = .data$grp_col, shape = .data$grp_col), size = 2.6, fill = NA, stroke = 1.0, inherit.aes = FALSE) +
       ggplot2::scale_color_manual(values = pal, name = color_col) + ggplot2::scale_shape_manual(values = sh, name = color_col) +
-      ggplot2::labs(title = title_txt, subtitle = sub_txt) + theme_packera_pub(base_size = 9.0))
+      ggplot2::labs(title = title_txt, subtitle = sub_txt) + theme_packera_pub(base_size = 9.0) +
+      ggplot2::theme(panel.background = ggplot2::element_rect(fill = "#EEF4F8", color = NA)))
   }
   ggplot2::ggplot(geo_df, ggplot2::aes(x = .data$lon, y = .data$lat, color = .data$grp_col, shape = .data$grp_col)) +
     ggplot2::geom_point(size = 2.6, fill = NA, stroke = 1.0) +
@@ -267,9 +278,12 @@ if (!exists("save_packera_png_300", mode = "function")) {
 
   p6c_a <- if (is.data.frame(p$placement_df) && nrow(p$placement_df) > 0L) {
     ggplot2::ggplot(p$placement_df, ggplot2::aes(x = .data$n_shared_11mers, y = .data$kmer_containment, color = .data$locus, shape = .data$locus)) +
-      ggplot2::geom_point(size = 2.8, fill = NA, stroke = 1.0) + ggplot2::scale_color_manual(values = get_combinatorial_palette_r(unique(p$placement_df$locus))) +
-      ggplot2::scale_shape_manual(values = get_combinatorial_hollow_shapes_r(unique(p$placement_df$locus))) +
-      ggplot2::labs(title = "A. 11-mer Containment QC & Rogue Audit", x = "Shared 11-mers", y = "11-mer Containment") + theme_packera_pub(base_size = 8.8)
+      ggplot2::geom_vline(xintercept = 80, linetype = "dashed", color = "#4B5563", linewidth = 0.5) +
+      ggplot2::geom_hline(yintercept = 0.80, linetype = "dashed", color = "#009E73", linewidth = 0.5) +
+      ggplot2::geom_hline(yintercept = 0.85, linetype = "dotted", color = "#0072B2", linewidth = 0.55) +
+      ggplot2::geom_point(size = 2.8, fill = NA, stroke = 1.0) + ggplot2::scale_color_manual(values = get_combinatorial_palette_r(unique(p$placement_df$locus)), name = "Locus") +
+      ggplot2::scale_shape_manual(values = get_combinatorial_hollow_shapes_r(unique(p$placement_df$locus)), name = "Locus") +
+      ggplot2::labs(title = "A. 11-mer Containment QC & Rogue Audit", subtitle = "Gates: >= 80 11-mers | >= 0.80 cpDNA (dashed) / >= 0.85 ITS+waxy (dotted)", x = "Shared 11-mers", y = "11-mer Containment") + theme_packera_pub(base_size = 8.8)
   } else .tier_empty("A. 11-mer Containment QC", "No placement rows")
   p6c_b <- if (is.data.frame(p$monophyly_df) && nrow(p$monophyly_df) > 0L) {
     ggplot2::ggplot(p$monophyly_df, ggplot2::aes(x = .data$locus, y = .data$taxon, fill = .data$monophyly_status)) +
@@ -289,8 +303,16 @@ if (!exists("save_packera_png_300", mode = "function")) {
 }
 
 .render_tier4_plates <- function(fig_a, fig_b, fig_c, p, db_path, run_id) {
-  foc <- p$focal_taxon %||% ""
-  p6a_a <- .tier_phylo_gg(p$tree_primary, sprintf("A. Neighbor Nuclear Backbone (Unsequenced: %s)", foc), focal_tx = foc)
+  foc <- trimws(as.character(p$focal_taxon %||% ""))
+  t4_hdr <- function(sfx) {
+    if (nzchar(foc) && exists("format_icn_title_expr", mode = "function")) {
+      format_icn_title_expr("Step 06 [Tier 4 - Cytology & Gap]: ", foc, paste0(" (", sfx, ")"), bold_all = TRUE)
+    } else paste0("Step 06 [Tier 4 - Cytology & Sampling Gap]: ", sfx)
+  }
+  t4_p_a <- if (nzchar(foc) && exists("format_icn_title_expr", mode = "function")) {
+    format_icn_title_expr("A. Neighbor Nuclear Backbone (Unsequenced: ", foc, ")", bold_all = TRUE)
+  } else sprintf("A. Neighbor Nuclear Backbone (Unsequenced: %s)", foc)
+  p6a_a <- .tier_phylo_gg(p$tree_primary, t4_p_a, focal_tx = foc)
   p6a_b <- .tier_phylo_gg(p$tree_secondary, "B. Neighbor Plastome / Reference Topology", focal_tx = foc)
   p6a_c <- if (is.data.frame(p$gap_recs_df) && nrow(p$gap_recs_df) > 0L) {
     top_g <- utils::head(p$gap_recs_df, 12L)
@@ -303,7 +325,7 @@ if (!exists("save_packera_png_300", mode = "function")) {
       ggplot2::geom_tile(color = "#FFFFFF") + ggplot2::scale_fill_gradient(low = "#F1F5F9", high = "#0072B2", limits = c(0, 1), name = "Coverage") +
       ggplot2::labs(title = "D. Complex Modality Coverage Matrix", x = "Modality", y = NULL) + theme_packera_pub(base_size = 8.4)
   } else .tier_empty("D. Complex Modality Coverage", "No coverage rows")
-  save_packera_png_300((p6a_a | p6a_b) / (p6a_c | p6a_d) + patchwork::plot_annotation(title = "Step 06 [Tier 4 - Cytology & Sampling Gap]: Extraction Priorities & Backbone Context"), fig_a, width = 15.0, height = 11.0, dpi = 300L)
+  save_packera_png_300((p6a_a | p6a_b) / (p6a_c | p6a_d) + patchwork::plot_annotation(title = t4_hdr("Extraction Priorities & Backbone Context")), fig_a, width = 15.0, height = 11.0, dpi = 300L)
 
   p6b_a <- .tier_phytop_gg(p$concordance_df, "A. Neighbor-Complex PhyTop Reticulation Context")
   p6b_b <- if (is.data.frame(p$morph_eco_dist_df) && nrow(p$morph_eco_dist_df) > 0L) {
@@ -318,7 +340,7 @@ if (!exists("save_packera_png_300", mode = "function")) {
       ggplot2::geom_bar() + ggplot2::scale_fill_manual(values = get_combinatorial_palette_r(unique(p$gap_recs_df$determiner_tier)), name = "Tier") +
       ggplot2::labs(title = "D. Herbarium Sampling Coverage", x = "Herbarium", y = "Candidate Sheets") + theme_packera_pub(base_size = 8.6)
   } else .tier_empty("D. Herbarium Sampling Coverage", "No candidate vouchers")
-  save_packera_png_300((p6b_a | p6b_b) / (p6b_c | p6b_d) + patchwork::plot_annotation(title = "Step 06 [Tier 4 - Cytology & Sampling Gap]: Phenotypic Affinity & Sampling Map"), fig_b, width = 15.0, height = 10.5, dpi = 300L)
+  save_packera_png_300((p6b_a | p6b_b) / (p6b_c | p6b_d) + patchwork::plot_annotation(title = t4_hdr("Phenotypic Affinity & Sampling Map")), fig_b, width = 15.0, height = 10.5, dpi = 300L)
 
   p6c_a <- .tier_cytology_gg(p$cyto_records_df, p$cyto_summary_df, p$active_taxa, "A. Complex Sporophytic 2n Distribution")
   p6c_b <- if (is.data.frame(p$cyto_records_df) && nrow(p$cyto_records_df) > 0L && "cytology_linkage_tier" %in% names(p$cyto_records_df)) {
@@ -338,7 +360,7 @@ if (!exists("save_packera_png_300", mode = "function")) {
       ggplot2::labs(title = "D. Cytotype Reproductive Barrier Matrix", x = NULL, y = NULL) + theme_packera_pub(base_size = 8.2) +
       ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 30, hjust = 1, face = "italic"), axis.text.y = ggplot2::element_text(face = "italic"))
   } else .tier_empty("D. Cytotype Reproductive Barrier Matrix", "Fewer than 2 taxa with modal ploidy")
-  save_packera_png_300((p6c_a | p6c_b) / (p6c_c | p6c_d) + patchwork::plot_annotation(title = "Step 06 [Tier 4 - Cytology & Sampling Gap]: Cytotype Barriers & Voucher Audit"), fig_c, width = 15.0, height = 10.5, dpi = 300L)
+  save_packera_png_300((p6c_a | p6c_b) / (p6c_c | p6c_d) + patchwork::plot_annotation(title = t4_hdr("Cytotype Barriers & Voucher Audit")), fig_c, width = 15.0, height = 10.5, dpi = 300L)
 }
 
 `%||%` <- function(a, b) if (is.null(a) || length(a) == 0L || (length(a) == 1L && is.na(a))) b else a

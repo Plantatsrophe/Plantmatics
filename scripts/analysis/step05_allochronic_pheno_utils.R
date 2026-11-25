@@ -398,11 +398,11 @@ compute_phenological_anomalies <- function(df, output_csv = NULL, summary_csv = 
   list(df = df, baseline = baseline, anova = NULL, tukey = NULL, circular_phase_test = circ_pt, allochronic_bimodality = bimod_cohort, summary = sr)
 }
 
-export_phenological_latitudinal_figures <- function(df, baseline, out_path) {
+export_phenological_latitudinal_figures <- function(df, baseline, out_path, pheno_summary = NULL, bimod_info = NULL) {
   if (!exists("render_step05b_hopkins_phenology_png", mode = "function")) {
     for (.f in c("scripts/figures/theme_packera_pub.R", "scripts/figures/step05_figures.R")) if (file.exists(.f)) source(.f)
   }
   out_png <- if (!is.null(out_path) && nzchar(out_path)) normalize_png_path(out_path) else "outputs/figures/fig05b_hopkins_circular_phenology.png"
   message(sprintf("Generating 300-DPI circular & Hopkins bioclimatic phenology figure -> %s", out_png))
-  render_step05b_hopkins_phenology_png(df = df, baseline_info = baseline, out_pheno_path = out_png)
+  render_step05b_hopkins_phenology_png(df = df, baseline_info = baseline, out_pheno_path = out_png, pheno_summary = pheno_summary, bimod_info = bimod_info)
 }

@@ -147,7 +147,7 @@ if (grDevices::dev.cur() == 1L) grDevices::pdf(NULL)
   tip_df$expr_lbl <- vapply(seq_len(nrow(tip_df)), function(k) .format_tree_tip_expr(tip_df$tip[k], tip_df$display_taxon[k]), character(1))
   max_x <- max(c(tip_df$x, 1e-4), na.rm = TRUE)
 
-  ggplot2::ggplot() +
+  p_phylo <- ggplot2::ggplot() +
     ggplot2::geom_segment(data = h_segs, ggplot2::aes(x = .data$x, xend = .data$xend, y = .data$y, yend = .data$yend), color = "#334155", linewidth = 0.45) +
     ggplot2::geom_segment(data = v_segs, ggplot2::aes(x = .data$x, xend = .data$xend, y = .data$y, yend = .data$yend), color = "#334155", linewidth = 0.45) +
     ggplot2::geom_point(data = tip_df, ggplot2::aes(x = .data$x, y = .data$y, color = .data$display_taxon, shape = .data$display_taxon), size = 2.6, fill = NA, stroke = 0.95) +
@@ -160,6 +160,21 @@ if (grDevices::dev.cur() == 1L) grDevices::pdf(NULL)
     ggplot2::labs(title = "B. Maximum-Likelihood Phylogeny (RAxML / Patristic Tips)", x = "Substitutions per Site", y = NULL) +
     theme_packera_pub(base_size = 9.5) +
     ggplot2::theme(legend.position = "none", axis.text.y = ggplot2::element_blank(), axis.ticks.y = ggplot2::element_blank(), panel.grid.major.y = ggplot2::element_blank())
+  if (!is.null(tr_u$node.label) && length(tr_u$node.label) > 0L) {
+    nd_raw <- trimws(as.character(tr_u$node.label))
+    nd_num <- suppressWarnings(as.numeric(sub("/.*$", "", nd_raw)))
+    fin_nd <- is.finite(nd_num) & (n_tips + seq_along(nd_raw) <= tot_n)
+    if (any(fin_nd)) {
+      is_bs <- max(nd_num[fin_nd], na.rm = TRUE) > 1.5
+      ok_nd <- fin_nd & (if (is_bs) nd_num >= 50.0 else nd_num >= 0.70)
+      if (any(ok_nd)) {
+        nd_ids <- n_tips + which(ok_nd)
+        nd_df <- data.frame(x = depth_x[nd_ids], y = y_pos[nd_ids], lbl = if (is_bs) sprintf("%.0f", nd_num[ok_nd]) else sprintf("%.2f", nd_num[ok_nd]), stringsAsFactors = FALSE)
+        p_phylo <- p_phylo + ggplot2::geom_text(data = nd_df, ggplot2::aes(x = .data$x, y = .data$y, label = .data$lbl), hjust = 1.15, vjust = -0.35, size = 2.15, color = "#475569")
+      }
+    }
+  }
+  p_phylo
 }
 
 .build_concordance_panel_gg <- function(plot_df, concordance_df, db_path, run_id) {
@@ -275,7 +290,7 @@ render_fig06a_genomic_pcoa_tree_png <- function(out_png, pass_df, assign_df, q_m
   if (requireNamespace("ggrepel", quietly = TRUE)) {
     p_a <- p_a + ggrepel::geom_text_repel(data = plot_df, ggplot2::aes(label = .data$rep_label, color = .data$display_taxon), size = 2.55, box.padding = 0.42, point.padding = 0.28, min.segment.length = 0.15, force = 5.0, max.overlaps = Inf, seed = 42, show.legend = FALSE)
   }
-
+  if (exists("apply_high_richness_legend_gg", mode = "function")) p_a <- apply_high_richness_legend_gg(p_a, length(tx_levels))
   p_b <- .build_phylo_panel_gg(tr, plot_df, pal_vec, sh_vec)
 
   q_df_long <- do.call(rbind, lapply(seq_len(nrow(q_mat)), function(i) {
@@ -285,23 +300,30 @@ render_fig06a_genomic_pcoa_tree_png <- function(out_png, pass_df, assign_df, q_m
   q_df_long$genetic_sample_id <- factor(q_df_long$genetic_sample_id, levels = ord_ids)
   q_df_long <- q_df_long[!is.na(q_df_long$genetic_sample_id) & !is.na(q_df_long$ancestry_taxon) & nzchar(as.character(q_df_long$ancestry_taxon)) & is.finite(q_df_long$q_prop), , drop = FALSE]
   anc_pal <- get_combinatorial_palette_r(sort(unique(c(tx_levels, colnames(q_mat)))))
-
+  dense_x <- nrow(plot_df) > 40L
   p_c <- ggplot2::ggplot(q_df_long, ggplot2::aes(x = .data$genetic_sample_id, y = .data$q_prop, fill = .data$ancestry_taxon)) +
     ggplot2::geom_col(color = "#ffffff", linewidth = 0.15, na.rm = TRUE) +
     ggplot2::scale_fill_manual(values = anc_pal, labels = lab_fn, name = "Ancestry") +
     ggplot2::scale_y_continuous(expand = ggplot2::expansion(mult = c(0.0, 0.03))) +
     ggplot2::labs(title = "C. Genomic Ancestry Simplex & Co-ancestry Structure", x = "QC-Passing Samples", y = "Ancestry Proportion (q)") +
     theme_packera_pub(base_size = 9.5) +
-    ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 55, hjust = 1, size = 7.2), legend.position = "right")
-
+    ggplot2::theme(
+      axis.text.x = if (dense_x) ggplot2::element_blank() else ggplot2::element_text(angle = 55, hjust = 1, size = 7.2),
+      axis.ticks.x = if (dense_x) ggplot2::element_blank() else ggplot2::element_line(),
+      legend.position = "right"
+    )
+  if (exists("apply_high_richness_legend_gg", mode = "function")) p_c <- apply_high_richness_legend_gg(p_c, length(unique(q_df_long$ancestry_taxon)))
   p_d <- .build_concordance_panel_gg(plot_df, concordance_df, db_path, run_id)
 
-  n_foc <- if (nzchar(trimws(as.character(focal_taxon)))) sum(plot_df$display_taxon == trimws(as.character(focal_taxon)), na.rm = TRUE) else 0L
-  ann_t1 <- format_step06_tier1_annotation(focal_taxon = focal_taxon, intraspecific_mode = intraspecific_mode, n_focal = n_foc, n_total = nrow(plot_df))
+  ft_6a <- trimws(as.character(focal_taxon))
+  n_foc <- if (nzchar(ft_6a)) sum(plot_df$display_taxon == ft_6a, na.rm = TRUE) else 0L
+  ann_t1 <- format_step06_tier1_annotation(focal_taxon = ft_6a, intraspecific_mode = intraspecific_mode, n_focal = n_foc, n_total = nrow(plot_df))
+  t6a_expr <- if (nzchar(ft_6a) && exists("format_icn_title_expr", mode = "function")) {
+    format_icn_title_expr("Step 06 [Tier 1 - NextRAD]: ", ft_6a, if (isTRUE(intraspecific_mode)) " Intraspecific Lineage Structure" else " Complex Dosage Phylogenomics", bold_all = TRUE)
+  } else ann_t1$title
   combo <- (p_a | p_b) / (p_c | p_d) +
     patchwork::plot_annotation(
-      title = ann_t1$title,
-      subtitle = ann_t1$subtitle,
+      title = t6a_expr, subtitle = ann_t1$subtitle,
       theme = ggplot2::theme(plot.title = ggplot2::element_text(face = "bold", size = 12.0), plot.subtitle = ggplot2::element_text(size = 9.5, color = "#475569"))
     )
   dir.create(dirname(out_png), recursive = TRUE, showWarnings = FALSE)
@@ -336,10 +358,10 @@ render_fig06b_reticulation_gdi_png <- function(out_png, tri_df, fbranch_df, gdi_
       ggplot2::theme(legend.title = ggplot2::element_blank())
     if (nrow(tri_ok) > 0L) {
       cls_lev <- sort(unique(tri_ok$hybrid_generation_class))
-      sh_c <- stats::setNames(rep(c(1L, 2L, 5L, 0L, 6L, 4L), length.out = length(cls_lev)), cls_lev)
       p_tri <- p_tri +
         ggplot2::geom_point(data = tri_ok, ggplot2::aes(x = .data$hybrid_index_h, y = .data$interspecific_ancestry_q12, color = .data$hybrid_generation_class, shape = .data$hybrid_generation_class), size = 3.0, stroke = 1.15, fill = NA) +
-        ggplot2::scale_shape_manual(values = sh_c)
+        ggplot2::scale_color_manual(values = get_combinatorial_palette_r(cls_lev)) +
+        ggplot2::scale_shape_manual(values = get_combinatorial_hollow_shapes_r(cls_lev))
     }
   }
 
@@ -358,23 +380,26 @@ render_fig06b_reticulation_gdi_png <- function(out_png, tri_df, fbranch_df, gdi_
     ggplot2::ggplot() + ggplot2::annotate("text", x = 0.5, y = 0.5, label = "Fewer than 4 lineages for f-branch ABBA/BABA", size = 3.5) + ggplot2::theme_void() + ggplot2::labs(title = "B. Tree-Guided Introgression (f-branch)")
   }
 
+  gdi_lab <- if (exists("icn_discrete_labeller", mode = "function")) icn_discrete_labeller(abbreviate_genus = TRUE) else ggplot2::waiver()
   p_gdi <- if (!is.null(gdi_df) && nrow(gdi_df) > 0L && any(is.finite(gdi_df$coalescent_gdi))) {
     gd <- gdi_df[is.finite(gdi_df$coalescent_gdi), , drop = FALSE]
     gd$taxon <- factor(gd$taxon, levels = gd$taxon[order(gd$coalescent_gdi)])
     cls_gdi <- sort(unique(gd$gdi_classification))
-    sh_g <- stats::setNames(rep(c(1L, 2L, 5L, 0L), length.out = length(cls_gdi)), cls_gdi)
-    pal_g <- get_combinatorial_palette_r(cls_gdi)
+    bf_v <- if ("bf_method" %in% names(gd)) unique(stats::na.omit(trimws(as.character(gd$bf_method)))) else character(0)
+    bf_v <- bf_v[nzchar(bf_v)]
+    gdi_sub <- if (length(bf_v) > 0L) sprintf("Oversplit < 0.20 | Distinct > 0.70 | BF: %s", bf_v[1L]) else "Oversplit < 0.20 | Distinct Species > 0.70"
     ggplot2::ggplot(gd, ggplot2::aes(x = .data$coalescent_gdi, y = .data$taxon, color = .data$gdi_classification, shape = .data$gdi_classification)) +
       ggplot2::geom_vline(xintercept = 0.20, linetype = "dashed", color = "#DC2626") +
       ggplot2::geom_vline(xintercept = 0.70, linetype = "dashed", color = "#059669") +
       ggplot2::geom_segment(ggplot2::aes(x = .data$gdi_ci_low, xend = .data$gdi_ci_high, y = .data$taxon, yend = .data$taxon), linewidth = 0.65) +
       ggplot2::geom_point(size = 3.0, stroke = 1.15, fill = NA) +
-      ggplot2::scale_color_manual(values = pal_g, name = "MSC Gate") +
-      ggplot2::scale_shape_manual(values = sh_g, name = "MSC Gate") +
+      ggplot2::scale_color_manual(values = get_combinatorial_palette_r(cls_gdi), name = "MSC Gate") +
+      ggplot2::scale_shape_manual(values = get_combinatorial_hollow_shapes_r(cls_gdi), name = "MSC Gate") +
+      ggplot2::scale_y_discrete(labels = gdi_lab) +
       ggplot2::scale_x_continuous(limits = c(0, 1.02)) +
-      ggplot2::labs(title = "C. Invariant-Site Coalescent Delimitation (gdi)", subtitle = "Oversplit < 0.20 | Distinct Species > 0.70", x = "Genealogical Divergence Index (gdi +/- 95% CI)", y = NULL) +
+      ggplot2::labs(title = "C. Invariant-Site Coalescent Delimitation (gdi)", subtitle = gdi_sub, x = "Genealogical Divergence Index (gdi +/- 95% CI)", y = NULL) +
       theme_packera_pub(base_size = 9.5) +
-      ggplot2::theme(axis.text.y = ggplot2::element_text(face = "italic", size = 8.5))
+      ggplot2::theme(axis.text.y = ggplot2::element_text(size = 8.5))
   } else {
     ggplot2::ggplot() + ggplot2::annotate("text", x = 0.5, y = 0.5, label = "Coalescent gdi metrics unavailable", size = 3.5) + ggplot2::theme_void() + ggplot2::labs(title = "C. Coalescent Delimitation (gdi)")
   }
@@ -382,33 +407,40 @@ render_fig06b_reticulation_gdi_png <- function(out_png, tri_df, fbranch_df, gdi_
   mm_sub <- if (!is.null(mmrr_summary_df) && nrow(mmrr_summary_df) > 0L && is.finite(mmrr_summary_df$mmrr_beta_ibd[1L])) {
     if (is.finite(mmrr_summary_df$mmrr_beta_ibe[1L])) {
       sprintf("MMRR: b_IBD=%.2f (p=%.3f), b_IBE=%.2f (p=%.3f)", mmrr_summary_df$mmrr_beta_ibd[1L], mmrr_summary_df$mmrr_p_ibd[1L], mmrr_summary_df$mmrr_beta_ibe[1L], mmrr_summary_df$mmrr_p_ibe[1L])
-    } else {
-      sprintf("MMRR (IBD-only): b_IBD=%.2f (p=%.3f), IBE=NA", mmrr_summary_df$mmrr_beta_ibd[1L], mmrr_summary_df$mmrr_p_ibd[1L])
+    } else sprintf("MMRR (IBD-only): b_IBD=%.2f (p=%.3f), IBE=NA", mmrr_summary_df$mmrr_beta_ibd[1L], mmrr_summary_df$mmrr_p_ibd[1L])
+  } else "Insufficient georeferenced samples for MMRR/FEEMS"
+  fe_use <- feems_edges_df
+  if (!is.null(fe_use) && nrow(fe_use) > 0L) {
+    if (exists("filter_map_occurrences_r", mode = "function")) {
+      fe_a <- filter_map_occurrences_r(fe_use, lon_col = "lon_a", lat_col = "lat_a")$clean_df
+      fe_use <- if (nrow(fe_a) > 0L) filter_map_occurrences_r(fe_a, lon_col = "lon_b", lat_col = "lat_b")$clean_df else fe_a
+    } else if ("is_centroid_or_inst_coord" %in% names(fe_use)) {
+      cf <- fe_use$is_centroid_or_inst_coord
+      fe_use <- fe_use[!(if (is.logical(cf)) !is.na(cf) & cf else tolower(trimws(as.character(cf))) %in% c("1", "true", "t", "yes")), , drop = FALSE]
     }
-  } else {
-    "Insufficient georeferenced samples for MMRR/FEEMS"
   }
-  p_feems <- if (!is.null(feems_edges_df) && nrow(feems_edges_df) > 0L) {
-    pts <- unique(rbind(data.frame(lon = feems_edges_df$lon_a, lat = feems_edges_df$lat_a), data.frame(lon = feems_edges_df$lon_b, lat = feems_edges_df$lat_b)))
+  p_feems <- if (!is.null(fe_use) && nrow(fe_use) > 0L) {
+    pts <- unique(rbind(data.frame(lon = fe_use$lon_a, lat = fe_use$lat_a), data.frame(lon = fe_use$lon_b, lat = fe_use$lat_b)))
     feems_plot <- NULL
     if (exists("build_na_projected_basemap_gg", mode = "function") && exists("project_lonlat_points_r", mode = "function")) {
       map_ctx <- build_na_projected_basemap_gg(pts$lon, pts$lat, target_crs = 5070L)
       pts_p <- project_lonlat_points_r(pts, map_ctx, lon_col = "lon", lat_col = "lat")
-      ea_p <- project_lonlat_points_r(feems_edges_df, map_ctx, lon_col = "lon_a", lat_col = "lat_a")
-      eb_p <- project_lonlat_points_r(feems_edges_df, map_ctx, lon_col = "lon_b", lat_col = "lat_b")
-      if (nrow(ea_p) == nrow(feems_edges_df) && nrow(eb_p) == nrow(feems_edges_df)) {
-        seg_p <- data.frame(x = ea_p$map_x, y = ea_p$map_y, xend = eb_p$map_x, yend = eb_p$map_y, feems_log_migration = feems_edges_df$feems_log_migration)
+      ea_p <- project_lonlat_points_r(fe_use, map_ctx, lon_col = "lon_a", lat_col = "lat_a")
+      eb_p <- project_lonlat_points_r(fe_use, map_ctx, lon_col = "lon_b", lat_col = "lat_b")
+      if (nrow(ea_p) == nrow(fe_use) && nrow(eb_p) == nrow(fe_use)) {
+        seg_p <- data.frame(x = ea_p$map_x, y = ea_p$map_y, xend = eb_p$map_x, yend = eb_p$map_y, feems_log_migration = fe_use$feems_log_migration)
         feems_plot <- map_ctx$plot +
           ggplot2::geom_segment(data = seg_p, ggplot2::aes(x = .data$x, y = .data$y, xend = .data$xend, yend = .data$yend, color = .data$feems_log_migration), linewidth = 1.0, inherit.aes = FALSE) +
           ggplot2::geom_point(data = pts_p, ggplot2::aes(x = .data$map_x, y = .data$map_y), shape = 1L, size = 2.8, stroke = 1.15, fill = NA, color = "#111827", inherit.aes = FALSE) +
           ggplot2::scale_color_gradient2(low = "#B91C1C", mid = "#E5E7EB", high = "#1D4ED8", midpoint = 0.0, name = "log(m)") +
           ggplot2::labs(title = "D. Effective Migration Surface (FEEMS) & MMRR", subtitle = mm_sub) +
-          theme_packera_pub(base_size = 9.5)
+          theme_packera_pub(base_size = 9.5) +
+          ggplot2::theme(panel.background = ggplot2::element_rect(fill = "#EEF4F8", color = NA))
       }
     }
     if (is.null(feems_plot)) {
       feems_plot <- ggplot2::ggplot() +
-        ggplot2::geom_segment(data = feems_edges_df, ggplot2::aes(x = .data$lon_a, y = .data$lat_a, xend = .data$lon_b, yend = .data$lat_b, color = .data$feems_log_migration), linewidth = 1.0) +
+        ggplot2::geom_segment(data = fe_use, ggplot2::aes(x = .data$lon_a, y = .data$lat_a, xend = .data$lon_b, yend = .data$lat_b, color = .data$feems_log_migration), linewidth = 1.0) +
         ggplot2::geom_point(data = pts, ggplot2::aes(x = .data$lon, y = .data$lat), shape = 1L, size = 2.6, stroke = 1.1, fill = NA, color = "#111827") +
         ggplot2::scale_color_gradient2(low = "#B91C1C", mid = "#E5E7EB", high = "#1D4ED8", midpoint = 0.0, name = "log(m)") +
         ggplot2::labs(title = "D. Effective Migration Surface (FEEMS) & MMRR", subtitle = mm_sub, x = "Longitude", y = "Latitude") +
@@ -423,11 +455,15 @@ render_fig06b_reticulation_gdi_png <- function(out_png, tri_df, fbranch_df, gdi_
     ltab <- table(as.character(organellar_placement_df$locus))
     sprintf("GenBank/BOLD 11-mer locus placement: n=%d (%s)", nrow(organellar_placement_df), paste(sprintf("%s=%d", names(ltab), as.integer(ltab)), collapse = ", "))
   } else NULL
-  ann_t1 <- if (nzchar(trimws(as.character(focal_taxon)))) format_step06_tier1_annotation(focal_taxon = focal_taxon, intraspecific_mode = intraspecific_mode, n_total = nrow(tri_df)) else list(title = "Step 06: Reticulation Dynamics, Coalescent gdi, & Landscape Migration")
+  ft_6b <- trimws(as.character(focal_taxon))
+  t6b_expr <- if (nzchar(ft_6b) && exists("format_icn_title_expr", mode = "function")) {
+    format_icn_title_expr("Step 06 [Tier 1 - NextRAD]: ", ft_6b, " Reticulation, gdi & Landscape Migration", bold_all = TRUE)
+  } else if (nzchar(ft_6b)) {
+    paste0(format_step06_tier1_annotation(focal_taxon = ft_6b, intraspecific_mode = intraspecific_mode, n_total = nrow(tri_df))$title, " (Reticulation & gdi)")
+  } else "Step 06: Reticulation Dynamics, Coalescent gdi, & Landscape Migration"
   combo <- (p_tri | p_fb) / (p_gdi | p_feems) +
     patchwork::plot_annotation(
-      title = if (nzchar(trimws(as.character(focal_taxon)))) paste0(ann_t1$title, " (Reticulation & gdi)") else ann_t1$title,
-      subtitle = ann_sub,
+      title = t6b_expr, subtitle = ann_sub,
       theme = ggplot2::theme(plot.title = ggplot2::element_text(face = "bold", size = 12.0), plot.subtitle = ggplot2::element_text(size = 9.0, color = "#475569"))
     )
   dir.create(dirname(out_png), recursive = TRUE, showWarnings = FALSE)

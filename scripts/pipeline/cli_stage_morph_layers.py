@@ -156,6 +156,7 @@ def run_morphometrics(args: argparse.Namespace, cfg: PipelineConfig) -> None:
     allometry_report = Path(getattr(args, "allometry_report", None) or (tables_dir / "allometry_permanova_summary.csv"))
     allometry_pairwise = Path(getattr(args, "allometry_pairwise", None) or (tables_dir / "allometry_pairwise_slopes.csv"))
     allometry_plot = Path(getattr(args, "allometry_plot", None) or (figures_dir / "fig04a_foliar_allometry_audit.png"))
+    ecoregion_plot = Path(getattr(args, "ecoregion_plot", None) or (figures_dir / "fig04c_ecoregion_and_batch_audit.png"))
     batch_audit_out = Path(getattr(args, "output_batch_audit", None) or (tables_dir / "batch_variance_audit.csv"))
     flags_out.parent.mkdir(parents=True, exist_ok=True)
     plot_out.parent.mkdir(parents=True, exist_ok=True)
@@ -185,6 +186,7 @@ def run_morphometrics(args: argparse.Namespace, cfg: PipelineConfig) -> None:
         "--output-batch-audit", str(batch_audit_out),
         "--output-flags", str(flags_out),
         "--output-plot", str(plot_out),
+        "--ecoregion-plot", str(ecoregion_plot),
         "--output-report", str(report_out),
         "--max-k", str(max_k),
         "--num-pcs", str(num_pcs),

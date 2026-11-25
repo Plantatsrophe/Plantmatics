@@ -103,6 +103,12 @@ def build_cli_parser() -> argparse.ArgumentParser:
         help=f"Path for curated metadata CSV output (default: {cfg.paths.curated_vouchers_csv}).",
     )
     parser.add_argument(
+        "--output-plot",
+        type=str,
+        default="outputs/figures/fig01_cohort_biogeography_and_authority.png",
+        help="Path for Step 01 cohort biogeography & authority audit figure (300-DPI PNG).",
+    )
+    parser.add_argument(
         "--max-records",
         dest="max_records",
         type=int,
@@ -325,6 +331,25 @@ def main(argv: list[str] | None = None) -> None:
     )
 
     harvester.run(download_images=args.download_images)
+
+    if getattr(VoucherHarvester, "__module__", "") == "scripts.core.harvester":
+        out_csv_path = Path(args.output_csv)
+        if out_csv_path.exists() and out_csv_path.stat().st_size > 0:
+            try:
+                from scripts.vision.step01_figures import generate_step01_cohort_audit_figure
+
+                fig01_path = generate_step01_cohort_audit_figure(
+                    out_csv_path,
+                    output_png=getattr(
+                        args,
+                        "output_plot",
+                        "outputs/figures/fig01_cohort_biogeography_and_authority.png",
+                    ),
+                )
+                if fig01_path is not None:
+                    logger.info(f"Saved Step 01 cohort audit figure to: {fig01_path}")
+            except Exception as exc_fig:
+                logger.warning(f"Step 01 cohort audit figure generation note: {exc_fig}")
 
 
 if __name__ == "__main__":

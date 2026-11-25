@@ -39,18 +39,21 @@ parse_args_robust <- function(cli_args = commandArgs(trailingOnly = TRUE)) {
   defs <- list(vouchers = "data/tables/curated_vouchers.csv", harmonics = "data/tables/leaf_efa_harmonics.csv", reproductive = "data/tables/voucher_reproductive_metrics.csv", outline_only = FALSE,
                correct_allometry = cfg$correct_allometry, allometry_report = "outputs/reports/allometry_significance_audit.csv", allometry_pairwise = "outputs/reports/allometry_pairwise_trajectories.csv",
                allometry_plot = "outputs/figures/fig04a_foliar_allometry_audit.png", use_clustvarsel = FALSE, output_flags = "data/tables/morphometric_flags.csv",
-               output_plot = "outputs/figures/fig04b_gmm_cda_morphometrics.png", output_report = "outputs/reports/gmm_bayes_factors_summary.csv",
+               output_plot = "outputs/figures/fig04b_gmm_cda_morphometrics.png", ecoregion_plot = "outputs/figures/fig04c_ecoregion_and_batch_audit.png", output_report = "outputs/reports/gmm_bayes_factors_summary.csv",
                output_batch_audit = "outputs/reports/institutional_batch_effect_audit.csv", max_k = cfg$max_k, num_pcs = cfg$num_pcs, permutations = 999L, seed = cfg$random_seed, intraspecific_mode = FALSE, focal_taxon = "")
   if (requireNamespace("optparse", quietly = TRUE)) {
     mo <- optparse::make_option
     ol <- list(mo(c("-v","--vouchers"), type="character", default=defs$vouchers), mo(c("-e","--harmonics"), type="character", default=defs$harmonics), mo(c("-m","--reproductive"), type="character", default=defs$reproductive), mo("--outline-only", action="store_true", default=FALSE),
                mo("--correct-allometry", type="character", default=defs$correct_allometry), mo("--allometry-report", type="character", default=defs$allometry_report), mo("--allometry-pairwise", type="character", default=defs$allometry_pairwise), mo("--allometry-plot", type="character", default=defs$allometry_plot),
-               mo("--use-clustvarsel", action="store_true", default=FALSE), mo(c("-f","--output-flags"), type="character", default=defs$output_flags), mo(c("-p","--output-plot"), type="character", default=defs$output_plot), mo(c("-r","--output-report"), type="character", default=defs$output_report),
+               mo("--use-clustvarsel", action="store_true", default=FALSE), mo(c("-f","--output-flags"), type="character", default=defs$output_flags), mo(c("-p","--output-plot"), type="character", default=defs$output_plot), mo("--ecoregion-plot", type="character", default=defs$ecoregion_plot), mo(c("-r","--output-report"), type="character", default=defs$output_report),
                mo(c("-b","--output-batch-audit"), type="character", default=defs$output_batch_audit), mo(c("-k","--max-k"), type="integer", default=defs$max_k), mo(c("-d","--num-pcs"), type="integer", default=defs$num_pcs), mo("--permutations", type="integer", default=defs$permutations),
                mo("--seed", type="integer", default=defs$seed), mo("--intraspecific-mode", action="store_true", default=FALSE), mo("--focal-taxon", type="character", default=""))
     opts <- optparse::parse_args(optparse::OptionParser(usage = "%prog [options]", option_list = ol), args = cli_args); names(opts) <- gsub("-", "_", names(opts)); return(opts)
   }
-  if (exists(".parse_step04_cli_fallback", mode = "function")) .parse_step04_cli_fallback(cli_args, defs) else defs
+  opts <- if (exists(".parse_step04_cli_fallback", mode = "function")) .parse_step04_cli_fallback(cli_args, defs) else defs
+  ep_eq <- grep("^--ecoregion-plot=", as.character(cli_args), value = TRUE); ep_i <- match("--ecoregion-plot", as.character(cli_args))
+  if (length(ep_eq) > 0L) opts$ecoregion_plot <- sub("^--ecoregion-plot=", "", ep_eq[1L]) else if (!is.na(ep_i) && ep_i < length(cli_args)) opts$ecoregion_plot <- as.character(cli_args[ep_i + 1L])
+  opts
 }
 discover_sorted_morph_cols <- function(x, pattern, require_finite = TRUE) {
   nms <- if (is.data.frame(x) || is.matrix(x)) colnames(x) else as.character(x); hits <- grep(pattern, nms, value = TRUE)
@@ -65,7 +68,7 @@ test_and_correct_allometry <- function(morpho_df, correct_mode = "auto", permuta
   coh_res <- .resolve_step04_allometry_cohort(morpho_df, sym_names); valid_idx <- coh_res$valid_idx; scale_tier <- coh_res$scale_tier
   if (length(valid_idx) < 10L) {
     if (!exists("render_allometry_diagnostic_png", mode = "function")) .src_s04("morphometrics/pub_figures_utils.R")
-    plot_fn_s04 <- if (exists("render_allometry_diagnostic_png", mode = "function")) render_allometry_diagnostic_png else NULL
+    plot_fn_s04 <- if (exists("render_allometry_diagnostic_png", mode = "function")) function(...) render_allometry_diagnostic_png(..., scale_tier = scale_tier, corrected = FALSE) else NULL
     anova_df <- .emit_insufficient_allometry_audit(coh_res$plot_df, output_report, output_plot, .write_atomic_csv_s04, plot_fn_s04)
     return(list(morpho_matrix = NULL, corrected = FALSE, anova_table = anova_df, df = morpho_df))
   }
@@ -164,7 +167,7 @@ test_and_correct_allometry <- function(morpho_df, correct_mode = "auto", permuta
   }
   if (!is.null(output_plot) && nzchar(output_plot)) {
     if (!exists("render_allometry_diagnostic_png", mode = "function")) .src_s04("morphometrics/pub_figures_utils.R")
-    if (exists("render_allometry_diagnostic_png", mode = "function")) { render_allometry_diagnostic_png(sub_df, r2_size, p_size, r2_int, output_plot, p_int = p_int); message("Shape allometry regression plot saved -> ", output_plot) }
+    if (exists("render_allometry_diagnostic_png", mode = "function")) { render_allometry_diagnostic_png(sub_df, r2_size, p_size, r2_int, output_plot, p_int = p_int, r2_within = r2_within, p_within = p_within, scale_tier = scale_tier, corrected = should_correct); message("Shape allometry regression plot saved -> ", output_plot) }
   }
   list(morpho_matrix = morpho_matrix_for_gmm, corrected = should_correct, beta_within = beta_within, r2_size = r2_size, p_size = p_size, r2_within = r2_within, p_within = p_within, r2_interaction = r2_int, p_interaction = p_int, anova_table = anova_df, pairwise_table = pw_df, df = morpho_df)
 }
@@ -474,7 +477,12 @@ run_gmm_morphotools_pipeline <- function(opts) {
   if (exists("persist_step04_to_sqlite", mode = "function")) tryCatch(persist_step04_to_sqlite(out_df, opts$vouchers, focal_taxon = opts$focal_taxon, intraspecific_mode = is_intra_mode), error = function(e) warning("SQLite Step 04 persistence note: ", e$message))
   tryCatch({
     if (exists("generate_step04_pub_figures", mode = "function")) {
-      generate_step04_pub_figures(audited_df, cda_res, gmm_res, NULL, opts$output_plot, eco_cda_res = eco_cda_res, manova_res = manova_res, batch_csv = opts$output_batch_audit)
+      if (!is.null(opts$ecoregion_plot) && identical(as.character(opts$ecoregion_plot)[1L], "outputs/figures/fig04c_ecoregion_and_batch_audit.png") &&
+          !is.null(opts$output_plot) && nzchar(opts$output_plot) &&
+          !identical(dirname(normalizePath(opts$output_plot, mustWork = FALSE)), dirname(normalizePath(opts$ecoregion_plot, mustWork = FALSE)))) {
+        opts$ecoregion_plot <- file.path(dirname(opts$output_plot), basename(opts$ecoregion_plot))
+      }
+      generate_step04_pub_figures(audited_df, cda_res, gmm_res, NULL, opts$output_plot, eco_cda_res = eco_cda_res, manova_res = manova_res, batch_csv = opts$output_batch_audit, ecoregion_plot_path = opts$ecoregion_plot)
       canon_04b <- file.path(resolve_active_figures_dir(NULL, opts$output_plot), "fig04b_gmm_cda_morphometrics.png")
       if (!is.null(opts$output_plot) && nzchar(opts$output_plot) && !file.exists(opts$output_plot) && file.exists(canon_04b)) file.copy(canon_04b, opts$output_plot, overwrite = TRUE)
     }

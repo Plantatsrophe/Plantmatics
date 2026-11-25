@@ -195,6 +195,7 @@ if [[ "${START_STEP}" -le 5 ]]; then
     --output-flags "${RUN_DIR}/data/tables/multimodal_conflict_flags.csv" \
     --output-summary "${RUN_DIR}/outputs/reports/multimodal_spatial_rf_summary.csv" \
     --output-plot "${RUN_DIR}/outputs/figures/fig05a_ecological_niche_and_rf_importance.png" \
+    --sdm-plot "${RUN_DIR}/outputs/figures/fig05c_sdm_suitability_and_distribution_map.png" \
     "${FOCAL_ARGS[@]}" \
     "${INTRASPECIFIC_ARGS[@]}" \
     "${DEMO_FLAG[@]}"

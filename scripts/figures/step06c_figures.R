@@ -74,10 +74,13 @@ if (!exists("save_packera_png_300", mode = "function")) {
     p_df <- p_df[sort(unique(c(which(p_df$locus_class == cls_lvls[1L]), sample(which(p_df$locus_class != cls_lvls[1L]), min(20000L, sum(p_df$locus_class != cls_lvls[1L])))))), , drop = FALSE]
   }
   pal_hd <- stats::setNames(c("#0072B2", "#009E73", "#D55E00"), cls_lvls)
-  shp_hd <- stats::setNames(c(1L, 2L, 4L), cls_lvls)
+  shp_hd <- stats::setNames(c(1L, 2L, 6L), cls_lvls)
   ggplot2::ggplot(p_df, ggplot2::aes(x = .data$H_obs, y = .data$D_read_ratio, color = .data$locus_class, shape = .data$locus_class)) +
     ggplot2::geom_vline(xintercept = 0.60, linetype = "dashed", color = "#475569", linewidth = 0.45) +
+    ggplot2::geom_vline(xintercept = 0.65, linetype = "dotted", color = "#0072B2", linewidth = 0.55) +
     ggplot2::geom_hline(yintercept = c(-4.0, 4.0), linetype = "dashed", color = "#475569", linewidth = 0.45) +
+    ggplot2::annotate("text", x = 0.59, y = Inf, label = "2x (0.60)", hjust = 1.05, vjust = 1.4, size = 2.35, color = "#475569") +
+    ggplot2::annotate("text", x = 0.66, y = Inf, label = "Polyploid (0.65)", hjust = -0.05, vjust = 1.4, size = 2.35, color = "#0072B2") +
     ggplot2::geom_point(size = 2.0, stroke = 0.85, fill = NA, alpha = 0.82) +
     ggplot2::scale_color_manual(values = pal_hd, name = "Locus Tier", drop = FALSE) +
     ggplot2::scale_shape_manual(values = shp_hd, name = "Locus Tier", drop = FALSE) +
@@ -204,7 +207,7 @@ if (!exists("save_packera_png_300", mode = "function")) {
     ggplot2::geom_tile(color = "#FFFFFF", linewidth = 0.45) +
     ggplot2::geom_point(data = pres_df, shape = 1L, fill = NA, color = "#0F172A", size = 1.9, stroke = 0.75, show.legend = FALSE) +
     ggplot2::scale_fill_manual(values = pal_cy, labels = lab_fn, na.value = "#F1F5F9", name = "Lineage Match", na.translate = FALSE) +
-    ggplot2::labs(title = t_b, subtitle = sprintf("Placed n = %d samples | Cytonuclear discordance (red border) = %d", length(keep_idx), sum(disc[keep_idx] == 1L)), x = NULL, y = "Sample ID") +
+    ggplot2::labs(title = t_b, subtitle = sprintf("Placed n = %d | Discordant (red) = %d | Gate: >= 0.80 cpDNA / >= 0.85 ITS+waxy (>= 80 11-mers)", length(keep_idx), sum(disc[keep_idx] == 1L)), x = NULL, y = "Sample ID") +
     theme_packera_pub(base_size = 9.3) +
     ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 20, hjust = 1, size = 8.0), axis.text.y = ggplot2::element_text(size = 7.2))
   if (nrow(disc_df) > 0L) p_b <- p_b + ggplot2::geom_tile(data = disc_df, fill = NA, color = "#B91C1C", linewidth = 0.95, show.legend = FALSE)
@@ -293,7 +296,15 @@ if (!exists("save_packera_png_300", mode = "function")) {
   med_df$x_num <- as.numeric(med_df$cyto_f)
   lab_fn <- if (exists("icn_discrete_labeller", mode = "function")) icn_discrete_labeller(abbreviate_genus = TRUE) else ggplot2::waiver()
 
-  p_d <- ggplot2::ggplot(c_df, ggplot2::aes(x = .data$cyto_f, y = .data$y_val, color = .data$taxon, shape = .data$taxon)) +
+  p_d <- ggplot2::ggplot(c_df, ggplot2::aes(x = .data$cyto_f, y = .data$y_val, color = .data$taxon, shape = .data$taxon))
+  if (use_dlogl) {
+    p_d <- p_d +
+      ggplot2::annotate("rect", xmin = -Inf, xmax = Inf, ymin = -4.0, ymax = 4.0, alpha = 0.08, fill = "#64748B") +
+      ggplot2::geom_hline(yintercept = c(-4.0, 4.0), linetype = "dashed", color = "#4B5563", linewidth = 0.5) +
+      ggplot2::annotate("text", x = Inf, y = -4.0, label = "<= -4 (2x barrier)", hjust = 1.05, vjust = 1.35, size = 2.35, color = "#4B5563") +
+      ggplot2::annotate("text", x = Inf, y = 4.0, label = ">= +4 (3x+ barrier)", hjust = 1.05, vjust = -0.45, size = 2.35, color = "#4B5563")
+  }
+  p_d <- p_d +
     ggplot2::geom_point(position = ggplot2::position_jitter(width = 0.14, height = 0, seed = 42L), size = 2.6, stroke = 0.95, fill = NA) +
     ggplot2::geom_segment(data = med_df, ggplot2::aes(x = .data$x_num - 0.22, xend = .data$x_num + 0.22, y = .data$y_val, yend = .data$y_val), inherit.aes = FALSE, color = "#1E293B", linewidth = 0.75) +
     ggplot2::scale_color_manual(values = get_combinatorial_palette_r(c_df$taxon), labels = lab_fn, name = "Taxon") +
@@ -301,7 +312,7 @@ if (!exists("save_packera_png_300", mode = "function")) {
     ggplot2::labs(title = t_d, subtitle = prior_sub, x = "Inferred Cytotype", y = if (use_dlogl) "nQuire Delta Log-Likelihood" else "Observed Heterozygosity (H_obs)") +
     theme_packera_pub(base_size = 9.3) +
     ggplot2::theme(legend.position = "right")
-  if (use_dlogl) p_d <- p_d + ggplot2::geom_hline(yintercept = if (any(c_df$y_val < 0)) c(-4.0, 4.0) else 4.0, linetype = "dashed", color = "#475569", linewidth = 0.45)
+  if (exists("apply_high_richness_legend_gg", mode = "function")) p_d <- apply_high_richness_legend_gg(p_d, length(unique(c_df$taxon)))
   p_d
 }
 

@@ -24,13 +24,13 @@ PACKERA_TREATMENT_PALETTE <- c(
 
 PACKERA_TREATMENT_HOLLOW_SHAPES <- c(
   "Confirmed_Species"        = 1L,
-  "Confirmed_Type_Control"   = 8L,
+  "Confirmed_Type_Control"   = 5L,
   "Subspecies_Ecotype"       = 2L,
   "Ecophenotypic_Plasticity" = 0L,
   "Hybrid_Introgressant"     = 5L,
   "Putative_Cryptic_Species" = 6L,
-  "Type_Synonymy_Candidate"  = 4L,
-  "Misidentification_Reassign" = 3L
+  "Type_Synonymy_Candidate"  = 2L,
+  "Misidentification_Reassign" = 6L
 )
 
 .build_cytology_fig_subtitle <- function(df) {
@@ -131,18 +131,33 @@ render_step07a_integrative_synthesis_png <- function(
     theme_packera_pub(base_size = 9.6) +
     ggplot2::labs(
       title = "A. Integrative Morphospace & Nomenclatural Type Baseline",
-      subtitle = "Hollow symbols encode 5-stage decision calls (* = Type control)",
-      x = x_lbl,
-      y = y_lbl
+      subtitle = "Hollow symbols encode 5-stage calls (double-ringed diamond/triangle = Types)",
+      x = x_lbl, y = y_lbl
     )
+  if (nrow(sub_m) > 0L && exists("add_nomenclatural_type_layer_gg", mode = "function")) {
+    p_morph <- add_nomenclatural_type_layer_gg(p_morph, sub_m, x_col = "mx", y_col = "my", show_uncertain_coord = FALSE)
+  }
+  if (exists("apply_high_richness_legend_gg", mode = "function")) {
+    p_morph <- apply_high_richness_legend_gg(p_morph, length(levels(tdf$treatment_call)))
+  }
 
   # Panel B: Projected North American Geographic Contact Zones & Triage Map
   lon_col <- if ("decimalLongitude" %in% names(tdf)) "decimalLongitude" else "longitude"
   lat_col <- if ("decimalLatitude" %in% names(tdf)) "decimalLatitude" else "latitude"
-  tdf_map <- tdf[!.is_step07_centroid_coord(tdf), , drop = FALSE]
-  p_map <- if (nrow(tdf_map) > 0L && all(c(lon_col, lat_col) %in% names(tdf_map))) {
-    m_ctx <- build_na_projected_basemap_gg(tdf_map[[lon_col]], tdf_map[[lat_col]])
-    pts_g <- project_lonlat_points_r(tdf_map, m_ctx, lon_col = lon_col, lat_col = lat_col)
+  map_filt <- if (exists("filter_map_occurrences_r", mode = "function") && all(c(lon_col, lat_col) %in% names(tdf))) {
+    filter_map_occurrences_r(tdf, lon_col = lon_col, lat_col = lat_col)
+  } else {
+    c_mask <- .is_step07_centroid_coord(tdf)
+    list(clean_df = tdf[!c_mask, , drop = FALSE], uncertain_type_df = tdf[0L, , drop = FALSE], n_quarantined_non_type = sum(c_mask))
+  }
+  tdf_map <- map_filt$clean_df
+  unc_type_df <- map_filt$uncertain_type_df
+  n_quar_nt <- if (is.null(map_filt$n_quarantined_non_type)) 0L else as.integer(map_filt$n_quarantined_non_type)
+  all_map_df <- if (nrow(unc_type_df) > 0L) rbind(tdf_map, unc_type_df) else tdf_map
+  p_map <- if (nrow(all_map_df) > 0L && all(c(lon_col, lat_col) %in% names(all_map_df))) {
+    m_ctx <- build_na_projected_basemap_gg(all_map_df[[lon_col]], all_map_df[[lat_col]])
+    pts_g <- if (nrow(tdf_map) > 0L) project_lonlat_points_r(tdf_map, m_ctx, lon_col = lon_col, lat_col = lat_col) else tdf_map[0L, , drop = FALSE]
+    pts_unc <- if (nrow(unc_type_df) > 0L) project_lonlat_points_r(unc_type_df, m_ctx, lon_col = lon_col, lat_col = lat_col) else unc_type_df[0L, , drop = FALSE]
     pm <- m_ctx$plot
     has_halo_anchors <- FALSE
     if (nrow(pts_g) > 0L) {
@@ -154,32 +169,20 @@ render_step07a_integrative_synthesis_png <- function(
       geno_halo_pts <- pts_g[(!is.na(gl_g) & gl_g %in% g_halo_tiers) | (!is.na(gp_g) & gp_g %in% g_halo_tiers), , drop = FALSE]
       cyto_halo_pts <- pts_g[!is.na(cy_g) & cy_g %in% c_halo_tiers, , drop = FALSE]
       has_halo_anchors <- (nrow(geno_halo_pts) > 0L) || (nrow(cyto_halo_pts) > 0L)
-      if (nrow(geno_halo_pts) > 0L) {
-        pm <- pm + ggplot2::geom_point(
-          data = geno_halo_pts, ggplot2::aes(x = .data$map_x, y = .data$map_y),
-          inherit.aes = FALSE, shape = 1L, fill = NA, size = 4.0, stroke = 0.7, color = "#1E293B", show.legend = FALSE
-        )
-      }
-      if (nrow(cyto_halo_pts) > 0L) {
-        pm <- pm + ggplot2::geom_point(
-          data = cyto_halo_pts, ggplot2::aes(x = .data$map_x, y = .data$map_y),
-          inherit.aes = FALSE, shape = 5L, fill = NA, size = 4.0, stroke = 0.7, color = "#1E293B", show.legend = FALSE
-        )
-      }
+      if (nrow(geno_halo_pts) > 0L) pm <- pm + ggplot2::geom_point(data = geno_halo_pts, ggplot2::aes(x = .data$map_x, y = .data$map_y), inherit.aes = FALSE, shape = 1L, fill = NA, size = 4.0, stroke = 0.7, color = "#1E293B", show.legend = FALSE)
+      if (nrow(cyto_halo_pts) > 0L) pm <- pm + ggplot2::geom_point(data = cyto_halo_pts, ggplot2::aes(x = .data$map_x, y = .data$map_y), inherit.aes = FALSE, shape = 5L, fill = NA, size = 4.0, stroke = 0.7, color = "#1E293B", show.legend = FALSE)
       pm <- pm +
-        ggplot2::geom_point(
-          data = pts_g,
-          ggplot2::aes(x = .data$map_x, y = .data$map_y, color = .data$treatment_call, shape = .data$treatment_call),
-          size = 2.3, stroke = 0.85, alpha = 0.85, show.legend = FALSE
-        ) +
+        ggplot2::geom_point(data = pts_g, ggplot2::aes(x = .data$map_x, y = .data$map_y, color = .data$treatment_call, shape = .data$treatment_call), size = 2.3, stroke = 0.85, alpha = 0.85, show.legend = FALSE) +
         ggplot2::scale_color_manual(values = PACKERA_TREATMENT_PALETTE) +
         ggplot2::scale_shape_manual(values = PACKERA_TREATMENT_HOLLOW_SHAPES)
     }
+    pts_type_all <- if (nrow(pts_g) > 0L && nrow(pts_unc) > 0L) rbind(pts_g, pts_unc) else if (nrow(pts_unc) > 0L) pts_unc else pts_g
+    if (nrow(pts_type_all) > 0L && exists("add_nomenclatural_type_layer_gg", mode = "function")) {
+      pm <- add_nomenclatural_type_layer_gg(pm, pts_type_all, x_col = "map_x", y_col = "map_y", show_uncertain_coord = TRUE)
+    }
     map_sub <- if (has_halo_anchors) "NAD83 / Conus Albers Equal Area (EPSG:5070) (O = G1/G2 DNA, <> = C1/C2 2n)" else "NAD83 / Conus Albers Equal Area (EPSG:5070)"
-    pm + ggplot2::labs(
-      title = "B. Geographic Contact Zones, Anomalies & Type Localities",
-      subtitle = map_sub
-    )
+    if (is.finite(n_quar_nt) && n_quar_nt > 0L) map_sub <- sprintf("%s | %d centroid/inst. excluded", map_sub, n_quar_nt)
+    pm + ggplot2::labs(title = "B. Geographic Contact Zones, Anomalies & Type Localities", subtitle = map_sub)
   } else {
     ggplot2::ggplot() + theme_packera_pub() + ggplot2::labs(title = "B. Geographic Contact Zones")
   }
@@ -324,14 +327,19 @@ render_step07a_integrative_synthesis_png <- function(
     )
 
   dyn_h_06a <- max(10.2, 6.2 + 0.28 * length(active_taxa))
-  hdr_title <- if (length(active_taxa) >= 2L && nzchar(trimws(as.character(focal_taxon)))) {
-    sprintf("Step 07: Integrative Species Delimitation Across Packera Complexes (%s Focus, N = %d Taxa)", trimws(as.character(focal_taxon)), length(active_taxa))
-  } else if (nzchar(trimws(as.character(focal_taxon)))) {
-    sprintf("Step 07: Integrative Species Delimitation & Curatorial Synthesis (%s)", trimws(as.character(focal_taxon)))
+  ft_07 <- trimws(as.character(focal_taxon))
+  use_icn_t <- exists("format_icn_title_expr", mode = "function")
+  hdr_title <- if (length(active_taxa) >= 2L && nzchar(ft_07)) {
+    if (use_icn_t) format_icn_title_expr("Step 07: Integrative Species Delimitation (", ft_07, sprintf(" Focus, N = %d Taxa)", length(active_taxa)), bold_all = TRUE)
+    else sprintf("Step 07: Integrative Species Delimitation Across Packera Complexes (%s Focus, N = %d Taxa)", ft_07, length(active_taxa))
+  } else if (nzchar(ft_07)) {
+    if (use_icn_t) format_icn_title_expr("Step 07: Integrative Species Delimitation & Curatorial Synthesis (", ft_07, ")", bold_all = TRUE)
+    else sprintf("Step 07: Integrative Species Delimitation & Curatorial Synthesis (%s)", ft_07)
   } else if (length(active_taxa) == 1L) {
-    sprintf("Step 07: Integrative Species Delimitation & Curatorial Synthesis (%s)", active_taxa[1L])
+    if (use_icn_t) format_icn_title_expr("Step 07: Integrative Species Delimitation & Curatorial Synthesis (", active_taxa[1L], ")", bold_all = TRUE)
+    else sprintf("Step 07: Integrative Species Delimitation & Curatorial Synthesis (%s)", active_taxa[1L])
   } else {
-    sprintf("Step 07: Integrative Species Delimitation Across Packera Complexes (N = %d Taxa)", length(active_taxa))
+    bquote(bold("Step 07: Integrative Species Delimitation Across " ~ italic("Packera") ~ .(sprintf("Complexes (N = %d Taxa)", length(active_taxa)))))
   }
   prop_tier_v <- if ("genomic_propagation_tier" %in% names(df)) trimws(as.character(df$genomic_propagation_tier)) else rep(NA_character_, nrow(df))
   t0_tx_v <- if ("tier0_calibrated_taxon" %in% names(df)) trimws(as.character(df$tier0_calibrated_taxon)) else rep(NA_character_, nrow(df))

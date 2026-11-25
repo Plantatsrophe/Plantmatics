@@ -15,29 +15,6 @@ if (!exists("env_plantmatics_or_packera", mode = "function")) {
   }
 }
 
-PACKERA_TOL_OKABE_12 <- c(
-  "#0072B2", # Blue
-  "#D55E00", # Vermilion
-  "#009E73", # Bluish green
-  "#CC79A7", # Reddish purple
-  "#E69F00", # Orange
-  "#56B4E9", # Sky blue
-  "#332288", # Indigo
-  "#882285", # Wine
-  "#44AA99", # Teal
-  "#999933", # Olive
-  "#666666", # Slate
-  "#117733"  # Forest green
-)
-
-# Strictly unfilled/hollow point geometries: circle, triangle, diamond, square, inverted-triangle
-PACKERA_HOLLOW_SHAPES_5 <- c(1L, 2L, 5L, 0L, 6L)
-
-PACKERA_ICN_ROMAN_TOKENS <- c(
-  "subsp.", "subsp", "ssp.", "ssp", "var.", "var", "f.", "forma",
-  "x", "\u00d7", "aff.", "aff", "cf.", "cf", "sp.", "sp", "s.s.", "s.l.", "ined."
-)
-
 normalize_png_path <- function(out_path) {
   if (is.null(out_path) || !nzchar(trimws(as.character(out_path)))) return("")
   p <- trimws(as.character(out_path))
@@ -164,58 +141,6 @@ resolve_taxon_or_rank_vector <- function(df, group_col = NULL) {
   base_v
 }
 
-abbreviate_icn_taxon <- function(label_vec, abbreviate_genus = FALSE) {
-  vapply(as.character(label_vec), function(s) {
-    if (is.na(s) || !nzchar(trimws(s))) return("Unknown")
-    s_clean <- trimws(s)
-    if (!isTRUE(abbreviate_genus)) return(s_clean)
-    if (grepl("^(Morphotype|Ecotype|Complex|Cluster|Deme)_", s_clean)) return(gsub("_", " ", s_clean))
-    toks <- strsplit(s_clean, "[[:space:]]+")[[1L]]
-    if (length(toks) >= 2L && grepl("^[A-Z][a-z]+$", toks[1L])) {
-      toks[1L] <- paste0(substr(toks[1L], 1L, 1L), ".")
-      return(paste(toks, collapse = " "))
-    }
-    s_clean
-  }, character(1), USE.NAMES = FALSE)
-}
-
-format_icn_label_expr <- function(tx, abbreviate_genus = FALSE, count_n = NULL) {
-  s <- abbreviate_icn_taxon(tx, abbreviate_genus = abbreviate_genus)
-  suffix_n <- if (!is.null(count_n) && is.finite(count_n)) sprintf(" (n=%d)", as.integer(count_n)) else ""
-  if (grepl("^(Morphotype|Ecotype|Complex|Cluster|Deme|Unknown|Unassigned)", s, ignore.case = TRUE) ||
-      !grepl("^[A-Z][a-z.]*[[:space:]]+", s)) {
-    lbl_plain <- paste0(gsub("_", " ", s), suffix_n)
-    return(bquote(.(lbl_plain)))
-  }
-
-  toks <- strsplit(s, "[[:space:]]+")[[1L]]
-  expr_parts <- character(0)
-  for (i in seq_along(toks)) {
-    tk <- toks[i]
-    low <- tolower(tk)
-    esc <- gsub('"', '\\"', tk, fixed = TRUE)
-    if (i == 1L) {
-      expr_parts <- c(expr_parts, sprintf('italic("%s")', esc))
-    } else if (low %in% PACKERA_ICN_ROMAN_TOKENS) {
-      rom <- if (low %in% c("x", "\u00d7")) "\u00d7"
-             else if (low %in% c("subsp", "ssp", "subsp.", "ssp.")) "subsp."
-             else if (low %in% c("var", "var.")) "var."
-             else if (low %in% c("f", "f.", "forma")) "f."
-             else esc
-      expr_parts <- c(expr_parts, sprintf('"%s"', rom))
-    } else if (grepl("^[a-z][a-z-]+$", tk)) {
-      expr_parts <- c(expr_parts, sprintf('italic("%s")', esc))
-    } else {
-      expr_parts <- c(expr_parts, sprintf('"%s"', esc))
-    }
-  }
-  if (nzchar(suffix_n)) {
-    expr_parts <- c(expr_parts, sprintf('"%s"', trimws(suffix_n)))
-  }
-  code_str <- paste(expr_parts, collapse = " ~ ")
-  tryCatch(parse(text = code_str)[[1L]], error = function(e) paste0(s, suffix_n))
-}
-
 resolve_plot_group_labels <- function(df, cda_res = NULL, gmm_res = NULL, group_col = NULL) {
   if (is.null(df) || nrow(df) == 0L) return(character(0))
   if (!is.null(group_col) && is.character(group_col) && length(group_col) == 1L && group_col %in% names(df)) {
@@ -239,50 +164,6 @@ resolve_plot_group_labels <- function(df, cda_res = NULL, gmm_res = NULL, group_
     }
   }
   resolve_taxon_or_rank_vector(df)
-}
-
-format_icn_label_vec <- function(taxa_vec, abbreviate_genus = FALSE, counts_map = NULL) {
-  tx_chr <- as.character(taxa_vec)
-  if (length(tx_chr) == 0L) return(expression())
-  out_expr <- as.expression(lapply(tx_chr, function(tx) {
-    n_v <- if (!is.null(counts_map) && !is.na(tx) && tx %in% names(counts_map)) counts_map[[tx]] else NULL
-    format_icn_label_expr(tx, abbreviate_genus = abbreviate_genus, count_n = n_v)
-  }))
-  names(out_expr) <- tx_chr
-  out_expr
-}
-
-icn_discrete_labeller <- function(abbreviate_genus = FALSE, counts_map = NULL) {
-  force(abbreviate_genus)
-  force(counts_map)
-  function(x) {
-    unname(format_icn_label_vec(x, abbreviate_genus = abbreviate_genus, counts_map = counts_map))
-  }
-}
-
-get_combinatorial_palette_r <- function(groups_vec, preserve_order = FALSE) {
-  lvls <- unique(as.character(stats::na.omit(groups_vec)))
-  lvls <- lvls[nzchar(trimws(lvls))]
-  if (!isTRUE(preserve_order)) lvls <- sort(lvls)
-  if (length(lvls) == 0L) return(character(0))
-  n_c <- length(PACKERA_TOL_OKABE_12)
-  cols <- PACKERA_TOL_OKABE_12[((seq_along(lvls) - 1L) %% n_c) + 1L]
-  stats::setNames(cols, lvls)
-}
-
-get_combinatorial_hollow_shapes_r <- function(groups_vec, preserve_order = FALSE) {
-  lvls <- unique(as.character(stats::na.omit(groups_vec)))
-  lvls <- lvls[nzchar(trimws(lvls))]
-  if (!isTRUE(preserve_order)) lvls <- sort(lvls)
-  if (length(lvls) == 0L) return(integer(0))
-  n_c <- length(PACKERA_TOL_OKABE_12)
-  n_s <- length(PACKERA_HOLLOW_SHAPES_5)
-  shps <- if (length(lvls) > 8L) {
-    PACKERA_HOLLOW_SHAPES_5[(((seq_along(lvls) - 1L) %/% n_c) %% n_s) + 1L]
-  } else {
-    PACKERA_HOLLOW_SHAPES_5[((seq_along(lvls) - 1L) %% n_s) + 1L]
-  }
-  stats::setNames(shps, lvls)
 }
 
 theme_packera_pub <- function(base_size = 10.2) {
@@ -384,4 +265,6 @@ add_centroid_repel_labels_gg <- function(p, cent_df, x_col, y_col, label_col, co
   default_rel
 }
 .load_env <- environment()
+.fig_self_dir <- .resolve_self_dir("scripts/figures", "icn_palette_utils.R")
+source(file.path(.fig_self_dir, "icn_palette_utils.R"), local = .load_env)
 source(file.path(.resolve_self_dir("scripts/figures", "basemap_exemplar_utils.R"), "basemap_exemplar_utils.R"), local = .load_env)

@@ -249,6 +249,18 @@ df_rep <- data.frame(
   stringsAsFactors = FALSE
 )
 
+seed_plates <- c(
+  "fig01_cohort_biogeography_and_authority.png", "fig02a_lm3_organ_and_ect_exemplars.png",
+  "fig02b_segmentation_qc_and_phenophase.png", "fig03a_efa_morphospace_and_harmonics.png",
+  "fig03b_topological_ect_and_heteroblasty.png", "fig04a_foliar_allometry_audit.png",
+  "fig04b_gmm_cda_morphometrics.png", "fig04c_ecoregion_and_batch_audit.png",
+  "fig05a_ecological_niche_and_rf_importance.png", "fig05b_hopkins_circular_phenology.png",
+  "fig05c_sdm_suitability_and_distribution_map.png", "fig06a_genomic_pcoa_tree_concordance.png",
+  "fig06b_reticulation_gdi_landscape.png", "fig06c_cytonuclear_paralog_cytotype_audit.png",
+  "fig07a_integrative_taxonomic_synthesis.png", "fig07b_taxon_complex_delimitation_network.png"
+)
+for (sp_fn in seed_plates) writeBin(as.raw(c(137L, 80L, 78L, 71L)), file.path(fig_dir, sp_fn))
+
 html_out <- file.path(rep_dir, "triage_dashboard.html")
 md_out <- file.path(rep_dir, "revision_report.md")
 png_out <- file.path(fig_dir, "fig07a_ect_fallback.png")
@@ -364,6 +376,23 @@ class TestStep07SqliteAndReports(unittest.TestCase):
         self.assertIn("Export Filtered CSV", self.html_text)
         self.assertIn('<option value="Type_Synonymy_Candidate">', self.html_text)
         self.assertIn("REP_TYPE_SYN", self.html_text)
+        self.assertIn("_lm3_sheet_overlay.png", self.html_text)
+        self.assertIn("replace(/[^A-Za-z0-9_.-]+/g, '_')", self.html_text)
+        for ext in ("'.webp'", "'.jpg'", "'.jpeg'", "'.png'"):
+            self.assertIn(ext, self.html_text)
+        self.assertIn(".s-Confirmed_Type_Control{background:#EEF2FF;color:#332288;border:1px solid #C7D2FE;}", self.html_text)
+        self.assertIn("sub-badge s-Confirmed_Type_Control", self.html_text)
+        for plate in (
+            "fig01_cohort_biogeography_and_authority.png", "fig02a_lm3_organ_and_ect_exemplars.png",
+            "fig02b_segmentation_qc_and_phenophase.png", "fig03a_efa_morphospace_and_harmonics.png",
+            "fig03b_topological_ect_and_heteroblasty.png", "fig04a_foliar_allometry_audit.png",
+            "fig04b_gmm_cda_morphometrics.png", "fig04c_ecoregion_and_batch_audit.png",
+            "fig05a_ecological_niche_and_rf_importance.png", "fig05b_hopkins_circular_phenology.png",
+            "fig05c_sdm_suitability_and_distribution_map.png", "fig06a_genomic_pcoa_tree_concordance.png",
+            "fig06b_reticulation_gdi_landscape.png", "fig06c_cytonuclear_paralog_cytotype_audit.png",
+            "fig07a_integrative_taxonomic_synthesis.png", "fig07b_taxon_complex_delimitation_network.png",
+        ):
+            self.assertIn(f'href="../figures/{plate}"', self.html_text)
         self.assertIsNone(re.search(r"https?://", self.html_text), "Offline HTML dashboard must have zero external CDN URLs")
         self.assertNotIn("\u2013", self.md_text)
         self.assertNotIn("\u2014", self.md_text)

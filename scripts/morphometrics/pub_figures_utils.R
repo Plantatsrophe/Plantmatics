@@ -330,7 +330,9 @@ generate_step03_pub_figures <- function(
   )
 }
 
-render_allometry_diagnostic_png <- function(sub_df, r2_size, p_size, r2_int, output_png, p_int = 1.0) {
+render_allometry_diagnostic_png <- function(sub_df, r2_size, p_size, r2_int, output_png, p_int = 1.0,
+                                            r2_within = NA_real_, p_within = NA_real_,
+                                            scale_tier = "verified_ruler", corrected = FALSE) {
   if (identical(Sys.getenv("PLANTMATICS_SKIP_FIGURES", unset = ""), "1") ||
       identical(Sys.getenv("PACKERA_SKIP_FIGURES", unset = ""), "1")) return(invisible(""))
   out_png <- if (!is.null(output_png) && nzchar(output_png)) normalize_png_path(output_png) else "outputs/figures/fig04a_foliar_allometry_audit.png"
@@ -340,7 +342,11 @@ render_allometry_diagnostic_png <- function(sub_df, r2_size, p_size, r2_int, out
     p_size = p_size,
     r2_int = r2_int,
     output_path = out_png,
-    p_int = p_int
+    p_int = p_int,
+    r2_within = r2_within,
+    p_within = p_within,
+    scale_tier = scale_tier,
+    corrected = corrected
   )
 }
 
@@ -366,7 +372,8 @@ generate_step04_pub_figures <- function(
   reference_path = NULL,
   eco_cda_res = NULL,
   manova_res = NULL,
-  batch_csv = NULL
+  batch_csv = NULL,
+  ecoregion_plot_path = NULL
 ) {
   if (identical(Sys.getenv("PLANTMATICS_SKIP_FIGURES", unset = ""), "1") ||
       identical(Sys.getenv("PACKERA_SKIP_FIGURES", unset = ""), "1")) return(invisible(TRUE))
@@ -389,7 +396,8 @@ generate_step04_pub_figures <- function(
       figures_dir = fdir,
       output_plot_path = reference_path,
       manova_res = manova_res,
-      batch_csv = batch_csv
+      batch_csv = batch_csv,
+      ecoregion_plot_path = ecoregion_plot_path
     )
   }
   invisible(TRUE)

@@ -94,7 +94,8 @@ export_spatial_rf_figures <- function(df, srf_res, niche_res, out_path, pheno_re
 
 fit_and_project_maxent_sdm_maps <- function(
   df, srf_res, env_dir, out_dir = "outputs", kept_vars = NULL, primary_clim_vars = NULL,
-  primary_edaph_vars = NULL, focal_taxon = "Packera dubia", intraspecific_mode = FALSE, demo = FALSE
+  primary_edaph_vars = NULL, focal_taxon = "Packera dubia", intraspecific_mode = FALSE, demo = FALSE,
+  out_sdm_plot = NULL
 ) {
   if (is.null(df) || nrow(df) == 0L) return(invisible(NULL))
   if (is.null(out_dir) || !nzchar(out_dir)) out_dir <- "outputs"
@@ -408,10 +409,10 @@ fit_and_project_maxent_sdm_maps <- function(
         df = df_raw, focal_rasters = list(maxent = focal_artifacts$rast_mx, ensemble = focal_artifacts$rast_ens),
         multi_rasters = mlist, perf_df = perf_df, resp_df = if (length(rrows) > 0L) do.call(rbind, rrows) else NULL,
         roc_df = if (length(roc_p) > 0L) do.call(rbind, roc_p) else NULL, boyce_df = attr(focal_artifacts$cbi_ens, "boyce_curve"),
-        figures_dir = fig_dir, focal_taxon = focal_artifacts$taxon
+        figures_dir = fig_dir, focal_taxon = focal_artifacts$taxon, out_sdm_path = out_sdm_plot
       )
       message(sprintf("Exported 300-DPI Ensemble SDM & Distribution plate -> %s", file.path(fig_dir, "fig05c_sdm_suitability_and_distribution_map.png")))
-    } else render_step05c_sdm_suitability_png(df = df_raw, figures_dir = fig_dir, focal_taxon = focal_taxon)
+    } else render_step05c_sdm_suitability_png(df = df_raw, figures_dir = fig_dir, focal_taxon = focal_taxon, out_sdm_path = out_sdm_plot)
   }
   invisible(list(performance = perf_df, focal = focal_artifacts))
 }

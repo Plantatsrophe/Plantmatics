@@ -58,6 +58,7 @@ if [[ "${START_STEP}" -le 1 && "${REUSE_CANONICAL_DATA}" == "false" ]]; then
     "${PYTHON_MAIN}" scripts/data_prep/01_voucher_harvester.py \
       --out-dir "data/raw_vouchers" \
       --output-csv "${RUN_DIR}/data/tables/curated_vouchers.csv" \
+      --output-plot "${RUN_DIR}/outputs/figures/fig01_cohort_biogeography_and_authority.png" \
       "${HARVEST_TAXON_ARGS[@]}" \
       "${HARVEST_GEO_ARGS[@]}" \
       "${HARVEST_SPATIAL_ARGS[@]}" \
@@ -167,6 +168,7 @@ if [[ "${START_STEP}" -le 4 ]]; then
     --output-batch-audit "${RUN_DIR}/outputs/reports/institutional_batch_effect_audit.csv" \
     --output-flags "${RUN_DIR}/data/tables/morphometric_flags.csv" \
     --output-plot "${RUN_DIR}/outputs/figures/fig04b_gmm_cda_morphometrics.png" \
+    --ecoregion-plot "${RUN_DIR}/outputs/figures/fig04c_ecoregion_and_batch_audit.png" \
     --output-report "${RUN_DIR}/outputs/reports/gmm_bayes_factors_summary.csv" \
     "${FOCAL_ARGS[@]}" \
     "${INTRASPECIFIC_ARGS[@]}"

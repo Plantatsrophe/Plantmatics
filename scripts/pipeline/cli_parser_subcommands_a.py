@@ -215,6 +215,7 @@ def register_subcommands_a(subparsers: Any) -> None:
     p_harvest.add_argument("--include-western", action="store_true", default=False, help=argparse.SUPPRESS)
     p_harvest.add_argument("--out-dir", type=Path, default=None, help="Output directory for raw vouchers")
     p_harvest.add_argument("--output-csv", type=Path, default=None, help="Curated vouchers output CSV")
+    p_harvest.add_argument("--output-plot", type=Path, default=None, help="Step 01 cohort biogeography & authority audit PNG")
     p_harvest.add_argument("--max-records", type=int, default=None, help="Max records per taxon")
     p_harvest.add_argument("--max-uncertainty", type=float, default=None, help="Max georeference uncertainty (m)")
     p_harvest.add_argument("--min-megapixels", type=float, default=None, help="Min resolution in Megapixels")

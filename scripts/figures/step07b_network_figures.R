@@ -136,7 +136,7 @@ render_step07b_complex_network_png <- function(
     ggplot2::scale_x_discrete(labels = if (is_deme_net) ggplot2::waiver() else icn_discrete_labeller(abbreviate_genus = TRUE)) +
     ggplot2::scale_y_discrete(labels = if (is_deme_net) ggplot2::waiver() else icn_discrete_labeller(abbreviate_genus = TRUE)) +
     theme_packera_pub(base_size = 9.4) +
-    ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 40, hjust = 1, face = "plain")) +
+    ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 40, hjust = 1)) +
     ggplot2::labs(
       title = sprintf("A. Ward.D2 Multimodal Affinity Matrix (%d %s)", n_comp, if (n_comp == 1L) "Complex" else "Complexes"),
       subtitle = if (is_deme_net) {
@@ -256,9 +256,11 @@ render_step07b_complex_network_png <- function(
         subtitle = "Solid edges connect intra-complex members; node size ~ log10(N)",
         x = "Multimodal MDS Axis 1", y = "Multimodal MDS Axis 2"
       )
+    if (exists("apply_high_richness_legend_gg", mode = "function")) pn <- apply_high_richness_legend_gg(pn, length(unique(node_df$complex)))
     add_centroid_repel_labels_gg(pn, node_df, "x", "y", "lbl", color_col = "complex", size = 2.95, allow_ggrepel = use_repel)
   }
 
+  dyn_w_06b <- if (n_t > 15L) max(14.2, 11.0 + 0.18 * n_t) else 14.2
   dyn_h_06b <- max(6.6, 4.4 + 0.24 * n_t)
   canon_07b <- file.path(fdir, "fig07b_taxon_complex_delimitation_network.png")
   cyto_sub_07b <- .build_cytology_fig_subtitle(if (!is.null(voucher_df) && is.data.frame(voucher_df) && nrow(voucher_df) > 0L) voucher_df else cdf)
@@ -273,7 +275,7 @@ render_step07b_complex_network_png <- function(
   plate_06b <- (p_heat | build_net_panel(TRUE)) +
     patchwork::plot_layout(widths = c(1.08, 1.0)) +
     anno_07b
-  out_saved <- save_packera_png_300(plate_06b, canon_07b, width = 14.2, height = dyn_h_06b, also_copy_to = out_complex_path)
+  out_saved <- save_packera_png_300(plate_06b, canon_07b, width = dyn_w_06b, height = dyn_h_06b, also_copy_to = out_complex_path)
   if (!file.exists(canon_07b) || isTRUE(file.info(canon_07b)$size == 0)) {
     p_heat_fb <- if (is_deme_net) p_heat else (
       p_heat +
@@ -283,7 +285,7 @@ render_step07b_complex_network_png <- function(
     plate_06b_fb <- (p_heat_fb | build_net_panel(FALSE)) +
       patchwork::plot_layout(widths = c(1.08, 1.0)) +
       anno_07b
-    out_saved <- save_packera_png_300(plate_06b_fb, canon_07b, width = 14.2, height = dyn_h_06b, also_copy_to = out_complex_path)
+    out_saved <- save_packera_png_300(plate_06b_fb, canon_07b, width = dyn_w_06b, height = dyn_h_06b, also_copy_to = out_complex_path)
   }
   out_saved
 }

@@ -88,24 +88,24 @@ def render_plate02b_qc_and_phenophase(
         ax_pheno, ax_het = fig_b.add_subplot(gs_b[1, 1]), None
 
     y_pos = np.arange(len(active_taxa))
-    pct_ruler, pct_mp, pct_uncal, qc_pass_pct, counts_lbl = [], [], [], [], []
+    pct_ruler, pct_unboxed, pct_uncal, qc_pass_pct, counts_lbl = [], [], [], [], []
     for tx in active_taxa:
         sub_tx = df[df["species_clean"] == tx]
         n_t = max(1, len(sub_tx))
         sc_raw = sub_tx.get("scale_source", pd.Series("", index=sub_tx.index)).astype(str).str.strip().str.lower()
         cal_b = sub_tx["is_calibrated_mm"].apply(_parse_bool_val) if "is_calibrated_mm" in sub_tx.columns else pd.Series(False, index=sub_tx.index)
-        is_mp = sc_raw.isin({"mp_estimated", "predicted_from_megapixels"})
-        is_rul = (cal_b & (~is_mp)) | sc_raw.isin({"measured_from_ruler", "measured_from_fieldprism", "ruler_calibrated"})
-        is_unc = ~(is_rul | is_mp)
+        is_unboxed = (sc_raw == "tick_lattice_unboxed") | ((~cal_b) & sc_raw.str.contains("lattice|mp_estimated|predicted_from_megapixels", regex=True))
+        is_rul = (cal_b & (~is_unboxed)) | sc_raw.isin({"measured_from_ruler", "measured_from_fieldprism", "ruler_calibrated"})
+        is_unc = ~(is_rul | is_unboxed)
         pct_ruler.append(100.0 * float(is_rul.sum()) / n_t)
-        pct_mp.append(100.0 * float(is_mp.sum()) / n_t)
+        pct_unboxed.append(100.0 * float(is_unboxed.sum()) / n_t)
         pct_uncal.append(100.0 * float(is_unc.sum()) / n_t)
         qc_pass_pct.append(100.0 * float(sub_tx["exemplar_ok"].sum()) / n_t)
         counts_lbl.append(f"{format_icn_taxon_mathtext(tx, abbreviate_genus=(len(active_taxa) > 4))} (n={len(sub_tx)})")
 
-    b1, b2, b3 = np.array(pct_ruler), np.array(pct_mp), np.array(pct_uncal)
+    b1, b2, b3 = np.array(pct_ruler), np.array(pct_unboxed), np.array(pct_uncal)
     ax_qc.barh(y_pos, b1, height=0.62, color="#0072B2", alpha=0.85, label="Ruler / FieldPrism (mm)")
-    ax_qc.barh(y_pos, b2, left=b1, height=0.62, color="#E69F00", alpha=0.85, label="Megapixel Prior")
+    ax_qc.barh(y_pos, b2, left=b1, height=0.62, color="#E69F00", alpha=0.85, label="Unboxed Tick-Lattice (mm masked)")
     ax_qc.barh(y_pos, b3, left=b1 + b2, height=0.62, color="#d1d5db", alpha=0.90, label="Uncalibrated (px)")
     ax_qc.scatter(
         qc_pass_pct, y_pos, s=42, marker="D", facecolors="none", edgecolors="#111827",
@@ -118,7 +118,7 @@ def render_plate02b_qc_and_phenophase(
     ax_qc.set_xlabel("Percentage of Extracted Leaves (%)", fontsize=9)
     n_fail_sheets = len(failed_df) if failed_df is not None else 0
     ax_qc.set_title(f"B. Ruler Calibration & Clean LM3 Gate Yield (Failed: {n_fail_sheets})", fontsize=10, fontweight="bold", loc="left", pad=36)
-    ax_qc.legend(loc="lower center", bbox_to_anchor=(0.5, 1.01), ncol=3, fontsize=7.0, frameon=False)
+    ax_qc.legend(loc="lower center", bbox_to_anchor=(0.5, 1.01), ncol=2, fontsize=6.9, frameon=False)
     ax_qc.grid(True, axis="x", linestyle=":", linewidth=0.5, alpha=0.55)
 
     # Panel C: Involucral Aspect Ratio (AR_inv) hollow-jitter boxplots
@@ -198,7 +198,10 @@ def render_plate02b_qc_and_phenophase(
             ax_pheno.barh(pos_p, arr_p, left=left_acc, height=0.60, color=col_p, alpha=0.88, label=lbl_p)
             left_acc += arr_p
         ax_pheno.set_yticks(pos_p)
-        ax_pheno.set_yticklabels([format_icn_taxon_mathtext(tx, abbreviate_genus=True) for tx in taxa_ph], fontsize=7.6)
+        ax_pheno.set_yticklabels(
+            [f"{format_icn_taxon_mathtext(tx, abbreviate_genus=True)} (n={int((ph_work['species_clean'] == tx).sum())})" for tx in taxa_ph],
+            fontsize=7.6,
+        )
         ax_pheno.invert_yaxis()
         ax_pheno.set_xlim(0, 100)
         ax_pheno.set_xlabel("Voucher Proportion (%)", fontsize=8.8)
@@ -211,17 +214,37 @@ def render_plate02b_qc_and_phenophase(
     ax_pheno.set_title("D. Cyme Phenophase Stratification", fontsize=10, fontweight="bold", loc="left", pad=36)
 
     if ax_het is not None:
-        # Panel E: Basal vs. Cauline Organ Counts & Heteroblastic Solidity Shift per Taxon
+        # Panel E: Basal vs. Cauline Organ Counts & Heteroblastic Photometry Shift per Taxon
         b_cnts = [int(((df["species_clean"] == tx) & (df["zone_clean"] == "basal")).sum()) for tx in active_taxa]
         c_cnts = [int(((df["species_clean"] == tx) & (df["zone_clean"] == "cauline")).sum()) for tx in active_taxa]
         pos_h = np.arange(len(active_taxa))
         ax_het.barh(pos_h - 0.17, b_cnts, height=0.32, color="#0072B2", alpha=0.86, label="Basal Rosette Leaves")
         ax_het.barh(pos_h + 0.17, c_cnts, height=0.32, color="#009E73", alpha=0.86, label="Cauline Stem Leaves")
         ax_het.set_yticks(pos_h)
-        ax_het.set_yticklabels([format_icn_taxon_mathtext(tx, abbreviate_genus=True) for tx in active_taxa], fontsize=7.6)
+        ax_het.set_yticklabels(
+            [f"{format_icn_taxon_mathtext(tx, abbreviate_genus=True)} (n={b_cnts[i] + c_cnts[i]})" for i, tx in enumerate(active_taxa)],
+            fontsize=7.6,
+        )
         ax_het.invert_yaxis()
         ax_het.set_xlabel("Extracted Organ Count (n)", fontsize=8.8)
-        ax_het.set_title("E. Basal Rosette vs. Cauline Stem Yield by Taxon", fontsize=10, fontweight="bold", loc="left")
+        cie_parts: List[str] = []
+        if "blade_cie_l_sheet_delta" in df.columns:
+            adax_s = pd.to_numeric(df["blade_cie_l_sheet_delta"], errors="coerce")
+            if "is_abaxial_leaf" in df.columns:
+                ab_m = df["is_abaxial_leaf"].apply(_parse_bool_val)
+                ad_v = adax_s[~ab_m].dropna()
+                if len(ad_v) > 0:
+                    cie_parts.append(f"Adaxial med ΔL*={float(ad_v.median()):+.1f}")
+                if "abaxial_cie_l_sheet_delta" not in df.columns and adax_s[ab_m].notna().any():
+                    cie_parts.append(f"Abaxial med ΔL*={float(adax_s[ab_m].dropna().median()):+.1f}")
+            elif adax_s.notna().any():
+                cie_parts.append(f"Adaxial med ΔL*={float(adax_s.dropna().median()):+.1f}")
+        if "abaxial_cie_l_sheet_delta" in df.columns:
+            ab_v = pd.to_numeric(df["abaxial_cie_l_sheet_delta"], errors="coerce").dropna()
+            if len(ab_v) > 0:
+                cie_parts.append(f"Abaxial med ΔL*={float(ab_v.median()):+.1f}")
+        e_ttl = "E. Basal Rosette vs. Cauline Stem Yield by Taxon" + (f"\n({' | '.join(cie_parts)})" if cie_parts else "")
+        ax_het.set_title(e_ttl, fontsize=9.4 if cie_parts else 10, fontweight="bold", loc="left")
         ax_het.legend(loc="lower right", fontsize=7.4, frameon=True, facecolor="white", framealpha=0.9)
         ax_het.grid(True, axis="x", linestyle=":", linewidth=0.5, alpha=0.55)
 

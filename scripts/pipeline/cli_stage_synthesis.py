@@ -122,6 +122,10 @@ def run_synthesis(args: argparse.Namespace, cfg: PipelineConfig) -> None:
         getattr(args, "spatial_plot", None)
         or (figures_dir / "fig05a_ecological_niche_and_rf_importance.png")
     )
+    sdm_plot = Path(
+        getattr(args, "sdm_plot", None)
+        or (figures_dir / "fig05c_sdm_suitability_and_distribution_map.png")
+    )
     spatial_summary = Path(
         getattr(args, "spatial_summary", None)
         or (reports_dir_s05 / "multimodal_spatial_rf_summary.csv")
@@ -140,6 +144,7 @@ def run_synthesis(args: argparse.Namespace, cfg: PipelineConfig) -> None:
         "--pheno-plot", str(pheno_plot),
         "--output-flags", str(conflict_flags),
         "--output-plot", str(spatial_plot),
+        "--sdm-plot", str(sdm_plot),
         "--output-summary", str(spatial_summary),
     ]
     if getattr(args, "permutations", None) is not None:

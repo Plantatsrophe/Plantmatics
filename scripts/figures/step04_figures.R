@@ -1,3 +1,4 @@
+if (grDevices::dev.cur() == 1L) grDevices::pdf(NULL)
 # ==============================================================================
 # Module: scripts/figures/step04_figures.R
 # Step 04 Canonical 300-DPI PNG Figures (RRPP Allometry, GMM, Shrinkage CDA,
@@ -7,10 +8,11 @@
 #   3. fig04c_ecoregion_and_batch_audit.png
 # ==============================================================================
 
-if (grDevices::dev.cur() == 1L) grDevices::pdf(NULL)
-
 render_step04_allometry_png <- function(sub_df, r2_size = 0.0, p_size = 1.0, r2_int = 0.0,
-                                        output_path = "outputs/figures/fig04a_foliar_allometry_audit.png", p_int = 1.0, pairwise_df = NULL) {
+                                        output_path = "outputs/figures/fig04a_foliar_allometry_audit.png",
+                                        p_int = 1.0, pairwise_df = NULL,
+                                        r2_within = NA_real_, p_within = NA_real_,
+                                        scale_tier = "verified_ruler", corrected = FALSE) {
   if (!requireNamespace("ggplot2", quietly = TRUE) || !requireNamespace("patchwork", quietly = TRUE)) return(invisible(""))
   fdir <- if (exists("resolve_active_figures_dir", mode = "function")) resolve_active_figures_dir(dirname(output_path), output_path) else dirname(output_path)
   dir.create(fdir, recursive = TRUE, showWarnings = FALSE)
@@ -28,10 +30,16 @@ render_step04_allometry_png <- function(sub_df, r2_size = 0.0, p_size = 1.0, r2_
   df$shape_y <- suppressWarnings(as.numeric(df[[y_cand]]))
   sub_a <- df[is.finite(df$cs_x) & is.finite(df$shape_y), , drop = FALSE]
 
-  sub_stats <- sprintf("RRPP Size R\u00b2 = %.3f (p = %.4g) | Size x Taxon R\u00b2 = %.3f (p = %.4g; slopes %s)",
-                       ifelse(is.finite(r2_size), r2_size, 0.0), ifelse(is.finite(p_size), p_size, 1.0),
+  tier_chr <- if (is.null(scale_tier) || length(scale_tier) == 0L || is.na(scale_tier[1L]) || !nzchar(trimws(as.character(scale_tier)[1L]))) "verified_ruler" else trimws(as.character(scale_tier)[1L])
+  is_cal_tier <- identical(tier_chr, "verified_ruler")
+  x_size_lbl <- if (is_cal_tier) expression(log[10]("Centroid Size [mm]")) else "log(Centroid Size) [uncalibrated]"
+  within_tag <- if (is.finite(r2_within)) sprintf("Within-taxon R\u00b2 = %.3f (p = %.4g) | ", r2_within, ifelse(is.finite(p_within), p_within, 1.0)) else ""
+  retained_tag <- if (isTRUE(corrected)) "allometry-adjusted harmonics retained" else "raw harmonics retained"
+  sub_stats <- sprintf("%sRRPP Size R\u00b2 = %.3f (p = %.4g) | Size x Taxon R\u00b2 = %.3f (p = %.4g; slopes %s)\nScale tier: %s | Decision: %s",
+                       within_tag, ifelse(is.finite(r2_size), r2_size, 0.0), ifelse(is.finite(p_size), p_size, 1.0),
                        ifelse(is.finite(r2_int), r2_int, 0.0), ifelse(is.finite(p_int), p_int, 1.0),
-                       ifelse(!is.finite(p_int) || p_int > 0.05, "homogeneous", "heterogeneous"))
+                       ifelse(!is.finite(p_int) || p_int > 0.05, "homogeneous", "heterogeneous"),
+                       tier_chr, retained_tag)
 
   p_reg <- ggplot2::ggplot(sub_a, ggplot2::aes(x = .data$cs_x, y = .data$shape_y, color = .data$plot_group, shape = .data$plot_group)) +
     ggplot2::geom_point(size = 2.4, stroke = 0.85, alpha = 0.82) +
@@ -39,13 +47,15 @@ render_step04_allometry_png <- function(sub_df, r2_size = 0.0, p_size = 1.0, r2_
     ggplot2::scale_color_manual(values = pal_map, labels = lbl_exprs, name = "Taxon / Group") +
     ggplot2::scale_shape_manual(values = shp_map, labels = lbl_exprs, name = "Taxon / Group") +
     theme_packera_pub() +
-    ggplot2::labs(title = "A. Foliar Allometry Trajectory (Ruler-Calibrated Cohort)", subtitle = sub_stats,
-                  x = expression(log[10]("Centroid Size [mm]")), y = sprintf("Primary Foliar Shape Score (%s)", y_cand))
+    ggplot2::labs(title = if (is_cal_tier) "A. Foliar Allometry Trajectory (Ruler-Calibrated Cohort)" else sprintf("A. Foliar Allometry Trajectory (%s Tier)", gsub("_", " ", tier_chr)),
+                  subtitle = sub_stats, x = x_size_lbl, y = sprintf("Primary Foliar Shape Score (%s)", y_cand))
+  p_reg <- add_nomenclatural_type_layer_gg(p_reg, sub_a, "cs_x", "shape_y")
   if (length(active_groups) > 10L && nrow(sub_a) > 0L) {
     cent_a <- stats::aggregate(cbind(cs_x, shape_y) ~ plot_group, data = sub_a, FUN = stats::median)
     cent_a$lbl <- abbreviate_icn_taxon(cent_a$plot_group, abbreviate_genus = TRUE)
-    p_reg <- add_centroid_repel_labels_gg(p_reg, cent_a, "cs_x", "shape_y", "lbl", color_col = "plot_group") + ggplot2::theme(legend.position = "none")
+    p_reg <- add_centroid_repel_labels_gg(p_reg, cent_a, "cs_x", "shape_y", "lbl", color_col = "plot_group")
   }
+  p_reg <- apply_high_richness_legend_gg(p_reg, length(active_groups))
 
   has_corr <- all(c("PC1_corrected", "PC2_corrected") %in% names(df)) &&
     any(is.finite(suppressWarnings(as.numeric(df$PC1_corrected)))) && any(is.finite(suppressWarnings(as.numeric(df$PC2_corrected))))
@@ -57,16 +67,17 @@ render_step04_allometry_png <- function(sub_df, r2_size = 0.0, p_size = 1.0, r2_
       ggplot2::geom_hline(yintercept = 0, linetype = "dotted", color = "#9CA3AF", linewidth = 0.4) +
       ggplot2::geom_vline(xintercept = 0, linetype = "dotted", color = "#9CA3AF", linewidth = 0.4)
     if (length(el_g) > 0L) p_tmp <- p_tmp + ggplot2::stat_ellipse(data = sub_c[sub_c$plot_group %in% el_g, , drop = FALSE], ggplot2::aes(color = .data$plot_group), level = 0.95, linetype = "dashed", linewidth = 0.55, show.legend = FALSE)
-    p_tmp + ggplot2::geom_point(size = 2.4, stroke = 0.85, alpha = 0.82, show.legend = FALSE) +
+    p_tmp <- p_tmp + ggplot2::geom_point(size = 2.4, stroke = 0.85, alpha = 0.82, show.legend = FALSE) +
       ggplot2::scale_color_manual(values = pal_map) + ggplot2::scale_shape_manual(values = shp_map) + theme_packera_pub() +
       ggplot2::labs(title = "B. Size-Free Allometric Residual Morphospace", subtitle = "Pooled within-taxon slope centered on authority-weighted reference mean size", x = "Allometry-Corrected PC1", y = "Allometry-Corrected PC2")
+    add_nomenclatural_type_layer_gg(p_tmp, sub_c, "pc1_c", "pc2_c")
   } else {
     ggplot2::ggplot(sub_a, ggplot2::aes(x = .data$cs_x, y = .data$plot_group, color = .data$plot_group, shape = .data$plot_group)) +
       ggplot2::geom_boxplot(fill = NA, color = "#4B5563", outlier.shape = NA, width = 0.55, inherit.aes = FALSE, ggplot2::aes(x = .data$cs_x, y = .data$plot_group)) +
       ggplot2::geom_jitter(height = 0.16, width = 0, size = 2.1, stroke = 0.8, alpha = 0.82, show.legend = FALSE) +
       ggplot2::scale_color_manual(values = pal_map) + ggplot2::scale_shape_manual(values = shp_map) +
       ggplot2::scale_y_discrete(labels = icn_discrete_labeller(abbreviate_genus = TRUE)) + theme_packera_pub() +
-      ggplot2::labs(title = "B. Calibrated Lamina Size Distribution by Taxon", x = expression(log[10]("Centroid Size [mm]")), y = NULL)
+      ggplot2::labs(title = if (is_cal_tier) "B. Calibrated Lamina Size Distribution by Taxon" else "B. Uncalibrated Lamina Size Distribution by Taxon", x = x_size_lbl, y = NULL)
   }
 
   plate_04a <- (p_reg | p_rhs) + patchwork::plot_annotation(title = "Step 04: Multivariate Foliar Allometry & Ontogenetic Scaling Audit", theme = ggplot2::theme(plot.title = ggplot2::element_text(face = "bold", size = 12.2)))
@@ -101,14 +112,24 @@ render_step04_gmm_cda_png <- function(audit_df, cda_res = NULL, gmm_res = NULL,
   } else if ("BIC" %in% names(bic_tb) && nrow(bic_tb) >= 2L) c(0.0, diff(suppressWarnings(as.numeric(bic_tb$BIC)))) else if ("Two_Delta_BIC" %in% names(bic_tb)) suppressWarnings(as.numeric(bic_tb$Two_Delta_BIC)) else rep(0.0, nrow(bic_tb))
   bic_tb$y_val[!is.finite(bic_tb$y_val)] <- 0.0
   best_k <- if (!is.null(gmm_res) && !is.null(gmm_res$best_k) && is.finite(gmm_res$best_k)) as.integer(gmm_res$best_k) else 1L
+  opt_k_raw <- if ("optimal_K_raw" %in% names(bic_tb) && any(is.finite(suppressWarnings(as.numeric(bic_tb$optimal_K_raw))))) as.integer(stats::na.omit(suppressWarnings(as.numeric(bic_tb$optimal_K_raw)))[1L]) else best_k
+  opt_k_mrg <- if ("optimal_K_merged" %in% names(bic_tb) && any(is.finite(suppressWarnings(as.numeric(bic_tb$optimal_K_merged))))) as.integer(stats::na.omit(suppressWarnings(as.numeric(bic_tb$optimal_K_merged)))[1L]) else best_k
   ev_txt <- if ("Evidence" %in% names(bic_tb)) paste(as.character(bic_tb$Evidence), collapse = " ") else ""
   mn_txt <- if (!is.null(gmm_res) && !is.null(gmm_res$model_name)) as.character(gmm_res$model_name[1L]) else ""
   collapse_txt <- paste(ev_txt, mn_txt)
-  is_merged_k1 <- (best_k == 1L) && (any(bic_tb$y_val[bic_tb$K_num >= 2] >= 10, na.rm = TRUE) || grepl("Merged|Step|ICLBoot|SeqBoot", collapse_txt, ignore.case = TRUE))
+  is_merged_k1 <- (best_k == 1L) && (opt_k_raw > 1L || any(bic_tb$y_val[bic_tb$K_num >= 2] >= 10, na.rm = TRUE) || grepl("Merged|Step|ICLBoot|SeqBoot", collapse_txt, ignore.case = TRUE))
+  is_stepped_down <- is.finite(opt_k_raw) && is.finite(opt_k_mrg) && (opt_k_raw > opt_k_mrg)
   idx_k2 <- which(is.finite(bic_tb$K_num) & bic_tb$K_num == 2)[1L]
   dicl_k2 <- if (!is.na(idx_k2) && "Delta_ICL_vs_Null" %in% names(bic_tb)) suppressWarnings(as.numeric(bic_tb$Delta_ICL_vs_Null[idx_k2])) else NA_real_
   boot_p2 <- if (!is.na(idx_k2) && "Boot_LRT_P_K1_vs_K2" %in% names(bic_tb)) suppressWarnings(as.numeric(bic_tb$Boot_LRT_P_K1_vs_K2[idx_k2])) else NA_real_
-  icl_bits <- c(if (is.finite(dicl_k2)) sprintf("dICL(K=2) = %.1f", dicl_k2) else NULL, if (is.finite(boot_p2)) sprintf("Boot p = %.3f", boot_p2) else NULL)
+  seq_step_lbl <- ""
+  if (is_stepped_down && "Boot_LRT_P_prev" %in% names(bic_tb)) {
+    sr <- bic_tb[is.finite(bic_tb$K_num) & bic_tb$K_num >= max(2L, opt_k_mrg + 1L) & bic_tb$K_num <= opt_k_raw & is.finite(suppressWarnings(as.numeric(bic_tb$Boot_LRT_P_prev))), , drop = FALSE]
+    if (nrow(sr) > 0L) seq_step_lbl <- paste(sprintf("K=%d->%d p=%.3f", as.integer(sr$K_num) - 1L, as.integer(sr$K_num), suppressWarnings(as.numeric(sr$Boot_LRT_P_prev))), collapse = "; ")
+  }
+  icl_bits <- c(if (is_stepped_down) sprintf("K_raw=%d -> K*=%d", opt_k_raw, opt_k_mrg) else NULL,
+                if (is.finite(dicl_k2)) sprintf("dICL(K=2) = %.1f", dicl_k2) else NULL,
+                if (is.finite(boot_p2)) sprintf("Boot p = %.3f", boot_p2) else NULL)
   bic_sub <- if (length(icl_bits) > 0L) sprintf("Kass & Raftery 2*Delta*BIC (>= 6 strong, >= 10 decisive) | %s", paste(icl_bits, collapse = ", ")) else "Deviance-scale Kass & Raftery threshold (stepwise 2*Delta*BIC >= 6 strong, >= 10 decisive)"
 
   p_bic <- ggplot2::ggplot(bic_tb, ggplot2::aes(x = .data$K_num, y = .data$y_val)) +
@@ -118,30 +139,48 @@ render_step04_gmm_cda_png <- function(audit_df, cda_res = NULL, gmm_res = NULL,
     ggplot2::geom_point(shape = 1, size = 2.6, stroke = 0.95, color = "#0072B2") +
     ggplot2::scale_x_continuous(breaks = unique(as.integer(bic_tb$K_num))) +
     theme_packera_pub() +
-    ggplot2::labs(title = sprintf("A. Unsupervised GMM Selection (Selected K* = %d)", best_k), subtitle = bic_sub, x = "Number of Mixture Components (K)", y = "Stepwise 2 * Delta BIC (vs. K - 1)")
-  if (is_merged_k1) {
-    k1_lbl <- if (grepl("ICLBoot|SeqBoot", collapse_txt, ignore.case = TRUE) && !grepl("Merged", collapse_txt, ignore.case = TRUE)) "ICL / Bootstrap LRT gate\ncollapsed -> K* = 1 retained" else "Hennig (2010) unimodal ridgeline\nmerging -> K* = 1 retained"
-    p_bic <- p_bic + ggplot2::annotate("label", x = mean(range(bic_tb$K_num, na.rm = TRUE)), y = 0.55 * max(bic_tb$y_val, 12.0, na.rm = TRUE), label = k1_lbl, size = 2.75, color = "#0072B2", fill = grDevices::adjustcolor("white", alpha.f = 0.92))
+    ggplot2::labs(title = if (is_stepped_down) sprintf("A. Unsupervised GMM Selection (K_raw = %d -> K* = %d)", opt_k_raw, best_k) else sprintf("A. Unsupervised GMM Selection (Selected K* = %d)", best_k),
+                  subtitle = bic_sub, x = "Number of Mixture Components (K)", y = "Stepwise 2 * Delta BIC (vs. K - 1)")
+  if (is_merged_k1 || (is_stepped_down && opt_k_raw >= 3L)) {
+    k_lbl <- if (is_stepped_down && nzchar(seq_step_lbl)) {
+      sprintf("K_raw = %d -> K* = %d\nSeq Boot LRT: %s", opt_k_raw, opt_k_mrg, seq_step_lbl)
+    } else if (is_merged_k1) {
+      if (grepl("ICLBoot|SeqBoot", collapse_txt, ignore.case = TRUE) && !grepl("Merged", collapse_txt, ignore.case = TRUE)) sprintf("ICL / Bootstrap LRT gate\nK_raw = %d -> K* = 1 retained", max(opt_k_raw, 2L)) else sprintf("Hennig (2010) unimodal ridgeline\nK_raw = %d -> K* = 1 retained", max(opt_k_raw, 2L))
+    } else sprintf("Sequential step-down\nK_raw = %d -> K* = %d", opt_k_raw, opt_k_mrg)
+    p_bic <- p_bic + ggplot2::annotate("label", x = mean(range(bic_tb$K_num, na.rm = TRUE)), y = 0.55 * max(bic_tb$y_val, 12.0, na.rm = TRUE), label = k_lbl, size = 2.65, color = "#0072B2", fill = grDevices::adjustcolor("white", alpha.f = 0.92))
   }
 
-  # Panel B: Shrinkage CDA Ordination (2D Can1 vs Can2 when G >= 3; 1D Can1 density + hollow raincloud when G == 2)
-  c1 <- if ("can1" %in% names(df)) suppressWarnings(as.numeric(df$can1)) else if ("PC1" %in% names(df)) suppressWarnings(as.numeric(df$PC1)) else rep(NA_real_, nrow(df))
-  c2 <- if ("can2" %in% names(df)) suppressWarnings(as.numeric(df$can2)) else rep(NA_real_, nrow(df))
+  # Panel B: Shrinkage CDA Ordination (with ECT_PC1/ECT_PC2 fallback for multi-island or all-ECT cohorts)
+  has_can1 <- "can1" %in% names(df) && sum(is.finite(suppressWarnings(as.numeric(df$can1)))) >= 3L
+  has_can2 <- "can2" %in% names(df) && sum(is.finite(suppressWarnings(as.numeric(df$can2)))) >= 3L
+  has_pc1 <- "PC1" %in% names(df) && sum(is.finite(suppressWarnings(as.numeric(df$PC1)))) >= 3L
+  has_pc2 <- "PC2" %in% names(df) && sum(is.finite(suppressWarnings(as.numeric(df$PC2)))) >= 3L
+  has_ect1 <- "ECT_PC1" %in% names(df) && sum(is.finite(suppressWarnings(as.numeric(df$ECT_PC1)))) >= 3L
+  has_ect2 <- "ECT_PC2" %in% names(df) && sum(is.finite(suppressWarnings(as.numeric(df$ECT_PC2)))) >= 3L
+  c1 <- if (has_can1) suppressWarnings(as.numeric(df$can1)) else if (has_pc1) suppressWarnings(as.numeric(df$PC1)) else if (has_ect1) suppressWarnings(as.numeric(df$ECT_PC1)) else rep(NA_real_, nrow(df))
+  c2 <- if (has_can2) suppressWarnings(as.numeric(df$can2)) else if (has_pc2) suppressWarnings(as.numeric(df$PC2)) else if (has_ect2) suppressWarnings(as.numeric(df$ECT_PC2)) else rep(NA_real_, nrow(df))
+  x_lbl_b <- if (has_can1) "Canonical Variate 1 (Can1)" else if (has_pc1) "Morphometric PC1" else if (has_ect1) "Topological ECT_PC1" else "Ordination Axis 1"
+  y_lbl_b <- if (has_can2) "Canonical Variate 2 (Can2)" else if (has_pc2) "Morphometric PC2" else if (has_ect2) "Topological ECT_PC2" else "Ordination Axis 2"
   has_2d_can <- sum(is.finite(c1) & is.finite(c2)) >= 3L && isTRUE(stats::sd(c2, na.rm = TRUE) > 1e-6) && length(active_groups) >= 3L
-  if (!has_2d_can && length(active_groups) != 2L && "PC2" %in% names(df)) {
-    c2_fb <- suppressWarnings(as.numeric(df$PC2))
-    if (sum(is.finite(c1) & is.finite(c2_fb)) >= 3L) { c2 <- c2_fb; has_2d_can <- TRUE }
+  if (!has_2d_can && length(active_groups) != 2L) {
+    if (has_pc2 && sum(is.finite(c1) & is.finite(suppressWarnings(as.numeric(df$PC2)))) >= 3L) {
+      c2 <- suppressWarnings(as.numeric(df$PC2)); y_lbl_b <- "Morphometric PC2"; has_2d_can <- TRUE
+    } else if (has_ect2 && sum(is.finite(c1) & is.finite(suppressWarnings(as.numeric(df$ECT_PC2)))) >= 3L) {
+      c2 <- suppressWarnings(as.numeric(df$ECT_PC2)); y_lbl_b <- "Topological ECT_PC2"; has_2d_can <- TRUE
+    }
   }
   df$ord1 <- c1; df$ord2 <- c2
+  n_unproj_ect <- if (has_can1 && has_ect1) sum(!is.finite(df$ord1) & is.finite(suppressWarnings(as.numeric(df$ECT_PC1)))) else 0L
 
   loocv_val <- if (!is.null(cda_res) && "loocv_accuracy" %in% names(cda_res)) suppressWarnings(as.numeric(cda_res$loocv_accuracy[1L])) else if ("loocv_accuracy" %in% names(df) && any(is.finite(suppressWarnings(as.numeric(df$loocv_accuracy))))) stats::median(suppressWarnings(as.numeric(df$loocv_accuracy)), na.rm = TRUE) else NA_real_
   loocv_tag_s04 <- if (is.finite(loocv_val)) sprintf("Deme-blocked CV accuracy = %.1f%%", 100.0 * loocv_val) else "Descriptive Post-GMM Ordination"
-  cda_sub_raw <- paste(c(loocv_tag_s04, if (nzchar(manova_sub)) manova_sub else NULL), collapse = " | ")
+  ect_note_b <- if (n_unproj_ect > 0L) sprintf("%d multi-island ECT sheets outside EFA Can1/2", n_unproj_ect) else if (!has_can1 && !has_pc1 && has_ect1) "Topological ECT_PC1/ECT_PC2 ordination" else ""
+  cda_sub_raw <- paste(c(loocv_tag_s04, if (nzchar(manova_sub)) manova_sub else NULL, if (nzchar(ect_note_b)) ect_note_b else NULL), collapse = " | ")
   cda_sub_line <- if (nzchar(cda_sub_raw)) paste(strwrap(cda_sub_raw, width = 72L), collapse = "\n") else ""
-  is_type_mask <- function(d) if ("is_type_specimen" %in% names(d)) !is.na(d$is_type_specimen) & (suppressWarnings(as.logical(d$is_type_specimen)) %in% TRUE | tolower(trimws(as.character(d$is_type_specimen))) %in% c("1", "true")) else rep(FALSE, nrow(d))
 
   p_cda <- if (length(active_groups) == 2L && sum(is.finite(df$ord1)) >= 3L && !has_2d_can) {
     sub_1d <- df[is.finite(df$ord1), , drop = FALSE]
+    sub_1d$.type_y <- -0.04
     p_1d <- ggplot2::ggplot(sub_1d, ggplot2::aes(x = .data$ord1, color = .data$plot_group)) +
       ggplot2::geom_density(linewidth = 0.9, fill = NA) +
       ggplot2::geom_jitter(ggplot2::aes(y = -0.04, shape = .data$plot_group), height = 0.025, width = 0, size = 2.3, stroke = 0.85, alpha = 0.82) +
@@ -151,15 +190,9 @@ render_step04_gmm_cda_png <- function(audit_df, cda_res = NULL, gmm_res = NULL,
       theme_packera_pub() +
       ggplot2::labs(title = "B. Shrinkage Canonical Discriminant Distribution (G = 2 Taxa)",
                     subtitle = if (nzchar(cda_sub_line)) cda_sub_line else "Single canonical discriminant axis (Can1) density & hollow specimen scores",
-                    x = "Canonical Variate 1 (Can1)", y = "Kernel Density")
-    is_t1 <- is_type_mask(sub_1d)
-    if (any(is_t1)) {
-      t1_df <- sub_1d[is_t1, , drop = FALSE]
-      p_1d <- p_1d +
-        ggplot2::geom_point(data = t1_df, ggplot2::aes(x = .data$ord1, y = -0.04, color = .data$plot_group), shape = 23, fill = NA, size = 4.2, stroke = 1.05, show.legend = FALSE, inherit.aes = FALSE) +
-        ggplot2::geom_point(data = t1_df, ggplot2::aes(x = .data$ord1, y = -0.04, color = .data$plot_group), shape = 5, size = 2.1, stroke = 0.85, show.legend = FALSE, inherit.aes = FALSE)
-    }
-    p_1d
+                    x = x_lbl_b, y = "Kernel Density")
+    p_1d <- add_nomenclatural_type_layer_gg(p_1d, sub_1d, "ord1", ".type_y")
+    apply_high_richness_legend_gg(p_1d, length(active_groups))
   } else {
     sub_2d <- df[is.finite(df$ord1) & is.finite(df$ord2), , drop = FALSE]
     el_g <- names(which(table(sub_2d$plot_group) >= 4L))
@@ -175,8 +208,7 @@ render_step04_gmm_cda_png <- function(audit_df, cda_res = NULL, gmm_res = NULL,
       theme_packera_pub() +
       ggplot2::labs(title = "B. Shrinkage Canonical Discriminant Biplot (Active + Passive Projection)",
                     subtitle = if (nzchar(cda_sub_line)) cda_sub_line else "Kish-N_eff Ledoit-Wolf shrinkage CDA (hollow markers; double diamond = Nomenclatural Type)",
-                    x = if ("can1" %in% names(df) && any(is.finite(suppressWarnings(as.numeric(df$can1))))) "Canonical Variate 1 (Can1)" else "Morphometric PC1",
-                    y = if ("can2" %in% names(df) && any(is.finite(suppressWarnings(as.numeric(df$can2))))) "Canonical Variate 2 (Can2)" else "Morphometric PC2")
+                    x = x_lbl_b, y = y_lbl_b)
 
     vec_rep <- NULL
     cand_f <- unique(c(feature_cols, if ("selected_morph_features" %in% names(df)) unlist(strsplit(as.character(stats::na.omit(df$selected_morph_features)), ";")) else character(0)))
@@ -200,18 +232,11 @@ render_step04_gmm_cda_png <- function(audit_df, cda_res = NULL, gmm_res = NULL,
         }
       }
     }
-    is_t <- is_type_mask(sub_2d)
-    if (any(is_t)) {
-      t2_df <- sub_2d[is_t, , drop = FALSE]
-      p_tmp <- p_tmp +
-        ggplot2::geom_point(data = t2_df, ggplot2::aes(x = .data$ord1, y = .data$ord2, color = .data$plot_group), shape = 23, fill = NA, size = 4.2, stroke = 1.05, show.legend = FALSE) +
-        ggplot2::geom_point(data = t2_df, ggplot2::aes(x = .data$ord1, y = .data$ord2, color = .data$plot_group), shape = 5, size = 2.1, stroke = 0.85, show.legend = FALSE)
-    }
+    p_tmp <- add_nomenclatural_type_layer_gg(p_tmp, sub_2d, "ord1", "ord2")
     cent_rep <- NULL
     if (length(active_groups) > 10L && nrow(sub_2d) > 0L) {
       cent_c <- stats::aggregate(cbind(ord1, ord2) ~ plot_group, data = sub_2d, FUN = stats::median)
       cent_rep <- data.frame(rx = cent_c$ord1, ry = cent_c$ord2, rlbl = abbreviate_icn_taxon(cent_c$plot_group, abbreviate_genus = TRUE), rcol = cent_c$plot_group, rface = "italic", stringsAsFactors = FALSE)
-      p_tmp <- p_tmp + ggplot2::theme(legend.position = "none")
     }
     all_rep <- rbind(vec_rep, cent_rep)
     if (!is.null(all_rep) && nrow(all_rep) > 0L) {
@@ -225,11 +250,12 @@ render_step04_gmm_cda_png <- function(audit_df, cda_res = NULL, gmm_res = NULL,
         p_tmp <- p_tmp + ggplot2::geom_label(data = all_rep, mapping = ggplot2::aes(x = .data$rx, y = .data$ry, label = .data$rlbl, color = .data$rcol, fontface = .data$rface), fill = grDevices::adjustcolor("white", alpha.f = 0.88), size = 2.55, show.legend = FALSE, inherit.aes = FALSE)
       }
     }
-    p_tmp
+    apply_high_richness_legend_gg(p_tmp, length(active_groups))
   }
 
   # Panel C: Dynamic Diagnostic Scale-Invariant Trait Boxplots (Top 4 by ANOVA F or Normalized IQR)
   cand_traits <- c("basal_cordate_index", "AR_inv", "radiate_head_fraction", "blade_cie_l_q85_sheet_delta", "basal_zone_cie_l_delta",
+                   "abaxial_cie_l_sheet_delta", "blade_cie_l_sheet_delta", "log1p_capitulum_count",
                    "petiole_to_blade_ratio", "terminal_lobe_area_frac", "margin_serration_index", "q25_solidity", "dissection_index",
                    "ECT_PC1", "scape_to_basal_leaf_ratio")
   has_trait_data <- function(tc) tc %in% names(df) && sum(is.finite(suppressWarnings(as.numeric(df[[tc]])))) >= 3L
@@ -313,7 +339,7 @@ render_step04_gmm_cda_png <- function(audit_df, cda_res = NULL, gmm_res = NULL,
 }
 
 render_step04_ecoregion_batch_png <- function(audit_df, eco_cda_res = NULL, gmm_res = NULL, figures_dir = "outputs/figures",
-                                              manova_res = NULL, batch_csv = NULL) {
+                                              manova_res = NULL, batch_csv = NULL, output_path = NULL) {
   if (!requireNamespace("ggplot2", quietly = TRUE) || !requireNamespace("patchwork", quietly = TRUE)) return(invisible(""))
   fdir <- as.character(figures_dir); dir.create(fdir, recursive = TRUE, showWarnings = FALSE)
 
@@ -341,18 +367,23 @@ render_step04_ecoregion_batch_png <- function(audit_df, eco_cda_res = NULL, gmm_
 
   has_ec1 <- "ecoregion_can1" %in% names(eco_sub) && any(is.finite(suppressWarnings(as.numeric(eco_sub$ecoregion_can1))))
   has_ec2 <- "ecoregion_can2" %in% names(eco_sub) && any(is.finite(suppressWarnings(as.numeric(eco_sub$ecoregion_can2))))
-  eco_sub$ec1 <- if (has_ec1) suppressWarnings(as.numeric(eco_sub$ecoregion_can1)) else if ("PC1" %in% names(eco_sub)) suppressWarnings(as.numeric(eco_sub$PC1)) else rep(NA_real_, nrow(eco_sub))
-  eco_sub$ec2 <- if (has_ec2) suppressWarnings(as.numeric(eco_sub$ecoregion_can2)) else if ("PC2" %in% names(eco_sub)) suppressWarnings(as.numeric(eco_sub$PC2)) else rep(NA_real_, nrow(eco_sub))
+  has_epc1 <- "PC1" %in% names(eco_sub) && any(is.finite(suppressWarnings(as.numeric(eco_sub$PC1))))
+  has_epc2 <- "PC2" %in% names(eco_sub) && any(is.finite(suppressWarnings(as.numeric(eco_sub$PC2))))
+  has_eect1 <- "ECT_PC1" %in% names(eco_sub) && any(is.finite(suppressWarnings(as.numeric(eco_sub$ECT_PC1))))
+  has_eect2 <- "ECT_PC2" %in% names(eco_sub) && any(is.finite(suppressWarnings(as.numeric(eco_sub$ECT_PC2))))
+  eco_sub$ec1 <- if (has_ec1) suppressWarnings(as.numeric(eco_sub$ecoregion_can1)) else if (has_epc1) suppressWarnings(as.numeric(eco_sub$PC1)) else if (has_eect1) suppressWarnings(as.numeric(eco_sub$ECT_PC1)) else rep(NA_real_, nrow(eco_sub))
+  eco_sub$ec2 <- if (has_ec2) suppressWarnings(as.numeric(eco_sub$ecoregion_can2)) else if (has_epc2) suppressWarnings(as.numeric(eco_sub$PC2)) else if (has_eect2) suppressWarnings(as.numeric(eco_sub$ECT_PC2)) else rep(NA_real_, nrow(eco_sub))
 
   p_eco <- if (length(eco_lvls) == 2L && sum(is.finite(eco_sub$ec1)) >= 3L && (!any(is.finite(eco_sub$ec2)) || isTRUE(stats::sd(eco_sub$ec2, na.rm = TRUE) < 1e-6))) {
     s1 <- eco_sub[is.finite(eco_sub$ec1), , drop = FALSE]
-    ggplot2::ggplot(s1, ggplot2::aes(x = .data$ec1, color = .data$eco_group)) +
+    p_e1 <- ggplot2::ggplot(s1, ggplot2::aes(x = .data$ec1, color = .data$eco_group)) +
       ggplot2::geom_density(linewidth = 0.9, fill = NA) +
       ggplot2::geom_jitter(ggplot2::aes(y = -0.03, shape = .data$eco_group), height = 0.02, width = 0, size = 2.2, stroke = 0.85) +
       ggplot2::scale_color_manual(values = pal_eco, name = "EPA Level III Ecoregion") +
       ggplot2::scale_shape_manual(values = shp_eco, name = "EPA Level III Ecoregion") +
       theme_packera_pub() +
       ggplot2::labs(title = "A. Supervised EPA Level III Ecoregion CDA (1D)", subtitle = if (nzchar(eco_sub_1d)) eco_sub_1d else NULL, x = "Ecoregion Can1", y = "Density")
+    apply_high_richness_legend_gg(p_e1, length(eco_lvls))
   } else if (sum(is.finite(eco_sub$ec1) & is.finite(eco_sub$ec2)) >= 2L) {
     s2 <- eco_sub[is.finite(eco_sub$ec1) & is.finite(eco_sub$ec2), , drop = FALSE]
     p_t <- ggplot2::ggplot(s2, ggplot2::aes(x = .data$ec1, y = .data$ec2, color = .data$eco_group, shape = .data$eco_group)) +
@@ -363,19 +394,20 @@ render_step04_ecoregion_batch_png <- function(audit_df, eco_cda_res = NULL, gmm_
       ggplot2::scale_shape_manual(values = shp_eco, name = "EPA Level III Ecoregion") +
       theme_packera_pub() +
       ggplot2::labs(title = "A. Supervised EPA Level III Ecoregion Discriminant Space", subtitle = eco_sub_2d,
-                    x = if (has_ec1) "Ecoregion Canonical Variate 1" else "Morphometric PC1", y = if (has_ec2) "Ecoregion Canonical Variate 2" else "Morphometric PC2")
+                    x = if (has_ec1) "Ecoregion Canonical Variate 1" else if (has_epc1) "Morphometric PC1" else "Topological ECT_PC1",
+                    y = if (has_ec2) "Ecoregion Canonical Variate 2" else if (has_epc2) "Morphometric PC2" else "Topological ECT_PC2")
     if (length(eco_lvls) > 10L && nrow(s2) > 0L) {
       tab_er <- sort(table(s2$eco_group), decreasing = TRUE)
       top_er <- utils::head(if (any(tab_er >= 5L)) names(tab_er[tab_er >= 5L]) else names(tab_er), 10L)
       cent_er <- stats::aggregate(cbind(ec1, ec2) ~ eco_group, data = s2[s2$eco_group %in% top_er, , drop = FALSE], FUN = stats::median)
       if (requireNamespace("ggrepel", quietly = TRUE) && nrow(cent_er) > 0L) {
         p_t <- p_t + ggrepel::geom_label_repel(data = cent_er, ggplot2::aes(x = .data$ec1, y = .data$ec2, label = .data$eco_group, color = .data$eco_group),
-                                               fill = grDevices::adjustcolor("white", alpha.f = 0.88), size = 2.65, max.overlaps = 14L, box.padding = 0.45, force = 3.0, show.legend = FALSE, inherit.aes = FALSE) + ggplot2::theme(legend.position = "none")
+                                               fill = grDevices::adjustcolor("white", alpha.f = 0.88), size = 2.65, max.overlaps = 14L, box.padding = 0.45, force = 3.0, show.legend = FALSE, inherit.aes = FALSE)
       } else {
-        p_t <- add_centroid_repel_labels_gg(p_t, cent_er, "ec1", "ec2", "eco_group", color_col = "eco_group") + ggplot2::theme(legend.position = "none")
+        p_t <- add_centroid_repel_labels_gg(p_t, cent_er, "ec1", "ec2", "eco_group", color_col = "eco_group")
       }
     }
-    p_t
+    apply_high_richness_legend_gg(p_t, length(eco_lvls))
   } else {
     ggplot2::ggplot() +
       ggplot2::annotate("text", x = 0.5, y = 0.5, label = "Insufficient multi-ecoregion coordinates\nfor supervised ecoregion CDA", color = "#6B7280", size = 3.3) +
@@ -389,6 +421,7 @@ render_step04_ecoregion_batch_png <- function(audit_df, eco_cda_res = NULL, gmm_
                      "outputs/reports/institutional_batch_effect_audit.csv", "data/tables/batch_variance_audit.csv"))
   cand_b <- cand_b[!is.na(cand_b) & nzchar(cand_b) & file.exists(cand_b)]
   batch_df <- if (length(cand_b) > 0L) tryCatch(utils::read.csv(cand_b[1L], stringsAsFactors = FALSE), error = function(e) NULL) else NULL
+  bdf <- data.frame()
 
   p_batch <- if (!is.null(batch_df) && nrow(batch_df) > 0L) {
     if ("Term" %in% names(batch_df) && any(batch_df$Term == "institutionCode", na.rm = TRUE)) batch_df <- batch_df[!is.na(batch_df$Term) & batch_df$Term == "institutionCode", , drop = FALSE]
@@ -422,5 +455,5 @@ render_step04_ecoregion_batch_png <- function(audit_df, eco_cda_res = NULL, gmm_
   }
 
   plate_04c <- (p_eco | p_batch) + patchwork::plot_annotation(title = "Step 04: Ecoregional Morphometric Structuring & Herbarium Preservation Audit", theme = ggplot2::theme(plot.title = ggplot2::element_text(face = "bold", size = 12.2)))
-  save_packera_png_300(plate_04c, file.path(fdir, "fig04c_ecoregion_and_batch_audit.png"), width = 13.6, height = 6.4)
+  save_packera_png_300(plate_04c, file.path(fdir, "fig04c_ecoregion_and_batch_audit.png"), width = 13.6, height = max(6.4, 4.4 + 0.22 * max(length(eco_lvls), nrow(bdf))), also_copy_to = output_path)
 }

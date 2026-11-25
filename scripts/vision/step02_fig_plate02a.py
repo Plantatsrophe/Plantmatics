@@ -7,6 +7,7 @@ resolution, quantile exemplar selection, and Plate 02A (`fig02a_lm3_organ_and_ec
 from __future__ import annotations
 
 import logging
+import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
@@ -158,7 +159,7 @@ def prepare_step02_figure_context(
         if matched_vcats:
             df = df[df["cat_clean"].isin(matched_vcats)].copy()
             active_cats = matched_vcats
-        for v_col in ("species_standardized", "scientificName", "infraspecific_taxon", "determiner_tier", "is_type_specimen", "image_path"):
+        for v_col in ("species_standardized", "scientificName", "infraspecific_taxon", "determiner_tier", "is_type_specimen", "type_status", "image_path"):
             if v_col in v_sub.columns and v_col not in df.columns:
                 df[v_col] = df["cat_clean"].map(dict(zip(v_sub["cat_clean"], v_sub[v_col])))
 
@@ -357,7 +358,8 @@ def render_plate02a_and_ect_cache(
 
             if c_idx == 0:
                 wrapped_sp = format_icn_taxon_mathtext(sp_name, abbreviate_genus=True)
-                ax.set_ylabel(f"{wrapped_sp}\n(n = {len(sp_all)} leaves)", fontsize=8.4, color="#111827", rotation=0, ha="right", va="center", labelpad=12)
+                wrapped_sp = re.sub(r"\s+(subsp\.|var\.|f\.)\s+", r"\n\1 ", wrapped_sp)
+                ax.set_ylabel(f"{wrapped_sp}\n(n = {len(sp_all)} leaves)", fontsize=8.2, color="#111827", rotation=0, ha="right", va="center", labelpad=12)
 
             top_tag = col_headers[c_idx] if r_idx == 0 else sub_tag
             if row_sel is None:
@@ -383,11 +385,20 @@ def render_plate02a_and_ect_cache(
                     ax.text(0.5, 0.5, "ECT unavailable", ha="center", va="center", fontsize=7.5, transform=ax.transAxes)
             else:
                 px_mm = pd.to_numeric(row_sel.get("pixels_per_mm", np.nan), errors="coerce")
-                is_cal = _parse_bool_val(row_sel.get("is_calibrated_mm", False)) and str(row_sel.get("scale_source", "")).strip().lower() not in {"mp_estimated", "predicted_from_megapixels", "uncalibrated"}
-                leaf_card = render_sil_fn(
-                    mask_u8, rgb_patch, accent_hex=col_hex, pixels_per_mm=float(px_mm) if pd.notna(px_mm) else None,
-                    is_calibrated=is_cal, card_size=320, prefer_rgb=prefer_rgb,
+                is_cal = _parse_bool_val(row_sel.get("is_calibrated_mm", False)) and str(row_sel.get("scale_source", "")).strip().lower() not in {"mp_estimated", "predicted_from_megapixels", "uncalibrated", "tick_lattice_unboxed"}
+                is_type_row = _parse_bool_val(row_sel.get("is_type_specimen", False)) or (
+                    str(row_sel.get("type_status", "")).strip().lower() not in {"", "none", "nan", "na", "not a type"}
                 )
+                try:
+                    leaf_card = render_sil_fn(
+                        mask_u8, rgb_patch, accent_hex=col_hex, pixels_per_mm=float(px_mm) if pd.notna(px_mm) else None,
+                        is_calibrated=is_cal, card_size=320, prefer_rgb=prefer_rgb, is_type=is_type_row,
+                    )
+                except TypeError:
+                    leaf_card = render_sil_fn(
+                        mask_u8, rgb_patch, accent_hex=col_hex, pixels_per_mm=float(px_mm) if pd.notna(px_mm) else None,
+                        is_calibrated=is_cal, card_size=320, prefer_rgb=prefer_rgb,
+                    )
                 ax.imshow(leaf_card)
 
             ar_v = pd.to_numeric(row_sel.get("ar_clean", np.nan), errors="coerce")

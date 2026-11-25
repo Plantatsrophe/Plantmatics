@@ -1,11 +1,10 @@
+if (grDevices::dev.cur() == 1L) grDevices::pdf(NULL)
 # ==============================================================================
 # Module: scripts/figures/step03_figures.R
 # Step 03 Canonical 300-DPI PNG Figures (Momocs EFA + LeafMachine3 Radial ECT):
 #   1. fig03a_efa_morphospace_and_harmonics.png
 #   2. fig03b_topological_ect_and_heteroblasty.png
 # ==============================================================================
-
-if (grDevices::dev.cur() == 1L) grDevices::pdf(NULL)
 
 render_step03_figures_suite <- function(
   efa_df,
@@ -110,6 +109,9 @@ render_step03_figures_suite <- function(
 
   spec_df$pc1_num <- if ("PC1" %in% names(spec_df)) suppressWarnings(as.numeric(spec_df$PC1)) else rep(0.0, nrow(spec_df))
   spec_df$pc2_num <- if ("PC2" %in% names(spec_df)) suppressWarnings(as.numeric(spec_df$PC2)) else rep(0.0, nrow(spec_df))
+  n_multi_island <- if ("ECT_PC1" %in% names(spec_df)) {
+    sum(!is.finite(spec_df$pc1_num) & is.finite(suppressWarnings(as.numeric(spec_df$ECT_PC1))))
+  } else 0L
   ok_pc <- is.finite(spec_df$pc1_num) & is.finite(spec_df$pc2_num)
   pc_sub <- spec_df[ok_pc, , drop = FALSE]
 
@@ -163,6 +165,10 @@ render_step03_figures_suite <- function(
       level = 0.95, linewidth = 0.55, linetype = "dashed", show.legend = FALSE
     )
   }
+  sub_03a_b <- "Authority-anchored PCA (hollow markers; passive Bronze weight = 0.0; 95% confidence ellipses)"
+  if (n_multi_island > 0L) {
+    sub_03a_b <- paste0(sub_03a_b, sprintf(" + %d dissected multi-island OTUs routed to fig03b", n_multi_island))
+  }
   p03a_pca <- p03a_pca +
     ggplot2::geom_point(
       ggplot2::aes(color = .data$plot_group, shape = .data$plot_group),
@@ -173,26 +179,18 @@ render_step03_figures_suite <- function(
     theme_packera_pub() +
     ggplot2::labs(
       title = "B. Symmetric Elliptic Fourier Morphospace (Inverse-Fourier Deformation Grid)",
-      subtitle = "Authority-anchored PCA (hollow markers; passive Bronze weight = 0.0; 95% confidence ellipses)",
+      subtitle = sub_03a_b,
       x = sprintf("Symmetric EFA PC1 (%.1f%%)", ifelse(length(var_pcts) >= 1L, var_pcts[1L], 0.0)),
       y = sprintf("Symmetric EFA PC2 (%.1f%%)", ifelse(length(var_pcts) >= 2L, var_pcts[2L], 0.0))
     )
 
-  if ("is_type_specimen" %in% names(pc_sub)) {
-    is_t <- !is.na(pc_sub$is_type_specimen) & as.logical(pc_sub$is_type_specimen)
-    if (any(is_t)) {
-      pc_t <- pc_sub[is_t, , drop = FALSE]
-      p03a_pca <- p03a_pca +
-        ggplot2::geom_point(data = pc_t, ggplot2::aes(x = .data$pc1_num, y = .data$pc2_num), inherit.aes = FALSE, shape = 5, size = 4.6, stroke = 1.0, color = "#111827", show.legend = FALSE) +
-        ggplot2::geom_point(data = pc_t, ggplot2::aes(x = .data$pc1_num, y = .data$pc2_num, color = .data$plot_group), inherit.aes = FALSE, shape = 5, size = 3.2, stroke = 0.95, show.legend = FALSE)
-    }
-  }
+  p03a_pca <- add_nomenclatural_type_layer_gg(p03a_pca, pc_sub, "pc1_num", "pc2_num")
   if (length(active_groups) > 10L && nrow(pc_sub) > 0L) {
     cent_pc <- stats::aggregate(cbind(pc1_num, pc2_num) ~ plot_group, data = pc_sub, FUN = stats::median)
     cent_pc$lbl <- abbreviate_icn_taxon(cent_pc$plot_group, abbreviate_genus = TRUE)
-    p03a_pca <- add_centroid_repel_labels_gg(p03a_pca, cent_pc, "pc1_num", "pc2_num", "lbl", color_col = "plot_group") +
-      ggplot2::theme(legend.position = "none")
+    p03a_pca <- add_centroid_repel_labels_gg(p03a_pca, cent_pc, "pc1_num", "pc2_num", "lbl", color_col = "plot_group")
   }
+  p03a_pca <- apply_high_richness_legend_gg(p03a_pca, length(active_groups))
 
   # Panel C: Dynamic Retained PCs Scree (PC1..PC{k_export})
   k_show <- min(length(var_pcts), max(5L, if ("efd_k95_pcs" %in% names(spec_df) && any(is.finite(suppressWarnings(as.numeric(spec_df$efd_k95_pcs))))) as.integer(max(suppressWarnings(as.numeric(spec_df$efd_k95_pcs)), na.rm = TRUE)) else length(pc_cols)))
@@ -238,10 +236,24 @@ render_step03_figures_suite <- function(
   spec_df$ect2 <- if ("ECT_PC2" %in% names(spec_df)) suppressWarnings(as.numeric(spec_df$ECT_PC2)) else spec_df$pc2_num
   ok_ect <- is.finite(spec_df$ect1) & is.finite(spec_df$ect2)
   ect_sub <- spec_df[ok_ect, , drop = FALSE]
+  ect_vexp <- attr(specimen_df, "ect_basal_var_exp")
+  if (is.null(ect_vexp)) ect_vexp <- attr(efa_df, "ect_basal_var_exp")
+  ect_vexp <- suppressWarnings(as.numeric(ect_vexp))
+  x_ect_lbl <- if (length(ect_vexp) >= 1L && is.finite(ect_vexp[1L])) sprintf("Basal Topological ECT_PC1 (%.1f%%)", ect_vexp[1L]) else "Basal Topological ECT_PC1"
+  y_ect_lbl <- if (length(ect_vexp) >= 2L && is.finite(ect_vexp[2L])) sprintf("Basal Topological ECT_PC2 (%.1f%%)", ect_vexp[2L]) else "Basal Topological ECT_PC2"
 
   p03b_ord <- ggplot2::ggplot(ect_sub, ggplot2::aes(x = .data$ect1, y = .data$ect2)) +
     ggplot2::geom_hline(yintercept = 0, linetype = "dotted", color = "#9CA3AF", linewidth = 0.4) +
-    ggplot2::geom_vline(xintercept = 0, linetype = "dotted", color = "#9CA3AF", linewidth = 0.4) +
+    ggplot2::geom_vline(xintercept = 0, linetype = "dotted", color = "#9CA3AF", linewidth = 0.4)
+  el_ect <- names(which(table(ect_sub$plot_group) >= 4L))
+  if (length(el_ect) > 0L) {
+    p03b_ord <- p03b_ord + ggplot2::stat_ellipse(
+      data = ect_sub[ect_sub$plot_group %in% el_ect, , drop = FALSE],
+      ggplot2::aes(color = .data$plot_group),
+      level = 0.95, linewidth = 0.45, alpha = 0.65, show.legend = FALSE
+    )
+  }
+  p03b_ord <- p03b_ord +
     ggplot2::geom_point(ggplot2::aes(color = .data$plot_group, shape = .data$plot_group), size = 2.4, stroke = 0.85, alpha = 0.82) +
     ggplot2::scale_color_manual(values = pal_map, labels = lbl_exprs, name = "Taxon / Group") +
     ggplot2::scale_shape_manual(values = shp_map, labels = lbl_exprs, name = "Taxon / Group") +
@@ -249,32 +261,24 @@ render_step03_figures_suite <- function(
     ggplot2::labs(
       title = "A. Topological Euler Characteristic Transform (ECT) Space",
       subtitle = "32 x 360 polar directional thresholds capturing deep pinnatifid lobing & sinuses",
-      x = "Basal Topological ECT_PC1",
-      y = "Basal Topological ECT_PC2"
+      x = x_ect_lbl,
+      y = y_ect_lbl
     )
-  if ("is_type_specimen" %in% names(ect_sub)) {
-    is_te <- !is.na(ect_sub$is_type_specimen) & as.logical(ect_sub$is_type_specimen)
-    if (any(is_te)) {
-      ect_t <- ect_sub[is_te, , drop = FALSE]
-      p03b_ord <- p03b_ord +
-        ggplot2::geom_point(data = ect_t, ggplot2::aes(x = .data$ect1, y = .data$ect2), inherit.aes = FALSE, shape = 5, size = 4.6, stroke = 1.0, color = "#111827", show.legend = FALSE) +
-        ggplot2::geom_point(data = ect_t, ggplot2::aes(x = .data$ect1, y = .data$ect2, color = .data$plot_group), inherit.aes = FALSE, shape = 5, size = 3.2, stroke = 0.95, show.legend = FALSE)
-    }
-  }
+  p03b_ord <- add_nomenclatural_type_layer_gg(p03b_ord, ect_sub, "ect1", "ect2")
   if (length(active_groups) > 10L && nrow(ect_sub) > 0L) {
     cent_e <- stats::aggregate(cbind(ect1, ect2) ~ plot_group, data = ect_sub, FUN = stats::median)
     cent_e$lbl <- abbreviate_icn_taxon(cent_e$plot_group, abbreviate_genus = TRUE)
-    p03b_ord <- add_centroid_repel_labels_gg(p03b_ord, cent_e, "ect1", "ect2", "lbl", color_col = "plot_group") +
-      ggplot2::theme(legend.position = "none")
+    p03b_ord <- add_centroid_repel_labels_gg(p03b_ord, cent_e, "ect1", "ect2", "lbl", color_col = "plot_group")
   }
+  p03b_ord <- apply_high_richness_legend_gg(p03b_ord, length(active_groups))
 
   # Panel B: Native LeafMachine3 Radial ECT Gallery (embedded PNG grobs ordered by ECT_PC1 / lobing)
   lm3_man <- resolve_lm3_exemplar_manifest_r(fdir, zone = "basal")
   gallery_plots <- list()
+  man_names <- character(0)
   if (length(lm3_man) > 0L) {
     man_names <- intersect(names(lm3_man), active_groups)
     if (length(man_names) == 0L) man_names <- names(lm3_man)
-    man_names <- utils::head(man_names, 12L)
     for (m_tx in man_names) {
       entry <- lm3_man[[m_tx]]
       grob_e <- read_png_raster_grob_safe(entry$image_path)
@@ -289,7 +293,7 @@ render_step03_figures_suite <- function(
     }
   }
   p03b_gal <- if (length(gallery_plots) > 0L) {
-    patchwork::wrap_plots(gallery_plots, ncol = min(4L, max(2L, ceiling(sqrt(length(gallery_plots)))))) +
+    patchwork::wrap_plots(gallery_plots, ncol = min(6L, max(2L, ceiling(sqrt(length(man_names)))))) +
       patchwork::plot_annotation(title = "B. Native LeafMachine3 Radial ECT Medoids")
   } else {
     # Clean fallback: ECT_PC1 vs Dissection Index hollow scatter

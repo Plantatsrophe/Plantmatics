@@ -52,6 +52,13 @@ def run_harvest(args: argparse.Namespace, cfg: PipelineConfig) -> None:
         else cfg.get("paths", {}).get("curated_vouchers_csv", "data/tables/curated_vouchers.csv")
     )
     output_csv = Path(args.output_csv or default_csv)
+    default_plot = (
+        run_dir / "outputs" / "figures" / "fig01_cohort_biogeography_and_authority.png"
+        if run_dir is not None
+        else Path(cfg.get("paths", {}).get("figures_dir", "outputs/figures"))
+        / "fig01_cohort_biogeography_and_authority.png"
+    )
+    output_plot = Path(getattr(args, "output_plot", None) or default_plot)
     out_dir.mkdir(parents=True, exist_ok=True)
     output_csv.parent.mkdir(parents=True, exist_ok=True)
 
@@ -66,6 +73,7 @@ def run_harvest(args: argparse.Namespace, cfg: PipelineConfig) -> None:
         sys.executable, str(script_path),
         "--out-dir", str(out_dir),
         "--output-csv", str(output_csv),
+        "--output-plot", str(output_plot),
         "--max-records", str(args.max_records or cfg["harvesting"]["max_records_per_taxon"]),
         "--max-uncertainty", str(args.max_uncertainty or cfg["harvesting"]["max_uncertainty_meters"]),
         "--min-megapixels", str(args.min_megapixels or cfg["harvesting"]["min_megapixels"]),
@@ -123,6 +131,13 @@ def run_harvest(args: argparse.Namespace, cfg: PipelineConfig) -> None:
     _verify_file_exists(output_csv, "harvested vouchers CSV output")
     if run_dir is not None:
         _sync_cohort(run_dir, args=args, cfg=cfg)
+        if output_csv.exists() and output_csv.stat().st_size > 0:
+            try:
+                from scripts.vision.step01_figures import generate_step01_cohort_audit_figure
+
+                generate_step01_cohort_audit_figure(output_csv, output_png=output_plot)
+            except Exception as exc_fig:
+                _logger.warning(f"Step 01 run-scoped cohort figure refresh note: {exc_fig}")
         write_run_metadata(run_dir, start_time=start_ts)
     _logger.info("Phase 1 completed successfully.")
 

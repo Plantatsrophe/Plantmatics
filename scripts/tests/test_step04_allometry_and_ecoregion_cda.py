@@ -129,6 +129,7 @@ class TestStep04AllometryAndEcoregionCDA(unittest.TestCase):
             allom_pdf = fig_dir / "fig04a_foliar_allometry_audit.png"
             eco_sum_csv = rep_dir / "ecoregion_supervised_cda_summary.csv"
             cda_pdf = fig_dir / "fig04b_gmm_cda_morphometrics.png"
+            eco_custom_png = tmp_p / "custom_fig04c_ecoregion.png"
 
             pd.DataFrame(rows).to_csv(harm_csv, index=False)
             pd.DataFrame(vouch_rows).to_csv(vouch_csv, index=False)
@@ -142,6 +143,7 @@ class TestStep04AllometryAndEcoregionCDA(unittest.TestCase):
                     "--output-flags", str(flags_csv),
                     "--output-report", str(bic_csv),
                     "--output-plot", str(cda_pdf),
+                    "--ecoregion-plot", str(eco_custom_png),
                     "--output-batch-audit", str(rep_dir / "batch_audit.csv"),
                     "--allometry-report", str(allom_csv),
                     "--allometry-pairwise", str(rep_dir / "pairwise.csv"),
@@ -218,6 +220,7 @@ class TestStep04AllometryAndEcoregionCDA(unittest.TestCase):
             ):
                 png_f = fig_dir / f"{stem}.png"
                 self.assertTrue(png_f.exists() and png_f.stat().st_size > 10000, f"Missing/empty {png_f}")
+            self.assertTrue(eco_custom_png.exists() and eco_custom_png.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n")
             self.assertEqual(list(fig_dir.glob("*.pdf")), [])
 
     def test_dynamic_non_default_taxa_cda_second_taxon_and_multi_plant_petioles(self):
@@ -386,6 +389,23 @@ class TestStep04AllometryAndEcoregionCDA(unittest.TestCase):
             self.assertAlmostEqual(float(multi_rows.iloc[1]["petiole_length_mm"]), 12.0, places=2)
             self.assertAlmostEqual(float(multi_rows.iloc[0]["petiole_to_blade_ratio"]), round(32.0 / 28.0, 4), places=3)
             self.assertAlmostEqual(float(multi_rows.iloc[1]["petiole_to_blade_ratio"]), round(12.0 / 30.0, 4), places=3)
+
+    def test_step04_ecoregion_plot_cli_and_allometry_forwarding(self) -> None:
+        """Verify --ecoregion-plot CLI option, ecoregion_plot_path forwarding, and within-taxon allometry metadata forwarding."""
+        s04_txt = self.r_script_path.read_text(encoding="utf-8")
+        pub_txt = (PROJECT_ROOT / "scripts" / "morphometrics" / "pub_figures_utils.R").read_text(encoding="utf-8")
+        eco_txt = (PROJECT_ROOT / "scripts" / "morphometrics" / "ecoregion_manova_plot.R").read_text(encoding="utf-8")
+        fig_txt = (PROJECT_ROOT / "scripts" / "figures" / "step04_figures.R").read_text(encoding="utf-8")
+        self.assertIn("--ecoregion-plot", s04_txt)
+        self.assertIn("ecoregion_plot_path = opts$ecoregion_plot", s04_txt)
+        for tok in ("r2_within = r2_within", "p_within = p_within", "scale_tier = scale_tier", "corrected = should_correct"):
+            self.assertIn(tok, s04_txt)
+        for tok in ("r2_within = r2_within", "p_within = p_within", "scale_tier = scale_tier", "corrected = corrected", "ecoregion_plot_path = ecoregion_plot_path"):
+            self.assertIn(tok, pub_txt)
+        self.assertIn("ecoregion_plot_path = NULL", eco_txt)
+        self.assertIn("output_path = ecoregion_plot_path", eco_txt)
+        for tok in ("r2_within = NA_real_", "p_within = NA_real_", "scale_tier = \"verified_ruler\"", "corrected = FALSE", "also_copy_to = output_path"):
+            self.assertIn(tok, fig_txt)
 
 
 if __name__ == "__main__":
