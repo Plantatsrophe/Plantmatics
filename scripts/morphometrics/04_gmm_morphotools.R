@@ -454,11 +454,11 @@ run_gmm_morphotools_pipeline <- function(opts) {
   if (!is.null(allom_res$df)) closed_df <- allom_res$df
   pc_cols <- discover_sorted_morph_cols(closed_df, "^PC[0-9]+$"); ect_pc_cols <- discover_sorted_morph_cols(closed_df, "^ECT_PC[0-9]+$"); pca_cols <- if (length(pc_cols) >= 2L) pc_cols else ect_pc_cols
   if (exists("assign_spatial_gathering_demes", mode = "function")) closed_df <- assign_spatial_gathering_demes(closed_df, deme_radius_km = 10.0)
-  feat_pools <- prepare_step04_standardized_features(closed_df, pca_cols, outline_only = isTRUE(opts$outline_only))
-  closed_df <- feat_pools$df; gmm_cols <- feat_pools$gmm_cols; cda_cols <- feat_pools$cda_cols
   cand_taxa <- sort(unique(closed_df$species_standardized[!is.na(closed_df$species_standardized) & grepl("^Packera[[:space:]]+", closed_df$species_standardized)]))
   tx_n <- table(factor(closed_df$species_standardized, levels = cand_taxa)); target_taxa <- if (sum(tx_n >= 2L) >= 2L) names(tx_n[tx_n >= 2L]) else if (length(cand_taxa) > 0L) cand_taxa else sort(unique(stats::na.omit(closed_df$species_standardized)))
   is_intra_mode <- isTRUE(opts$intraspecific_mode) || (length(target_taxa) < 2L)
+  feat_pools <- prepare_step04_standardized_features(closed_df, pca_cols, outline_only = isTRUE(opts$outline_only), intraspecific_mode = is_intra_mode)
+  closed_df <- feat_pools$df; gmm_cols <- feat_pools$gmm_cols; cda_cols <- feat_pools$cda_cols
   std_plast_cols <- setdiff(grep("_std$", names(closed_df), value = TRUE), c("log_centsize_std", "petiole_length_mm_std", "lamina_trace_length_mm_std", "plant_height_cm_std"))
   if (exists("residualize_ontogenetic_phenophase_plasticity", mode = "function")) closed_df <- residualize_ontogenetic_phenophase_plasticity(closed_df, target_cols = unique(c(if (is_intra_mode) pca_cols else character(0), std_plast_cols)), ref_mask = (closed_df$authority_weight > 0) & .basal_primary_mask(closed_df), intraspecific_mode = is_intra_mode)
   gmm_res <- run_gmm_cluster_analysis(closed_df, gmm_cols, max_k = opts$max_k, use_clustvarsel = isTRUE(opts$use_clustvarsel), intraspecific_mode = is_intra_mode, seed = opts$seed)

@@ -229,11 +229,18 @@ apply_taxonomic_decision_matrix <- function(df, intraspecific_mode = FALSE, gmm_
   }
 
   has_geno_dv <- .has_step07_geno_row_mask(df); geno_pred_dv <- .chr_col(df, "geno_predicted_taxon", n, NA_character_)
+  geno_gcl_dv <- trimws(ifelse(is.na(.chr_col(df, "genetic_cluster", n, "")), "", .chr_col(df, "genetic_cluster", n, "")))
+  geno_tier_tmp <- if ("geno_linkage_tier" %in% names(df)) as.character(df$geno_linkage_tier) else .chr_col(df, "linkage_tier", n, NA_character_)
+  is_g2_hull_dv <- !is.na(geno_tier_tmp) & (geno_tier_tmp == "G2_Conditional_Deme_Hull")
   geno_gdi_dv <- .num_col(df, "coalescent_gdi", n); gdi_att <- attr(df, "genomic_gdi_delimitation")
   if (!is.null(gdi_att) && is.data.frame(gdi_att) && nrow(gdi_att) > 0L && all(c("taxon", "coalescent_gdi") %in% names(gdi_att))) {
-    mgd <- has_geno_dv & !is.finite(geno_gdi_dv); if (any(mgd)) {
-      gtk <- ifelse(!is.na(geno_pred_dv) & nzchar(geno_pred_dv), geno_pred_dv, sp_all_vec); m_g <- match(gtk[mgd], as.character(gdi_att$taxon))
-      ok_g <- !is.na(m_g); if (any(ok_g)) geno_gdi_dv[which(mgd)[ok_g]] <- suppressWarnings(as.numeric(gdi_att$coalescent_gdi[m_g[ok_g]]))
+    mgd <- has_geno_dv & !is_g2_hull_dv & !is.finite(geno_gdi_dv)
+    if (any(mgd)) {
+      idx_m <- which(mgd)
+      m_gc <- if (is_intra) match(geno_gcl_dv[idx_m], as.character(gdi_att$taxon)) else rep(NA_integer_, length(idx_m))
+      gtk <- ifelse(!is.na(geno_pred_dv) & nzchar(geno_pred_dv), geno_pred_dv, sp_all_vec)
+      m_g <- ifelse(!is.na(m_gc), m_gc, match(gtk[idx_m], as.character(gdi_att$taxon)))
+      ok_g <- !is.na(m_g); if (any(ok_g)) geno_gdi_dv[idx_m[ok_g]] <- suppressWarnings(as.numeric(gdi_att$coalescent_gdi[m_g[ok_g]]))
     }
   }
   if (exists("hydrate_step07_organellar_placement_metrics", mode = "function")) df <- hydrate_step07_organellar_placement_metrics(df, opts)
@@ -256,6 +263,23 @@ apply_taxonomic_decision_matrix <- function(df, intraspecific_mode = FALSE, gmm_
   osr_df_raw <- .num_col(df, "open_set_df", n); osr_df_vec <- ifelse(is.finite(osr_df_raw) & osr_df_raw >= 1.0, as.integer(round(osr_df_raw)), p_type_morph)
   osr_p_1 <- .num_col(df, "open_set_novelty_p", n); osr_p_2 <- .num_col(df, "open_set_p_value", n); osr_p_dv <- ifelse(is.finite(osr_p_1), osr_p_1, osr_p_2)
   osr_chisq85_vec <- stats::qchisq(0.85, df = osr_df_vec); osr_chisq90_vec <- stats::qchisq(0.90, df = osr_df_vec); osr_chisq95_vec <- stats::qchisq(0.95, df = osr_df_vec)
+  eco_reg_raw <- trimws(ifelse(is.na(.chr_col(df, "ecotype_regime", n, "")), "", .chr_col(df, "ecotype_regime", n, "")))
+  if (!any(grepl("^Ecotype_[0-9]+_", eco_reg_raw)) && ("analysis_group" %in% names(df))) {
+    ag_r <- trimws(ifelse(is.na(df$analysis_group), "", as.character(df$analysis_group)))
+    if (any(grepl("^Ecotype_[0-9]+_", ag_r))) eco_reg_raw <- ag_r
+  }
+  is_sec_eco_regime_dv <- rep(FALSE, n)
+  conc_syn_pre <- trimws(ifelse(is.na(.chr_col(df, "concept_synonymy_status", n, "")), "", .chr_col(df, "concept_synonymy_status", n, "")))
+  het_aud_pre <- .step07_safe_bool(if ("is_heterotypic_type_audit" %in% names(df)) df$is_heterotypic_type_audit else rep(FALSE, n))
+  typ_m_pre <- if ("is_typical_morphotype" %in% names(df)) (!is.na(df$is_typical_morphotype) & as.logical(df$is_typical_morphotype)) else rep(FALSE, n)
+  for (tx_e in active_taxa) {
+    er_tx <- which(sp_all_vec == tx_e & grepl("^Ecotype_[0-9]+_", eco_reg_raw))
+    if (length(unique(eco_reg_raw[er_tx])) < 2L) next
+    homo_er <- er_tx[is_type_dv[er_tx] & !het_aud_pre[er_tx] & (conc_syn_pre[er_tx] != "Heterotypic_Synonym")]
+    ref_er <- if (length(homo_er) > 0L) homo_er else if (any(typ_m_pre[er_tx] & anchor_all[er_tx])) er_tx[typ_m_pre[er_tx] & anchor_all[er_tx]] else if (any(anchor_all[er_tx])) er_tx[anchor_all[er_tx]] else er_tx
+    mod_er <- names(sort(table(eco_reg_raw[ref_er]), decreasing = TRUE))[1L]
+    is_sec_eco_regime_dv[er_tx[eco_reg_raw[er_tx] != mod_er]] <- TRUE
+  }
 
   mv <- list(
     is_intra = is_intra, opts_cyto = opts_cyto, sp_all_vec = sp_all_vec, cat_sheet_vec = cat_sheet_vec, sheet_idx_list = sheet_idx_list,
@@ -307,6 +331,7 @@ apply_taxonomic_decision_matrix <- function(df, intraspecific_mode = FALSE, gmm_
     clim_z_dv = .num_col(df, "climatic_z_score", n), rf_given_p_dv = .num_col(df, "rf_given_taxon_prob", n), id_by_dv = .chr_col(df, "identifiedBy", n, NA_character_),
     portal_lag_flag = logical(n), portal_lag_gate = rep(NA_character_, n), p_type_morph = p_type_morph, type_morph_chisq95 = stats::qchisq(0.95, df = p_type_morph),
     osr_chisq85_vec = osr_chisq85_vec, osr_chisq90_vec = osr_chisq90_vec, osr_chisq95_vec = osr_chisq95_vec,
+    eco_reg_dv = eco_reg_raw, is_sec_eco_regime_dv = is_sec_eco_regime_dv,
     n_sheet_ramets_vec = as.integer(table(cat_sheet_vec)[cat_sheet_vec])
   )
   cl_ctx <- .build_step07_cluster_cohesion_context(df, bg_ctx, mv, gmm_two_delta_bic = gmm_two_delta_bic, is_intra = is_intra)

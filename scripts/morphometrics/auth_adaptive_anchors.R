@@ -100,13 +100,16 @@ select_adaptive_reference_anchors <- function(
   }
   all_pruned <- unlist(lapply(tx_results, `[[`, "pruned"), use.names = FALSE)
   all_pruned_het_type <- unlist(lapply(tx_results, `[[`, "pruned_het_type"), use.names = FALSE)
+  all_het_non_ss <- unlist(lapply(tx_results, `[[`, "het_non_ss"), use.names = FALSE)
   all_promo <- unlist(lapply(tx_results, `[[`, "promo"), use.names = FALSE)
   passive_het_type_mask <- rep(FALSE, n)
-  if (length(all_pruned_het_type) > 0L) {
-    passive_het_type_mask[all_pruned_het_type] <- TRUE
+  if (length(all_pruned_het_type) > 0L || length(all_het_non_ss) > 0L) {
+    het_all_dem <- unique(c(all_pruned_het_type, all_het_non_ss))
+    passive_het_type_mask[het_all_dem] <- TRUE
+    all_pruned <- unique(c(all_pruned, het_all_dem))
   }
   if (length(all_pruned) > 0L) {
-    all_pruned <- setdiff(all_pruned, setdiff(which(is_nb_type_valid), all_pruned_het_type))
+    all_pruned <- setdiff(all_pruned, setdiff(which(is_nb_type_valid), which(passive_het_type_mask)))
     if (length(all_pruned) > 0L) {
       is_gs[all_pruned] <- FALSE
       is_gold[all_pruned] <- FALSE

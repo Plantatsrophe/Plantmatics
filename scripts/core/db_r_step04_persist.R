@@ -110,11 +110,16 @@ fetch_step04_morphometrics_from_db <- function(
   v_join <- if (isTRUE(used_v)) {
     "LEFT JOIN vouchers v ON v.catalogNumber = om.catalogNumber "
   } else ""
+  has_tbp <- db_table_exists_safe(conn, "taxon_backbone_profiles")
+  tbp_cols <- if (has_tbp) tryCatch(DBI::dbListFields(conn, "taxon_backbone_profiles"), error = function(e) character(0)) else character(0)
+  use_tbp <- all(c("species_standardized", "basionym_name", "locus_classicus_text") %in% tbp_cols)
+  tbp_sql <- if (use_tbp) ", tbp.basionym_name AS backbone_basionym_name_tbp, tbp.locus_classicus_text AS locus_classicus_text_tbp" else ""
+  tbp_join <- if (use_tbp) "LEFT JOIN taxon_backbone_profiles tbp ON tbp.species_standardized = om.species_standardized " else ""
 
   sql <- paste0(
-    "SELECT om.*", dyn_sql_part, extra_v_sql, " ",
+    "SELECT om.*", dyn_sql_part, extra_v_sql, tbp_sql, " ",
     "FROM otu_morphometrics om ",
-    pi_join, vrp_join, v_join,
+    pi_join, vrp_join, v_join, tbp_join,
     "WHERE om.run_id = $1 ",
     "ORDER BY om.catalogNumber, om.plant_individual_id;"
   )
@@ -144,6 +149,10 @@ fetch_step04_morphometrics_from_db <- function(
       df[[vcol]] <- df[[vj]]
       df[[vj]] <- NULL
     }
+  }
+  for (tc in c("backbone_basionym_name", "locus_classicus_text")) {
+    tj <- paste0(tc, "_tbp")
+    if (tj %in% names(df)) { df[[tc]] <- df[[tj]]; df[[tj]] <- NULL }
   }
   df$run_id <- NULL
   df <- coerce_sqlite_logical_cols(df)

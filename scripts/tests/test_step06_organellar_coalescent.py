@@ -322,6 +322,28 @@ class TestStep06OrganellarCoalescent(unittest.TestCase):
             self.assertTrue(all(str(m) == "bic_coalescent_mixture" for m in adeq_df["bf_method"]))
             self.assertTrue(any(math.isfinite(float(v)) and abs(float(v)) > 1e-6 for v in adeq_df["bic_m0"]))
 
+            # Intraspecific deme gdi (.attrs-safe pd.concat + coalescent_gdi_samples.csv deme hydration)
+            out_intra, cl_csv = root / "dos_intra_out", root / "clusters.csv"
+            out_intra.mkdir()
+            mat_i = np.vstack([
+                rng_d.choice([0.0, 0.0, 0.0, 0.5], size=(2, n_loc)),
+                rng_d.choice([1.0, 1.0, 1.0, 0.5], size=(2, n_loc)),
+                rng_d.choice([0.0, 1.0], size=(2, n_loc)),
+            ])
+            s6_i = ["PACTOM1M", "PACTOM2M", "PACTOM3M", "PACTOM4M", "PACSCH1M", "PACSCH2M"]
+            pd.DataFrame(mat_i, columns=[f"L{i}" for i in range(n_loc)]).assign(genetic_sample_id=s6_i)[["genetic_sample_id", *[f"L{i}" for i in range(n_loc)]]].to_csv(dos_tsv, sep="\t", index=False)
+            pd.DataFrame([{"genetic_sample_id": s, "species_standardized": "Packera dubia" if s.startswith("PACTOM") else "Packera schweinitziana", "replicate_pair_id": s, "geno_quality_pass": 1} for s in s6_i]).to_csv(parsed_csv, index=False)
+            pd.DataFrame([{"genetic_sample_id": s, "genetic_cluster": ("Geno_Cluster_1" if s in {"PACTOM1M", "PACTOM2M"} else ("Geno_Cluster_2" if s in {"PACTOM3M", "PACTOM4M"} else "Polarizing_Sister"))} for s in s6_i]).to_csv(cl_csv, index=False)
+            res_in = coal_mod.run_coalescent_delimitation(genomics_dir=geno_e, out_dir=out_intra, parsed_samples_csv=parsed_csv, dosage_tsv=dos_tsv, focal_taxon="Packera dubia", intraspecific_mode=True, cluster_csv=cl_csv, n_boot=40)
+            self.assertEqual(res_in["status"], "completed_dosage_fallback")
+            gdi_in = pd.read_csv(out_intra / "coalescent_gdi_delimitation.csv")
+            adeq_in = pd.read_csv(out_intra / "coalescent_model_adequacy.csv")
+            samp_in = pd.read_csv(out_intra / "coalescent_gdi_samples.csv").set_index("genetic_sample_id")
+            self.assertTrue({"Geno_Cluster_1", "Geno_Cluster_2"}.issubset(set(gdi_in["taxon"])))
+            self.assertTrue({"Geno_Cluster_1", "Geno_Cluster_2"}.issubset(set(adeq_in["taxon"])))
+            self.assertEqual((samp_in.loc["PACTOM1M", "lineage_taxon"], samp_in.loc["PACTOM3M", "lineage_taxon"]), ("Geno_Cluster_1", "Geno_Cluster_2"))
+            self.assertGreater(float(samp_in.loc["PACTOM3M", "coalescent_gdi"]), 0.50)
+
     def test_organellar_containment_gate_and_discordance_preservation(self) -> None:
         """Verify >=0.80 containment AND >=80 shared 11-mers gate rejects noisy cont=0.25 hits and preserves discordance."""
         if not rscript_available():

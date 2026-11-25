@@ -298,10 +298,11 @@ estimate_ledoit_wolf_lambda <- function(X_centered) {
                    "GTR+G" = phangorn::optim.pml(f0, model = "GTR", optGamma = TRUE, rearrangement = "none", control = ctrl))
       bics <- vapply(fits, function(f) { ll <- stats::logLik(f); dk <- attr(ll, "df"); if (is.null(dk)) dk <- f$df; -2 * as.numeric(ll) + as.numeric(dk) * log(max(1, ncol(dna_mat))) }, numeric(1L))
       bm <- names(which.min(bics))
-      nw_bs <- if (identical(.Platform$OS.type, "unix") && exists("resolve_packera_workers", mode = "function")) resolve_packera_workers(64L, 100L) else 1L
-      bs <- tryCatch(phangorn::bootstrap.pml(fits[[bm]], bs = 100L, optNni = FALSE, multicore = (nw_bs > 1L), mc.cores = nw_bs, control = ctrl),
-                     error = function(e) phangorn::bootstrap.pml(fits[[bm]], bs = 100L, optNni = FALSE, multicore = FALSE, control = ctrl))
-      list(model = bm, boot = round(mean(as.numeric(ape::prop.clades(tr_sub, lapply(bs, ape::unroot))), na.rm = TRUE), 2))
+      nw_bs <- if (identical(.Platform$OS.type, "unix") && exists("resolve_packera_workers", mode = "function")) min(8L, resolve_packera_workers(8L, 100L)) else 1L
+      bs <- tryCatch(phangorn::bootstrap.pml(fits[[bm]], bs = 100L, optNni = FALSE, multicore = (nw_bs > 1L), mc.cores = nw_bs, control = ctrl), error = function(e) NULL)
+      bs_ok <- if (is.list(bs)) Filter(function(x) inherits(x, "phylo"), bs) else list()
+      if (length(bs_ok) < 10L) bs_ok <- Filter(function(x) inherits(x, "phylo"), tryCatch(phangorn::bootstrap.pml(fits[[bm]], bs = 100L, optNni = FALSE, multicore = FALSE, control = ctrl), error = function(e) list()))
+      list(model = bm, boot = if (length(bs_ok) >= 10L) round(mean(as.numeric(ape::prop.clades(tr_sub, lapply(bs_ok, ape::unroot))), na.rm = TRUE), 2) else NA_real_)
     }, error = function(e) NULL)
     if (!is.null(pr) && is.finite(pr$boot)) return(pr)
   }

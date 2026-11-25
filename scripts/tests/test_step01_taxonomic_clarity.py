@@ -23,6 +23,7 @@ from scripts.core.db_schema import PLANTMATICS_SCHEMA_USER_VERSION, init_db_sche
 from scripts.core.harvester import EXPORT_COLUMNS, VoucherHarvester, export_curated_table
 from scripts.core.step01_concept_authority_utils import (
     apply_concept_and_segregate_recency_caps,
+    backfill_sqlite_voucher_concepts,
     extract_identification_year,
     extract_typified_basionym,
     has_open_nomenclature_qualifier,
@@ -282,27 +283,37 @@ class TestStep01TaxonomicClarity(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_d:
             ws = Path(tmp_d)
             db_p = ws / "clarity_r.sqlite"
+            csv_p = ws / "curated_vouchers.csv"
             run_id = "run_clarity_r_01"
             conn = get_db_connection(db_path=db_p, init_schema=True, workspace_root=ws)
             try:
                 conn.execute("INSERT OR IGNORE INTO pipeline_runs (run_id) VALUES (?);", (run_id,))
+                conn.execute("INSERT OR REPLACE INTO taxon_backbone_profiles (species_standardized, locus_classicus_text) VALUES ('Packera dubia', '');")
                 conn.commit()
-                upsert_vouchers_records(conn, [{
-                    "catalogNumber": "RDB_01", "institutionCode": "NCU", "scientificName": "Packera dubia",
-                    "species_raw": "Packera cf. dubia", "species_standardized": "Packera dubia", "determiner_tier": "Tier_3_Bronze",
-                    "typified_basionym": "", "verbatim_taxon_concept": "Packera dubia",
-                    "concept_synonymy_status": "Open_Nomenclature", "identification_year": 2005, "is_open_or_hybrid_concept": True,
-                }])
-                upsert_rows_generic(
-                    conn, "plant_individuals",
-                    [{"catalogNumber": "RDB_01", "plant_individual_id": 1}],
-                    pk_cols=("catalogNumber", "plant_individual_id"),
-                )
-                upsert_rows_generic(
-                    conn, "otu_morphometrics",
-                    [{"run_id": run_id, "catalogNumber": "RDB_01", "plant_individual_id": 1, "species_standardized": "Packera dubia", "determiner_tier": "Tier_3_Bronze", "EFA_PC1": 0.1, "EFA_PC2": 0.2}],
-                    pk_cols=("run_id", "catalogNumber", "plant_individual_id"),
-                )
+                upsert_vouchers_records(conn, [
+                    {
+                        "catalogNumber": "RDB_01", "institutionCode": "NCU", "scientificName": "Packera dubia",
+                        "species_raw": "Packera cf. dubia", "species_standardized": "Packera dubia", "determiner_tier": "Tier_3_Bronze",
+                        "typified_basionym": "", "verbatim_taxon_concept": "Packera dubia",
+                        "concept_synonymy_status": "Open_Nomenclature", "identification_year": 2005, "is_open_or_hybrid_concept": True,
+                    },
+                    {
+                        "catalogNumber": "NY00232445", "institutionCode": "NY", "scientificName": "Packera dubia",
+                        "species_raw": "Senecio alabamensis Britton", "species_standardized": "Packera dubia",
+                        "type_status": "Holotype", "determiner_tier": "Tier_1_Gold",
+                    },
+                ])
+                conn.execute("UPDATE vouchers SET concept_synonymy_status = '', typified_basionym = '' WHERE catalogNumber = 'NY00232445';")
+                conn.commit()
+                pd.DataFrame([{"catalogNumber": "NY00232445", "typified_basionym": "", "concept_synonymy_status": "", "determiner_tier": "Tier_1_Gold"}]).to_csv(csv_p, index=False)
+                bf_res = backfill_sqlite_voucher_concepts(conn, [csv_p])
+                self.assertEqual((bf_res["vouchers_updated"], bf_res["locus_classicus_updated"], bf_res["csvs_updated"]), (1, 1, 1))
+                ny_row = conn.execute("SELECT typified_basionym, concept_synonymy_status, locus_classicus_text FROM vouchers v JOIN taxon_backbone_profiles t USING(species_standardized) WHERE v.catalogNumber='NY00232445';").fetchone()
+                self.assertEqual((ny_row[0], ny_row[1], ny_row[2]), ("Senecio alabamensis", "Heterotypic_Synonym", "Flat Rock, Kershaw County, South Carolina"))
+                self.assertEqual(pd.read_csv(csv_p).loc[0, "concept_synonymy_status"], "Heterotypic_Synonym")
+                self.assertEqual(backfill_sqlite_voucher_concepts(conn, [csv_p])["vouchers_updated"], 0)
+                upsert_rows_generic(conn, "plant_individuals", [{"catalogNumber": "RDB_01", "plant_individual_id": 1}], pk_cols=("catalogNumber", "plant_individual_id"))
+                upsert_rows_generic(conn, "otu_morphometrics", [{"run_id": run_id, "catalogNumber": "RDB_01", "plant_individual_id": 1, "species_standardized": "Packera dubia", "determiner_tier": "Tier_3_Bronze", "EFA_PC1": 0.1, "EFA_PC2": 0.2}], pk_cols=("run_id", "catalogNumber", "plant_individual_id"))
             finally:
                 conn.close()
 
@@ -351,6 +362,10 @@ class TestStep01TaxonomicClarity(unittest.TestCase):
                 "df_ctrl <- data.frame(catalogNumber = sprintf('C%d', 1:8), species_standardized = rep('Packera dubia', 8L), determiner_tier = rep('Tier_1_Gold', 8L), type_status = c(rep('', 6L), 'Holotype', 'Holotype'), typified_basionym = c(rep('', 6L), 'Senecio tomentosus', 'Senecio alabamensis'), concept_synonymy_status = c(rep('Accepted_Sensu_Stricto', 6L), 'Homotypic_Synonym', 'Heterotypic_Synonym'), EFA_PC1 = X_ctrl[, 1L], EFA_PC2 = X_ctrl[, 2L], stringsAsFactors = FALSE)\n"
                 "ctrl_res <- compute_type_specimen_morph_control(df_ctrl, X_mat = X_ctrl)\n"
                 "stopifnot(all(ctrl_res$has_empirical_type_anchor), abs(ctrl_res$type_centroids['Packera dubia', 1L]) < 0.5)\n"
+                "X_nh <- rbind(cbind(rnorm(4, 0, 0.04), rnorm(4, 0, 0.04)), cbind(rnorm(6, 3.0, 0.1), rnorm(6, 3.0, 0.1)), c(8.5, 8.5))\n"
+                "df_nh <- data.frame(catalogNumber = sprintf('NH%d', 1:11), species_standardized = rep('Packera dubia', 11L), determiner_tier = rep('Tier_1_Gold', 11L), stateProvince = c(rep('South Carolina', 4L), rep('Georgia', 6L), 'Alabama'), county = c(rep('Kershaw County', 4L), rep('Bibb', 6L), 'Houston'), locus_classicus_text = rep('Flat Rock, Kershaw County, South Carolina', 11L), type_status = c(rep('', 10L), 'Holotype'), typified_basionym = c(rep('', 10L), 'Senecio alabamensis'), concept_synonymy_status = c(rep('Accepted_Sensu_Stricto', 10L), 'Heterotypic_Synonym'), EFA_PC1 = X_nh[, 1L], EFA_PC2 = X_nh[, 2L], stringsAsFactors = FALSE)\n"
+                "nh_res <- compute_type_specimen_morph_control(df_nh, X_mat = X_nh, reasons = rep('Verified', 11L), triage = rep('CLEAN', 11L), flags = rep(FALSE, 11L))\n"
+                "stopifnot(!any(nh_res$has_empirical_type_anchor), abs(nh_res$type_centroids['Packera dubia', 1L]) < 0.35, grepl('^Heterotypic_Type_Divergence_Senecio_alabamensis', nh_res$reasons[11L]))\n"
                 "req_v_specs <- c('typified_basionym', 'verbatim_taxon_concept', 'concept_synonymy_status', 'identification_year', 'is_open_or_hybrid_concept')\n"
                 "stopifnot(all(req_v_specs %in% names(.dynamic_sqlite_table_specs_r('vouchers'))), 'is_open_or_hybrid_concept' %in% PACKERA_DB_LOGICAL_COLS)\n"
                 "coerced_oh <- coerce_sqlite_logical_cols(data.frame(is_open_or_hybrid_concept = c(1L, 0L)))$is_open_or_hybrid_concept\n"

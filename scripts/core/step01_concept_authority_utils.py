@@ -3,13 +3,17 @@ gating, typified basionym extraction, determination year parsing, specialist con
 
 from __future__ import annotations
 
+import csv
 import datetime
+import io
 import json
 import math
+import os
 from pathlib import Path
 import re
 import sqlite3
-from typing import Any, Dict, FrozenSet, List, Mapping, Optional, Set, Tuple, Union
+import tempfile
+from typing import Any, Dict, FrozenSet, List, Mapping, Optional, Sequence, Set, Tuple, Union
 
 try:
     import pandas as pd
@@ -17,10 +21,7 @@ except ImportError:
     pd = None  # type: ignore[assignment]
 
 # Post-1960 Packera revisionists and segregate authors qualifying for Tier_1_Gold.
-CORE_PACKERA_GOLD_SURNAMES: FrozenSet[str] = frozenset({
-    "barkley", "kowal", "trock", "bain", "mahoney", "soderholm", "mandel",
-    "moore-pollard", "weakley", "poindexter", "gramling", "boufford", "nesom", "uttal",
-})
+CORE_PACKERA_GOLD_SURNAMES: FrozenSet[str] = frozenset({"barkley", "kowal", "trock", "bain", "mahoney", "soderholm", "mandel", "moore-pollard", "weakley", "poindexter", "gramling", "boufford", "nesom", "uttal"})
 
 # Initial/given-name-qualified patterns for core specialists with common surnames
 # (bare "estes", "freeman", "golden", "moore", "weber", "packer" remain Bronze).
@@ -34,12 +35,7 @@ CORE_PACKERA_GOLD_REGEXES: Tuple[re.Pattern, ...] = tuple(re.compile(p, re.IGNOR
 ))
 
 # Regional flora authorities and historical Senecioneae authors routed to Tier_2_Silver.
-REGIONAL_AND_HISTORICAL_SILVER_SURNAMES: FrozenSet[str] = frozenset({
-    "cronquist", "greenman", "pippen", "semple", "schilling", "strother", "brouillet",
-    "kral", "godfrey", "sorrie", "floden", "wieboldt", "mcmillan", "judziewicz",
-    "okennon", "okane", "ruyle-douglas", "yeatts", "spellenberg", "beauchamp",
-    "mabberley", "fernald", "rydberg", "boivin",
-})
+REGIONAL_AND_HISTORICAL_SILVER_SURNAMES: FrozenSet[str] = frozenset({"cronquist", "greenman", "pippen", "semple", "schilling", "strother", "brouillet", "kral", "godfrey", "sorrie", "floden", "wieboldt", "mcmillan", "judziewicz", "okennon", "okane", "ruyle-douglas", "yeatts", "spellenberg", "beauchamp", "mabberley", "fernald", "rydberg", "boivin"})
 
 _SILVER_PATTERN_STRS: Tuple[str, ...] = (
     r"\b(?:c\.?|charles)\s+jeffrey\b|\bjeffrey\s*,\s*(?:c\.?|charles)\b",
@@ -68,6 +64,7 @@ _TYPE_OF_RE = re.compile(r"\b(?:holo|iso|lecto|neo|epi|syn|isolecto|isoneo|isosy
 _OPEN_QUAL_RE = re.compile(r"(?:\b(?:cf|aff|vel\s+aff)\b\.?|\?|\bs\.?\s*l\.(?!\s+[A-Z][a-z])|\bsensu\s+lato\b)", re.IGNORECASE)
 _HYBRID_REMARK_RE = re.compile(r"\b(?:putative\s+hybrid|hybrid\s+with|hybrid\s+between|intermediate\s+(?:between|toward)|intergrade\s+with|likely\s+hybrid)\b", re.IGNORECASE)
 _KNOWN_HOMOTYPIC_PAIRS: FrozenSet[Tuple[str, str]] = frozenset({("senecio tomentosus", "packera dubia"), ("packera tomentosa", "packera dubia"), ("cineraria dubia", "packera dubia"), ("senecio dubius", "packera dubia")})
+CURATED_LOCUS_CLASSICUS_BY_TAXON: Dict[str, str] = {"Packera dubia": "Flat Rock, Kershaw County, South Carolina"}
 _FALLBACK_POST1980_SEGREGATES: Dict[str, Tuple[int, Set[str], Set[str]]] = {"Packera serpenticola": (2014, {"NC"}, {"burke"}), "Packera insulae-regalis": (2011, {"MI"}, {"keweenaw"})}
 _US_STATE_TO_ABBR: Dict[str, str] = {
     "ALABAMA": "AL", "ARKANSAS": "AR", "CONNECTICUT": "CT", "DELAWARE": "DE", "DISTRICT OF COLUMBIA": "DC",
@@ -86,10 +83,8 @@ def _clean_str(val: Any) -> str:
         return ""
     if pd is not None:
         try:
-            if pd.isna(val):
-                return ""
-        except (TypeError, ValueError):
-            pass
+            if pd.isna(val): return ""
+        except (TypeError, ValueError): pass
     s = re.sub(r"\s+", " ", str(val).strip())
     return "" if s.lower() in {"none", "nan", "null", "na", "n/a"} else s
 
@@ -163,7 +158,7 @@ def extract_typified_basionym(rec: Mapping[str, Any], is_type_specimen: bool, al
     for entry in (rec.get("identifications") if isinstance(rec.get("identifications"), list) else ()):
         if isinstance(entry, Mapping) and (m_of := _TYPE_OF_RE.search(_clean_str(entry.get("typeStatus")))):
             cands.append(m_of.group(1))
-    cands.extend(v for k in ("verbatimScientificName", "verbatimIdentification", "scientificName", "species_raw") if (v := _clean_str(rec.get(k))))
+    cands.extend(v for k in ("verbatimScientificName", "verbatimIdentification", "species_raw", "scientificName") if (v := _clean_str(rec.get(k))))
     for cand in cands:
         binom, infra = _extract_taxon_concept_str(cand, allowed=allowed)
         if binom:
@@ -220,7 +215,7 @@ def parse_voucher_taxonomic_concept(
     allowed = {g.capitalize() for g in (synonym_genera or _DEFAULT_GENERA)}
     id_year = extract_identification_year(rec.get("dateIdentified"), rec.get("identifiedBy"), rec.get("identifications"))
     typ_bas = extract_typified_basionym(rec, is_type_specimen=is_type_specimen, allowed_genera=allowed)
-    raw_fields = [v for k in ("verbatimScientificName", "verbatimIdentification", "scientificName", "species_raw") if (v := _clean_str(rec.get(k)))]
+    raw_fields = [v for k in ("verbatimScientificName", "verbatimIdentification", "species_raw", "scientificName") if (v := _clean_str(rec.get(k)))]
     raw_primary = raw_fields[0] if raw_fields else ""
     for cand in raw_fields + [_clean_str(rec.get("identificationQualifier"))]:
         is_hyb, norm_f, p1 = is_interspecific_hybrid_formula(cand, allowed_genera=allowed)
@@ -327,3 +322,51 @@ def apply_concept_and_segregate_recency_caps(
                 out.at[idx, "determiner_tier"] = "Tier_2_Silver"
                 break
     return out
+
+
+def backfill_sqlite_voucher_concepts(db_or_conn: Union[str, Path, sqlite3.Connection], csv_paths: Sequence[Union[str, Path]] = ()) -> Dict[str, int]:
+    """Idempotently backfill locus_classicus_text, voucher concept columns, and optional CSV snapshots."""
+    own_conn = not isinstance(db_or_conn, sqlite3.Connection)
+    conn = sqlite3.connect(str(db_or_conn)) if own_conn else db_or_conn
+    conn.row_factory = sqlite3.Row
+    try:
+        tbls = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table';").fetchall()}
+        bb_map: Dict[str, Dict[str, Any]] = {}
+        n_lc = n_up = n_csv = 0
+        if "taxon_backbone_profiles" in tbls:
+            for sp, lc_txt in CURATED_LOCUS_CLASSICUS_BY_TAXON.items():
+                n_lc += max(0, conn.execute("UPDATE taxon_backbone_profiles SET locus_classicus_text = ? WHERE species_standardized = ? AND (locus_classicus_text IS NULL OR TRIM(locus_classicus_text) = '');", (lc_txt, sp)).rowcount)
+            bb_map = {str(r["species_standardized"]): dict(r) for r in conn.execute("SELECT * FROM taxon_backbone_profiles;").fetchall() if r["species_standardized"]}
+        updated_by_cat: Dict[str, Dict[str, Any]] = {}
+        if "vouchers" in tbls and {"catalogNumber", "concept_synonymy_status", "typified_basionym"}.issubset({r[1] for r in conn.execute("PRAGMA table_info(vouchers);").fetchall()}):
+            for r in conn.execute("SELECT * FROM vouchers;").fetchall():
+                rm = dict(r)
+                cat, ts, cur_cs, cur_tb = _clean_str(rm.get("catalogNumber")), _clean_str(rm.get("type_status")), _clean_str(rm.get("concept_synonymy_status")), _clean_str(rm.get("typified_basionym"))
+                is_t = bool(ts and ts.upper() not in {"NONE", "NOT A TYPE", "NON-TYPE"})
+                if not cat or (cur_cs and (not is_t or cur_tb)):
+                    continue
+                ci = parse_voucher_taxonomic_concept(rm, _clean_str(rm.get("species_standardized")) or None, is_t, set(_DEFAULT_GENERA), bb_map)
+                dt_cur = _clean_str(rm.get("determiner_tier"))
+                dt_new = "Tier_3_Bronze" if (not is_t and ci["is_open_or_hybrid_concept"]) else ("Tier_2_Silver" if (not is_t and dt_cur == "Tier_1_Gold" and ci["concept_synonymy_status"] == "Heterotypic_Synonym") else dt_cur)
+                vals = (ci["typified_basionym"] or cur_tb, ci["verbatim_taxon_concept"], ci["concept_synonymy_status"], ci["identification_year"] if ci["identification_year"] is not None else rm.get("identification_year"), 1 if ci["is_open_or_hybrid_concept"] else 0, ci["infraspecific_taxon"] or _clean_str(rm.get("infraspecific_taxon")), dt_new or None, cat)
+                conn.execute("UPDATE vouchers SET typified_basionym=?, verbatim_taxon_concept=?, concept_synonymy_status=?, identification_year=?, is_open_or_hybrid_concept=?, infraspecific_taxon=?, determiner_tier=COALESCE(?, determiner_tier) WHERE catalogNumber=?;", vals)
+                updated_by_cat[cat] = {"typified_basionym": vals[0], "verbatim_taxon_concept": vals[1], "concept_synonymy_status": vals[2], "identification_year": "" if vals[3] is None else str(vals[3]), "is_open_or_hybrid_concept": "True" if vals[4] else "False", "determiner_tier": dt_new or dt_cur}
+                n_up += 1
+        conn.commit()
+        for cp in (Path(p) for p in csv_paths if Path(p).is_file()):
+            rows = list(csv.DictReader(io.StringIO(cp.read_text(encoding="utf-8"), newline="")))
+            if not rows or "catalogNumber" not in rows[0]:
+                continue
+            hdr, touched = list(rows[0].keys()), False
+            for row in rows:
+                for k, v in (updated_by_cat.get(_clean_str(row.get("catalogNumber"))) or {}).items():
+                    if k in row and str(row.get(k) or "") != str(v):
+                        row[k], touched = v, True
+            if touched:
+                fd, tn = tempfile.mkstemp(dir=str(cp.parent), prefix=f".{cp.stem}_", suffix=".tmp")
+                with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
+                    w = csv.DictWriter(fh, fieldnames=hdr, lineterminator="\n"); w.writeheader(); w.writerows(rows); fh.flush(); os.fsync(fh.fileno())
+                Path(tn).replace(cp); n_csv += 1
+        return {"vouchers_updated": n_up, "locus_classicus_updated": n_lc, "csvs_updated": n_csv}
+    finally:
+        if own_conn: conn.close()

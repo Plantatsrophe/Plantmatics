@@ -185,8 +185,22 @@ aud_oh <- audit_misidentifications(df_oh, cda_oh); df_oh_ov <- df_oh; df_oh_ov$s
 ov_oh <- apply_open_or_hybrid_concept_audit_overrides(df_oh_ov, cda_oh, flags = rep(FALSE, 22L), triage = rep("CLEAN", 22L), reasons = rep("Verified", 22L), misid_flags = rep(FALSE, 22L), p_audit = 3L)
 res$c8 <- list(hyb_post_p = as.numeric(cda_oh$posterior_prob[21L]), hyb_misid = isTRUE(aud_oh$misidentification_flag[21L]), hyb_ov_misid = isTRUE(ov_oh$misid_flags[21L]), hyb_triage = as.character(aud_oh$triage_priority[21L]), hyb_reason = as.character(aud_oh$discordance_reason[21L]), hyb_tier = as.character(aud_oh$anchor_tier_source[21L]), aff_post_p = as.numeric(cda_oh$posterior_prob[22L]), aff_self_d2 = as.numeric(cda_oh$self_morph_mahal_d2[22L]), aff_misid = isTRUE(aud_oh$misidentification_flag[22L]), aff_ov_flag = isTRUE(ov_oh$flags[22L]), aff_ov_misid = isTRUE(ov_oh$misid_flags[22L]), aff_triage = as.character(aud_oh$triage_priority[22L]), aff_reason = as.character(aud_oh$discordance_reason[22L]))
 
-# 9. Trait label contract
-res$c9 <- list(ar_inv_lbl = as.character(format_morph_trait_labels("AR_inv")[1L]), ar_inv_std_lbl = as.character(format_morph_trait_labels("AR_inv_std")[1L]))
+# 9. Trait label contract, intraspecific gmm_cols, non-chaining ridgeline (0.55), & ecoregion photometry EB centering
+df_f3_in <- df_f3; df_f3_in$q25_solidity <- c(rep(0.80, 20L), seq(0.55, 0.90, length.out = 20L))
+prep_f3_in <- prepare_step04_standardized_features(df_f3_in, c("PC1", "PC2", "PC3"), outline_only = FALSE, intraspecific_mode = TRUE)
+set.seed(909L); X_nc <- rbind(cbind(rnorm(35L, -3.5, 0.45), rnorm(35L, 0, 0.45)), cbind(rnorm(35L, -2.5, 0.45), rnorm(35L, 0, 0.45)), cbind(rnorm(35L, 3.5, 0.45), rnorm(35L, 0, 0.45)))
+f_nc <- mclust::Mclust(X_nc, G = 3L, modelNames = "EII", verbose = FALSE); z_nc <- as.matrix(stats::predict(f_nc, newdata = X_nc)$z)
+mrg_nc <- merge_plastic_gmm_components_ridgeline(X_nc, X_nc, z_nc, z_nc, intraspecific_mode = TRUE)
+set.seed(910L); reg_ph <- c(rep("Coastal_Plain", 14L), rep("Sandhills", 16L), rep("Piedmont", 14L))
+inst_ph <- c(rep("NCU", 13L), "USCH", rep("NCU", 8L), rep("USCH", 8L), "NCU", rep("USCH", 13L))
+true_vest <- ifelse(reg_ph == "Coastal_Plain", -18.0, ifelse(reg_ph == "Sandhills", -10.0, -4.0))
+scan_off <- ifelse(inst_ph == "NCU", 6.0, 0.0)
+df_ph_eb <- data.frame(catalogNumber = sprintf("PHEB_%02d", 1:44), species_standardized = "Packera dubia", institutionCode = inst_ph, regional_group = reg_ph, authority_weight = 1.0, spatial_balance_weight = 1.0, morph_tier_source = "Basal_Rosette", is_centroid_or_inst_coord = FALSE, PC1 = true_vest * 0.1 + rnorm(44L, 0, 0.05), blade_cie_l_q85_sheet_delta = true_vest + scan_off + rnorm(44L, 0, 0.35), stringsAsFactors = FALSE)
+eb_out <- apply_eb_institution_batch_centering(df_ph_eb, c("PC1", "blade_cie_l_q85_sheet_delta"), min_inst_n = 6L, allow_shape_centering = TRUE)
+sh_m <- reg_ph == "Sandhills"; raw_gap <- abs(mean(df_ph_eb$blade_cie_l_q85_sheet_delta[sh_m & inst_ph == "NCU"]) - mean(df_ph_eb$blade_cie_l_q85_sheet_delta[sh_m & inst_ph == "USCH"]))
+adj_gap <- abs(mean(eb_out$blade_cie_l_q85_sheet_delta[sh_m & inst_ph == "NCU"]) - mean(eb_out$blade_cie_l_q85_sheet_delta[sh_m & inst_ph == "USCH"]))
+eco_contrast <- mean(eb_out$blade_cie_l_q85_sheet_delta[reg_ph == "Piedmont"]) - mean(eb_out$blade_cie_l_q85_sheet_delta[reg_ph == "Coastal_Plain"])
+res$c9 <- list(ar_inv_lbl = as.character(format_morph_trait_labels("AR_inv")[1L]), ar_inv_std_lbl = as.character(format_morph_trait_labels("AR_inv_std")[1L]), intra_gmm_cols = as.character(prep_f3_in$gmm_cols), nc_best_k = as.integer(mrg_nc$best_k), eb_pc1_unchanged = max(abs(eb_out$PC1 - df_ph_eb$PC1)), eb_raw_gap = as.numeric(raw_gap), eb_adj_gap = as.numeric(adj_gap), eb_eco_contrast = as.numeric(eco_contrast))
 jsonlite::write_json(res, out_json, auto_unbox = TRUE, na = "null", digits = 10)
 """
 
@@ -305,6 +319,13 @@ class TestStep04TaxonomicClarity(unittest.TestCase):
     def test_09_trait_label_and_sqlite_spatial_balance_persistence(self) -> None:
         c9 = self.results["c9"]
         self.assertEqual((str(c9["ar_inv_lbl"]), str(c9["ar_inv_std_lbl"])), ("Involucre Aspect Ratio (H / W)", "Involucre Aspect Ratio (H / W)"))
+        self.assertIn("basal_cordate_index_std", c9["intra_gmm_cols"])
+        self.assertIn("blade_cie_l_q85_sheet_delta_std", c9["intra_gmm_cols"])
+        self.assertNotIn("q25_solidity_std", c9["intra_gmm_cols"])
+        self.assertEqual(int(c9["nc_best_k"]), 2)
+        self.assertEqual(float(c9["eb_pc1_unchanged"]), 0.0)
+        self.assertLess(float(c9["eb_adj_gap"]), 0.40 * float(c9["eb_raw_gap"]))
+        self.assertGreater(float(c9["eb_eco_contrast"]), 10.0)
         self.assertTrue(bool(self.results["c4"]["ok_p9"]))
         conn = sqlite3.connect(str(self.fx["db_path"]))
         uv = int(conn.execute("PRAGMA user_version;").fetchone()[0])

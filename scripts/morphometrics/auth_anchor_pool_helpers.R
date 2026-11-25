@@ -24,13 +24,11 @@ if (grDevices::dev.cur() == 1L) grDevices::pdf(NULL)
     gs_bas_local, rep(tx, length(idx_gs)), df = df[idx_gs, , drop = FALSE]
   )
   gs_het_type_local <- gs_type_local & !gs_homo_type_local
-  # Prefer homotypic sensu stricto name-bearing types so divergent heterotypic types never pull a species' type-medoid target.
+  # Restrict type-medoid shrinkage strictly to homotypic sensu stricto types so heterotypic types never pull a species' baseline.
   gs_anchor_type_local <- if (any(gs_nb_type_local & gs_homo_type_local)) {
     gs_nb_type_local & gs_homo_type_local
-  } else if (any(gs_nb_type_local)) {
-    gs_nb_type_local
   } else {
-    gs_type_local
+    gs_homo_type_local
   }
   gs_het_local <- is_het_syn_non_type[idx_gs]
   gs_gold_local <- is_gold[idx_gs]
@@ -298,5 +296,6 @@ if (grDevices::dev.cur() == 1L) grDevices::pdf(NULL)
       }
     }
   }
-  list(pruned = pruned_out, pruned_het_type = pruned_het_type_out, promo = promo_out)
+  het_non_ss_out <- if (any(gs_het_type_local) && sum((gs_gold_local & !gs_het_local & !gs_het_type_local) | gs_homo_type_local) >= 3L) idx_gs[gs_het_type_local] else integer(0)
+  list(pruned = pruned_out, pruned_het_type = pruned_het_type_out, het_non_ss = het_non_ss_out, promo = promo_out)
 }

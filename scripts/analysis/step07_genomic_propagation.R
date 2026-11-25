@@ -175,6 +175,10 @@ propagate_conditional_deme_priors <- function(df, ga_df = NULL, morph_X = NULL, 
     df$geno_deme_weight_scale[i] <- w_scale_i; df$geno_linkage_tier[i] <- "G2_Conditional_Deme_Hull"
     if ("linkage_tier" %in% names(df)) df$linkage_tier[i] <- "G2_Conditional_Deme_Hull"
     df$genomic_propagation_tier[i] <- "G2_Conditional_Deme_Hull"; df$geno_predicted_taxon[i] <- cand_sp
+    if (!is.null(anc_df$gcl) && nzchar(anc_df$gcl[near_a])) {
+      if (!("genetic_cluster" %in% names(df))) df$genetic_cluster <- rep(NA_character_, n)
+      df$genetic_cluster[i] <- anc_df$gcl[near_a]
+    }
     df$geno_quality_pass[i] <- if (qc_num || !("geno_quality_pass" %in% names(df))) 1L else TRUE
     if ("is_geno_admixed" %in% names(df)) df$is_geno_admixed[i] <- if (adm_num) 0L else FALSE
     base_prob <- pmin(0.90, pmax(0.70, anc_df$prob[near_a] * (1.0 - 0.08 * (min_d / 2.0))))
@@ -273,10 +277,11 @@ fit_tier0_calibrated_projection <- function(df, opts = list()) {
 # Step E: Propagate coalescent gdi to cohesive clusters/lineages (conflict-only cytotype gating)
 propagate_cluster_gdi_governance <- function(df, gdi_df = NULL, morph_X = NULL, morph_S_inv = NULL) {
   df <- .init_propagation_cols(df, reset = FALSE); n <- nrow(df); if (n == 0L) return(df)
-  tx_gdi <- list(); cl_gdi <- list(); cl_anchor_pl <- list(); cl_conflict <- list(); tx_anchor_pls <- list()
+  tx_gdi <- list(); cl_gdi <- list(); gcl_gdi <- list(); cl_anchor_pl <- list(); cl_conflict <- list(); gcl_anchor_pl <- list(); gcl_conflict <- list(); tx_anchor_pls <- list()
   tier <- .pick_chr_prop(df, c("geno_linkage_tier", "linkage_tier"), ""); qc <- .pick_bool_prop(df, "geno_quality_pass", FALSE)
   adm <- .pick_bool_prop(df, "is_geno_admixed", FALSE); pred <- trimws(.pick_chr_prop(df, "geno_predicted_taxon", ""))
   g_col <- .pick_num_prop(df, "coalescent_gdi"); cl_col <- trimws(.pick_chr_prop(df, c("coancestry_cluster"), ""))
+  gcl_col <- trimws(.pick_chr_prop(df, "genetic_cluster", ""))
   gmm_v <- .pick_num_prop(df, "gmm_cluster"); eco_v <- trimws(.pick_chr_prop(df, "ecotype_regime", ""))
   sp <- trimws(.pick_chr_prop(df, "species_standardized", "")); rec_ploidy <- .extract_known_ploidy_vec(df)
   lat <- .pick_num_prop(df, "decimalLatitude"); lon <- .pick_num_prop(df, "decimalLongitude")
@@ -285,16 +290,25 @@ propagate_cluster_gdi_governance <- function(df, gdi_df = NULL, morph_X = NULL, 
   src_ok <- (tier %in% g12_tiers) & qc & !adm & is.finite(g_col) & nzchar(pred) & (pred != "Unknown")
   for (i in which(src_ok)) {
     tx_gdi[[pred[i]]] <- c(tx_gdi[[pred[i]]], g_col[i]); if (nzchar(cl_col[i])) cl_gdi[[cl_col[i]]] <- c(cl_gdi[[cl_col[i]]], g_col[i])
+    if (nzchar(gcl_col[i])) gcl_gdi[[gcl_col[i]]] <- c(gcl_gdi[[gcl_col[i]]], g_col[i])
     if (!is.na(rec_ploidy[i])) tx_anchor_pls[[pred[i]]] <- unique(c(tx_anchor_pls[[pred[i]]], rec_ploidy[i]))
   }
   for (ck in unique(cl_col[nzchar(cl_col)])) { pls <- unique(rec_ploidy[cl_col == ck & !is.na(rec_ploidy)]); if (length(pls) == 1L) cl_anchor_pl[[ck]] <- pls[1L] else if (length(pls) > 1L) { cl_conflict[[ck]] <- TRUE; cl_gdi[[ck]] <- NULL } }
+  for (gk in unique(gcl_col[nzchar(gcl_col)])) { pls <- unique(rec_ploidy[gcl_col == gk & !is.na(rec_ploidy)]); if (length(pls) == 1L) gcl_anchor_pl[[gk]] <- pls[1L] else if (length(pls) > 1L) { gcl_conflict[[gk]] <- TRUE; gcl_gdi[[gk]] <- NULL } }
   if (!is.null(gdi_df) && is.data.frame(gdi_df) && nrow(gdi_df) > 0L) {
     gt <- trimws(.pick_chr_prop(gdi_df, c("taxon", "species_standardized", "lineage"), "")); gv <- .pick_num_prop(gdi_df, c("coalescent_gdi", "gdi"))
-    gcl <- trimws(.pick_chr_prop(gdi_df, c("coancestry_cluster"), ""))
-    for (r in which(is.finite(gv))) { if (nzchar(gt[r])) tx_gdi[[gt[r]]] <- c(tx_gdi[[gt[r]]], gv[r]); if (nzchar(gcl[r]) && !isTRUE(cl_conflict[[gcl[r]]])) cl_gdi[[gcl[r]]] <- c(cl_gdi[[gcl[r]]], gv[r]) }
+    gcl <- trimws(.pick_chr_prop(gdi_df, c("coancestry_cluster"), "")); ggc <- trimws(.pick_chr_prop(gdi_df, c("genetic_cluster"), ""))
+    for (r in which(is.finite(gv))) {
+      if (grepl("^Geno_Cluster_", gt[r])) { if (!isTRUE(gcl_conflict[[gt[r]]])) gcl_gdi[[gt[r]]] <- c(gcl_gdi[[gt[r]]], gv[r]) }
+      else if (nzchar(gt[r])) tx_gdi[[gt[r]]] <- c(tx_gdi[[gt[r]]], gv[r])
+      if (nzchar(gcl[r]) && !isTRUE(cl_conflict[[gcl[r]]])) cl_gdi[[gcl[r]]] <- c(cl_gdi[[gcl[r]]], gv[r])
+      if (nzchar(ggc[r]) && !isTRUE(gcl_conflict[[ggc[r]]])) gcl_gdi[[ggc[r]]] <- c(gcl_gdi[[ggc[r]]], gv[r])
+    }
   }
-  if (length(tx_gdi) == 0L && length(cl_gdi) == 0L && !any(src_ok & nzchar(mcl_col))) return(df)
-  tx_med <- lapply(tx_gdi, stats::median); cl_med <- lapply(cl_gdi, stats::median)
+  if (length(tx_gdi) == 0L && length(cl_gdi) == 0L && length(gcl_gdi) == 0L && !any(src_ok & nzchar(mcl_col))) return(df)
+  tx_het <- vapply(names(tx_gdi), function(tn) length(tx_gdi[[tn]]) >= 2L && (max(tx_gdi[[tn]], na.rm = TRUE) - min(tx_gdi[[tn]], na.rm = TRUE)) > 0.30, logical(1L))
+  names(tx_het) <- names(tx_gdi)
+  tx_med <- lapply(tx_gdi, stats::median); cl_med <- lapply(cl_gdi, stats::median); gcl_med <- lapply(gcl_gdi, stats::median)
   if (is.null(morph_X)) { pool <- .compute_morph_pool_prop(df); if (!is.null(pool)) { morph_X <- pool$X; morph_S_inv <- pool$S_inv; is_basal <- pool$is_basal } else is_basal <- rep(FALSE, n) } else is_basal <- .is_basal_mask_prop(df)
   t0 <- resolve_tier0_anchor_overrides(df); mu_taxon <- if (!is.null(morph_X)) .build_taxon_centroids(df, morph_X, is_basal, t0) else list()
   cal_tx <- trimws(.pick_chr_prop(df, "tier0_calibrated_taxon", "")); abst <- df$tier0_abstention_flag
@@ -303,14 +317,17 @@ propagate_cluster_gdi_governance <- function(df, gdi_df = NULL, morph_X = NULL, 
   for (i in seq_len(n)) {
     if (adm[i] || pure_ev[i] || (!is.na(abst[i]) && abst[i] == 1L)) next
     if (nzchar(cl_col[i]) && isTRUE(cl_conflict[[cl_col[i]]])) next
+    if (nzchar(gcl_col[i]) && isTRUE(gcl_conflict[[gcl_col[i]]])) next
     if (nzchar(cl_col[i]) && !is.na(rec_ploidy[i]) && !is.null(cl_anchor_pl[[cl_col[i]]]) && rec_ploidy[i] != cl_anchor_pl[[cl_col[i]]]) next
+    if (nzchar(gcl_col[i]) && !is.na(rec_ploidy[i]) && !is.null(gcl_anchor_pl[[gcl_col[i]]]) && rec_ploidy[i] != gcl_anchor_pl[[gcl_col[i]]]) next
     if (!is_cent_raw[i] && is.finite(lat[i]) && is.finite(lon[i]) && length(typed_ll) > 0L) {
       deme_pls <- unique(rec_ploidy[typed_ll[.haversine_km_vec(lat[i], lon[i], lat[typed_ll], lon[typed_ll]) <= 2.0]])
       if (length(deme_pls) > 1L || (length(deme_pls) == 1L && !is.na(rec_ploidy[i]) && rec_ploidy[i] != deme_pls[1L])) next
     }
     mcl_res <- .eval_mcl_cluster_gdi_prop(i, mcl_col[i], mcl_col, src_ok, g_col, pred, rec_ploidy, lat, lon, is_cent = is_cent_raw); if (mcl_res$conflict) next
+    gcl_ok <- nzchar(gcl_col[i]) && !is.null(gcl_med[[gcl_col[i]]])
     cl_ok <- nzchar(cl_col[i]) && !is.null(cl_med[[cl_col[i]]])
-    gval <- if (cl_ok) cl_med[[cl_col[i]]] else if (is.finite(mcl_res$gdi)) mcl_res$gdi else {
+    gval <- if (gcl_ok) gcl_med[[gcl_col[i]]] else if (cl_ok) cl_med[[cl_col[i]]] else if (is.finite(mcl_res$gdi)) mcl_res$gdi else {
       cand <- ""
       if ((df$genomic_propagation_tier[i] %in% c("G1_Exsiccatae_Isoduplicate", "G2_Conditional_Deme_Hull") || tier[i] %in% g12_tiers) && nzchar(pred[i]) && pred[i] != "Unknown") {
         cand <- pred[i]
@@ -320,7 +337,7 @@ propagate_cluster_gdi_governance <- function(df, gdi_df = NULL, morph_X = NULL, 
         d2_res <- .subspace_mahal_d2_prop(morph_X[i, ], mu_taxon[[sp[i]]], morph_X, S_inv_full = morph_S_inv, is_basal = is_basal)
         if (is.finite(d2_res$d2) && d2_res$df >= 2L && d2_res$d2 <= stats::qchisq(0.95, df = d2_res$df)) cand <- sp[i]
       }
-      if (nzchar(cand) && !is.null(tx_med[[cand]])) { t_pls <- tx_anchor_pls[[cand]]; if (!is.na(rec_ploidy[i]) && length(t_pls) == 1L && rec_ploidy[i] != t_pls[1L]) NA_real_ else tx_med[[cand]] } else NA_real_
+      if (nzchar(cand) && !is.null(tx_med[[cand]]) && !isTRUE(tx_het[[cand]])) { t_pls <- tx_anchor_pls[[cand]]; if (!is.na(rec_ploidy[i]) && length(t_pls) == 1L && rec_ploidy[i] != t_pls[1L]) NA_real_ else tx_med[[cand]] } else NA_real_
     }
     if (is.finite(gval)) {
       df$cluster_propagated_gdi[i] <- round(gval, 4L)

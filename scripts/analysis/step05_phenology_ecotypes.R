@@ -311,7 +311,9 @@ resolve_analysis_group <- function(df, intraspecific_mode = FALSE, primary_env_v
       f_stats[j] <- tryCatch(suppressWarnings(as.numeric(summary(stats::aov(vj ~ factor(km$cluster)))[[1]][["F value"]][1L])), error = function(e) 0.0)
     }
     f_stats[!is.finite(f_stats)] <- 0.0
-    sig_mask_k <- is.finite(kw_q) & (kw_q < 0.005) & (eta2_vec >= 0.20) & (var_max_pair_d >= 2.15)
+    min_p_cl <- min(as.numeric(table(km$cluster))) / max(as.numeric(n_anc), 1.0)
+    eta2_thr_k <- max(0.10, min(0.20, 0.20 * (4.0 * min_p_cl * (1.0 - min_p_cl)) / 0.75))
+    sig_mask_k <- is.finite(kw_q) & (kw_q < 0.005) & (eta2_vec >= eta2_thr_k) & (var_max_pair_d >= 1.60)
     n_sig_doms <- length(unique(dom_vec[sig_mask_k]))
     pass_eco <- is.finite(sil_k) && sil_k >= eco_min_sil && is.finite(fold_jacc_k) && fold_jacc_k >= eco_min_jacc &&
       is.finite(var_red_k) && var_red_k >= (0.30 + 0.05 * (k_try - 2L)) && is.finite(pair_min_mahal_d) && pair_min_mahal_d >= 2.05 &&

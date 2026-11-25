@@ -56,6 +56,7 @@ _MASTER_VIEW_PART_B_SQL: str = """\
         ct.is_marginal_range_extension AS is_marginal_range_extension,
         -- Tier A Taxonomic Backbone & NWPL Wetland Indicator
         tbp.basionym_name AS backbone_basionym_name,
+        tbp.locus_classicus_text AS locus_classicus_text,
         tbp.protologue_url AS protologue_url,
         tbp.natureserve_global_rank AS natureserve_global_rank,
         tbp.nwpl_indicator_code AS nwpl_indicator_code,

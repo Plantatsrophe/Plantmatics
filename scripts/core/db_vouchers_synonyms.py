@@ -24,6 +24,7 @@ from scripts.core.db_column_constants import (
     _to_str,
 )
 from scripts.core.db_conn_pragmas import get_table_columns, upsert_rows_generic
+from scripts.core.step01_concept_authority_utils import parse_voucher_taxonomic_concept
 
 def upsert_taxon_synonyms(
     conn: sqlite3.Connection,
@@ -98,6 +99,10 @@ def upsert_vouchers_records(
     if not records:
         return 0
     syn_map = load_taxon_synonyms(conn)
+    tbls = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table';").fetchall()}
+    bb_map = {str(r[0]): {"basionym_name": r[1], "homotypic_synonyms_json": r[2]} for r in conn.execute("SELECT species_standardized, basionym_name, homotypic_synonyms_json FROM taxon_backbone_profiles;").fetchall() if r[0]} if "taxon_backbone_profiles" in tbls else {}
+    v_cols = get_table_columns(conn, "vouchers")
+    ex_conc = {str(r[0]): (str(r[1] or "").strip(), str(r[2] or "").strip()) for r in conn.execute("SELECT catalogNumber, concept_synonymy_status, typified_basionym FROM vouchers;").fetchall() if r[0]} if {"catalogNumber", "concept_synonymy_status", "typified_basionym"}.issubset(v_cols) else {}
     norm_rows: List[Dict[str, Any]] = []
 
     for rec in records:
@@ -169,6 +174,19 @@ def upsert_vouchers_records(
             row_dict["identification_year"] = _to_int(rec.get("identification_year"))
         if "is_open_or_hybrid_concept" in rec and not _is_missing(rec.get("is_open_or_hybrid_concept")):
             row_dict["is_open_or_hybrid_concept"] = _to_bool_int(rec.get("is_open_or_hybrid_concept"), default=0)
+        ts_clean = str(row_dict.get("type_status") or "").strip()
+        is_t_row = bool(ts_clean and ts_clean.upper() not in {"NONE", "NOT A TYPE", "NON-TYPE"})
+        prev_cs, prev_tb = ex_conc.get(cat, ("", ""))
+        need_conc = bool((sci or sp_raw or is_t_row) and "concept_synonymy_status" not in row_dict and (not prev_cs or (is_t_row and "typified_basionym" not in row_dict and not prev_tb)))
+        if need_conc:
+            ci = parse_voucher_taxonomic_concept(rec, sp_std, is_t_row, {"Packera", "Senecio", "Cineraria"}, bb_map)
+            row_dict.setdefault("concept_synonymy_status", ci["concept_synonymy_status"])
+            row_dict.setdefault("verbatim_taxon_concept", ci["verbatim_taxon_concept"])
+            row_dict.setdefault("is_open_or_hybrid_concept", 1 if ci["is_open_or_hybrid_concept"] else 0)
+            if ci["typified_basionym"]:
+                row_dict.setdefault("typified_basionym", ci["typified_basionym"])
+            if ci["identification_year"] is not None:
+                row_dict.setdefault("identification_year", int(ci["identification_year"]))
         if "spatial_balance_weight" in rec and not _is_missing(rec.get("spatial_balance_weight")):
             row_dict["spatial_balance_weight"] = _to_float(rec.get("spatial_balance_weight"))
         qc_val = _to_str(rec.get("qc_status"))

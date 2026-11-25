@@ -49,6 +49,25 @@ if (grDevices::dev.cur() == 1L) grDevices::pdf(NULL)
   out
 }
 
+.fallback_topotype_rows_s05 <- function(df, cand_rows, tx_k) {
+  if (is.null(df) || length(cand_rows) == 0L || !("stateProvince" %in% names(df))) return(integer(0))
+  lc <- if ("locus_classicus_text" %in% names(df)) { v <- trimws(as.character(df$locus_classicus_text[cand_rows])); v <- v[!is.na(v) & nzchar(v)]; if (length(v) > 0L) v[1L] else "" } else ""
+  if (!nzchar(lc) && identical(tx_k, "Packera dubia")) lc <- "Flat Rock, Kershaw County, South Carolina"
+  if (!nzchar(lc)) return(integer(0))
+  st_map <- c("alabama"="al","arkansas"="ar","florida"="fl","georgia"="ga","kentucky"="ky","louisiana"="la","maryland"="md","mississippi"="ms","north carolina"="nc","south carolina"="sc","tennessee"="tn","texas"="tx","virginia"="va","west virginia"="wv")
+  lc_l <- tolower(gsub("[[:space:]]+", " ", lc)); lc_st <- ""
+  for (sn in names(st_map)) if (grepl(paste0("(^|[^[:alpha:]])", sn, "($|[^[:alpha:]])"), lc_l)) { lc_st <- st_map[[sn]]; break }
+  mc <- regmatches(lc_l, regexpr("[a-z][a-z.-]*[[:space:]]+(county|parish)", lc_l))
+  lc_c <- if (length(mc) > 0L && nzchar(mc[1L])) sub("[[:space:]]+(county|parish)$", "", mc[1L]) else ""
+  sr <- tolower(trimws(as.character(df$stateProvince[cand_rows]))); sr[is.na(sr)] <- ""
+  sn_v <- ifelse(nchar(sr) == 2L, sr, ifelse(sr %in% names(st_map), st_map[sr], sr))
+  cr <- if ("county" %in% names(df)) sub("[[:space:]]+(county|parish|co\\.?)$", "", tolower(trimws(as.character(df$county[cand_rows])))) else rep("", length(cand_rows))
+  cr[is.na(cr)] <- ""; qv <- if ("is_centroid_or_inst_coord" %in% names(df)) .to_bool_s05(df$is_centroid_or_inst_coord[cand_rows]) else rep(FALSE, length(cand_rows))
+  ok_s <- !qv & nzchar(lc_st) & (sn_v == lc_st); if (!any(ok_s)) return(integer(0))
+  ch <- if (nzchar(lc_c)) cand_rows[ok_s & (cr == lc_c)] else integer(0)
+  if (length(ch) >= 2L) ch else if (sum(ok_s) >= 2L) cand_rows[ok_s] else ch
+}
+
 select_primary_predictors_from_rf <- function(rf_res = NULL, vif_res = NULL, df_env = NULL, cum_imp_target = NULL, intraspecific_mode = FALSE) {
   if (is.null(cum_imp_target) || !is.finite(cum_imp_target)) {
     cum_imp_target <- if (exists("load_step05_macroecology_config", mode = "function")) {
@@ -310,14 +329,15 @@ compute_type_locality_ecological_control <- function(df, primary_env_vars = NULL
       if (length(gc) > 0L) {
         t_regs <- unique(reg_v[focal_types[nzchar(reg_v[focal_types])]])
         gc_e <- gc[is_precise_edaph[gc]]; if (length(gc_e) == 0L) gc_e <- gc
-        n_eco <- if (length(t_regs) > 0L) gc_e[reg_v[gc_e] %in% t_regs] else integer(0)
-        if (length(n_eco) == 0L && length(t_regs) > 0L) n_eco <- gc[reg_v[gc] %in% t_regs]
         n_xy <- integer(0); t_xy <- focal_types[has_xy[focal_types]]
         c_xy <- gc[has_xy[gc] & is_precise_edaph[gc]]; if (length(c_xy) == 0L) c_xy <- gc[has_xy[gc]]
         if (length(t_xy) > 0L && length(c_xy) > 0L) {
           md <- rep(Inf, length(c_xy)); for (ti in t_xy) md <- pmin(md, haversine_km(lat_v[ti], lon_v[ti], lat_v[c_xy], lon_v[c_xy]))
           n_xy <- c_xy[is.finite(md) & (md <= max_radius_km)]
         }
+        gc_no_xy <- if (length(t_xy) > 0L) gc_e[!has_xy[gc_e]] else gc_e
+        n_eco <- if (length(t_regs) > 0L) gc_no_xy[reg_v[gc_no_xy] %in% t_regs] else integer(0)
+        if (length(n_eco) == 0L && length(t_xy) == 0L && length(t_regs) > 0L) n_eco <- gc[reg_v[gc] %in% t_regs]
         near_g <- unique(c(n_eco, n_xy))
       }
       loc_rows <- c(focal_types, near_g)
@@ -379,12 +399,17 @@ compute_type_locality_ecological_control <- function(df, primary_env_vars = NULL
     tx_rows <- which(grp_vec == tx); elig_t <- tx_rows[is_type_georef_ok[tx_rows]]
     homo_t <- elig_t[is_homo_all[elig_t]]; het_t <- elig_t[!is_homo_all[elig_t]]
     q_tx <- tx_rows[is_quar_type[tx_rows]]; excl_ss <- c(q_tx, het_t)
+    clean_nt <- setdiff(tx_rows[is_anc_v[tx_rows]], c(elig_t, q_tx))
+    topo_t <- if (length(homo_t) == 0L && length(clean_nt) >= 2L) {
+      if (exists(".resolve_locus_classicus_topotype_rows", mode = "function")) .resolve_locus_classicus_topotype_rows(df, clean_nt, tx) else .fallback_topotype_rows_s05(df, clean_nt, tx)
+    } else integer(0)
     if (length(homo_t) > 0L) {
       pr_ss <- build_profile(tx_rows, homo_t, excl_rows = excl_ss)
       type_niche_status[homo_t] <- "Confirmed_Type_Control"; type_niche_audit_status[homo_t] <- "Confirmed_Type_Control"
+    } else if (length(topo_t) >= 2L) {
+      pr_ss <- build_profile(tx_rows, topo_t, excl_rows = excl_ss); pr_ss$anchor_type_rows <- integer(0)
     } else if (length(het_t) > 0L) {
-      clean_nt <- setdiff(tx_rows[is_anc_v[tx_rows]], c(elig_t, q_tx))
-      pr_ss <- if (length(clean_nt) >= 3L) build_profile(tx_rows, integer(0), excl_rows = excl_ss) else build_profile(tx_rows, het_t, excl_rows = q_tx)
+      pr_ss <- if (length(clean_nt) >= 2L) build_profile(tx_rows, integer(0), excl_rows = excl_ss) else build_profile(tx_rows, het_t, excl_rows = q_tx)
     } else pr_ss <- build_profile(tx_rows, integer(0), excl_rows = q_tx)
 
     if (length(het_t) > 0L) {
@@ -400,7 +425,6 @@ compute_type_locality_ecological_control <- function(df, primary_env_vars = NULL
           }
         }
       }
-      if (length(homo_t) == 0L && any(!is_het_audit[het_t])) pr_ss <- build_profile(tx_rows, het_t[!is_het_audit[het_t]], excl_rows = c(q_tx, het_t[is_het_audit[het_t]]))
     }
     type_profiles[[tx]] <- pr_ss
   }

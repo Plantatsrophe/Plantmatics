@@ -192,6 +192,32 @@ df_cline <- data.frame(
 )
 res_cline <- apply_taxonomic_decision_matrix(df_cline, intraspecific_mode = TRUE, gmm_two_delta_bic = 16.0, opts = list(demo = TRUE))
 
+# 7. K=1 bimodal Phenological_Ecotype, Step 05 non-modal ecotype_regime Subspecies_Ecotype, & genetic_cluster G2 gdi propagation
+df_k1_bi <- df_cline
+df_k1_bi$gmm_cluster <- rep(1L, 12L); df_k1_bi$edaphic_niche_overlap_d <- rep(0.80, 12L); df_k1_bi$edaphic_z_score <- rep(0.5, 12L)
+df_k1_bi$delta_doy_resid <- c(rep(0.0, 10L), 38.0, -38.0); df_k1_bi$allochronic_bimodality_delta_bic <- rep(9.5, 12L)
+df_k1_bi$morphometric_outlier_flag <- c(rep(FALSE, 10L), TRUE, TRUE)
+res_k1_bi <- apply_taxonomic_decision_matrix(df_k1_bi, intraspecific_mode = TRUE, gmm_two_delta_bic = 0.0, opts = list(demo = TRUE))
+
+df_eco_r <- df_cline
+df_eco_r$gmm_cluster <- rep(1L, 12L); df_eco_r$morphometric_outlier_flag <- rep(FALSE, 12L)
+df_eco_r$ecotype_regime <- c(rep("Ecotype_1_lithic_outcrop_index_Low", 8L), rep("Ecotype_2_lithic_outcrop_index_High", 4L))
+df_eco_r$edaphic_z_score <- c(rep(0.4, 8L), rep(2.7, 4L)); df_eco_r$edaphic_niche_overlap_d <- c(rep(0.85, 8L), rep(0.35, 4L))
+res_eco_r <- apply_taxonomic_decision_matrix(df_eco_r, intraspecific_mode = TRUE, gmm_two_delta_bic = 0.0, opts = list(demo = TRUE))
+
+df_gcl_p <- data.frame(
+  catalogNumber = sprintf("GCLP_%02d", 1:7), species_standardized = rep("Packera dubia", 7L), determiner_tier = rep("Tier_1_Gold", 7L),
+  morph_tier_source = rep("Basal_Rosette", 7L), basal_leaf_count = rep(3L, 7L),
+  decimalLatitude = c(34.10, 34.11, 34.12, 34.13, 32.20, 32.205, 32.208), decimalLongitude = c(-80.50, -80.51, -80.52, -80.53, -85.10, -85.105, -85.108),
+  coordinateUncertaintyInMeters = rep(120.0, 7L), PC1 = c(-1.0, -0.9, -1.1, -0.95, 1.2, 1.15, 1.18), PC2 = c(0.1, -0.1, 0.2, -0.15, 0.3, 0.25, 0.28),
+  geno_linkage_tier = c(rep("G1_Direct_Voucher", 6L), ""), geno_quality_pass = c(rep(1L, 6L), NA_integer_),
+  is_geno_admixed = c(rep(0L, 6L), NA_integer_), geno_predicted_taxon = c(rep("Packera dubia", 6L), NA_character_),
+  geno_posterior_prob = c(rep(0.95, 6L), NA_real_), geno_margin = c(rep(0.85, 6L), NA_real_),
+  genetic_cluster = c(rep("Geno_Cluster_1", 4L), rep("Geno_Cluster_2", 2L), NA_character_),
+  coalescent_gdi = c(rep(0.11, 4L), rep(0.82, 2L), NA_real_), stringsAsFactors = FALSE
+)
+res_gcl_p <- run_step07_genomic_propagation(df_gcl_p)
+
 write_json(list(
   gs_merged1 = gs_merged1, gs_lrt_fail = gs_lrt_fail, gs_valid2 = gs_valid2,
   bimod_k2_call = as.character(res_bimod$taxonomic_status_call[7L]),
@@ -214,7 +240,14 @@ write_json(list(
   dup_k2_sub = as.character(res_dup_blk$taxonomic_treatment_subtype[7L]),
   cline_nonclinal = isTRUE(res_cline$cryptic_non_clinal_pass[7L]),
   cline_k2_sub = as.character(res_cline$taxonomic_treatment_subtype[7L]),
-  cline_k2_rat = as.character(res_cline$synthesis_rationale[7L])
+  cline_k2_rat = as.character(res_cline$synthesis_rationale[7L]),
+  k1_bi_call = as.character(res_k1_bi$taxonomic_status_call[11L]),
+  k1_bi_rat = as.character(res_k1_bi$synthesis_rationale[11L]),
+  eco_r_call = as.character(res_eco_r$taxonomic_status_call[10L]),
+  eco_r_rat = as.character(res_eco_r$synthesis_rationale[10L]),
+  gcl_p_tier = as.character(res_gcl_p$genomic_propagation_tier[7L]),
+  gcl_p_cl = as.character(res_gcl_p$genetic_cluster[7L]),
+  gcl_p_gdi = as.numeric(res_gcl_p$cluster_propagated_gdi[7L])
 ), out_json, auto_unbox = TRUE, na = "null")
 """
 
@@ -271,6 +304,12 @@ class TestStep07CrypticAndCohesion(unittest.TestCase):
         self.assertFalse(bool(r["cline_nonclinal"]))
         self.assertEqual(r["cline_k2_sub"], "Subspecies_Ecotype")
         self.assertIn("Allopatric Spatial Cline", r["cline_k2_rat"])
+        self.assertEqual(r["k1_bi_call"], "Phenological_Ecotype")
+        self.assertIn("Bimodal Allochronic Shift", r["k1_bi_rat"])
+        self.assertEqual(r["eco_r_call"], "Subspecies_Ecotype")
+        self.assertIn("Step 05 Ecological Regime: Ecotype_2_lithic_outcrop_index_High", r["eco_r_rat"])
+        self.assertEqual((r["gcl_p_tier"], r["gcl_p_cl"]), ("G2_Conditional_Deme_Hull", "Geno_Cluster_2"))
+        self.assertAlmostEqual(float(r["gcl_p_gdi"]), 0.82, places=3)
 
 
 if __name__ == "__main__":

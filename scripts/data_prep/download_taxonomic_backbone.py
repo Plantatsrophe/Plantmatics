@@ -24,6 +24,7 @@ from scripts.core.db import (
 )
 from scripts.core.epa_ecoregions import _CANADIAN_PROV_ABBR_TO_FULL, _US_STATE_ABBR_TO_FULL, _normalize_us_state_name
 from scripts.core.io_utils import atomic_write_csv_rows, atomic_write_text, default_http_get, to_text
+from scripts.core.step01_concept_authority_utils import CURATED_LOCUS_CLASSICUS_BY_TAXON
 
 PROFILE_CSV_NAME = "public_taxon_backbone_profiles.csv"
 RANGE_CSV_NAME = "public_natureserve_subnational_ranges.csv"
@@ -253,6 +254,7 @@ def fetch_col_powo_backbone(target_genus: str, http_get_fn: Optional[Callable[[s
     return {
         sp: {
             **{k: v for k, v in rec.items() if not k.startswith("_")},
+            "locus_classicus_text": rec.get("locus_classicus_text") or CURATED_LOCUS_CLASSICUS_BY_TAXON.get(sp),
             "homotypic_synonyms_json": json.dumps(sorted(rec["_homotypic"]), ensure_ascii=False),
             "heterotypic_synonyms_json": json.dumps(sorted(rec["_heterotypic"]), ensure_ascii=False),
             "tdwg_native_codes_json": json.dumps(sorted(rec["_tdwg_native"]), ensure_ascii=False),
@@ -376,6 +378,9 @@ def sync_backbone_csvs_to_db(taxonomy_dir: Path, db_path: Union[str, Path], demo
     if demo or os.environ.get("PLANTMATICS_DEMO_MODE") == "1" or os.environ.get("PACKERA_DEMO_MODE") == "1":
         return {"taxon_backbone_profiles": 0, "natureserve_subnational_ranges": 0}
     prof_rows, range_rows = _read_csv_safe(taxonomy_dir / PROFILE_CSV_NAME), _read_csv_safe(taxonomy_dir / RANGE_CSV_NAME)
+    for pr in prof_rows:
+        if not str(pr.get("locus_classicus_text") or "").strip() and pr.get("species_standardized") in CURATED_LOCUS_CLASSICUS_BY_TAXON:
+            pr["locus_classicus_text"] = CURATED_LOCUS_CLASSICUS_BY_TAXON[pr["species_standardized"]]
     conn = get_db_connection(db_path=db_path, init_schema=True, workspace_root=PROJECT_ROOT)
     try:
         return {

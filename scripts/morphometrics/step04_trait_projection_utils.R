@@ -16,7 +16,7 @@ mask_uncalibrated_step04_mm_cols <- function(df) {
   df
 }
 
-prepare_step04_standardized_features <- function(closed_df, pca_cols, outline_only = FALSE) {
+prepare_step04_standardized_features <- function(closed_df, pca_cols, outline_only = FALSE, intraspecific_mode = FALSE) {
   pca_cols <- intersect(as.character(pca_cols), names(closed_df))
   if (is.null(closed_df) || !is.data.frame(closed_df) || nrow(closed_df) == 0L) return(list(df = closed_df, gmm_cols = pca_cols, cda_cols = pca_cols))
   n <- nrow(closed_df); closed_df <- mask_uncalibrated_step04_mm_cols(closed_df)
@@ -82,7 +82,27 @@ prepare_step04_standardized_features <- function(closed_df, pca_cols, outline_on
 
   pc_cols <- grep("^PC[0-9]+$", pca_cols, value = TRUE)
   if (length(pc_cols) >= 2L) {
-    gmm_cols <- unique(c(pc_cols, intersect(c("ECT_PC1_std", "ECT_PC2_std", "ECT_PC3_std"), dis_var)))
+    if (isTRUE(intraspecific_mode)) {
+      intra_pool <- c("ECT_PC1_std", "ECT_PC2_std", "ECT_PC3_std", "petiole_to_blade_ratio_std",
+                      "margin_tooth_acuteness_std", "basal_cordate_index_std", "apex_angle_deg_std",
+                      "base_angle_deg_std", "blade_cie_l_q85_sheet_delta_std", "q25_solidity_std")
+      intra_cands <- intersect(intra_pool, dis_var)
+      intra_cands <- intra_cands[vapply(intra_cands, function(sc) {
+        vv <- round(suppressWarnings(as.numeric(closed_df[[sc]][ref_idx])), 5); vv <- vv[is.finite(vv)]
+        length(vv) >= 5L && ((max(tabulate(match(vv, unique(vv)))) / length(vv)) <= 0.25)
+      }, logical(1L))]
+      if (length(intra_cands) > 0L && exists("screen_gmm_point_mass_columns", mode = "function")) {
+        X_pm <- as.matrix(closed_df[, c(pc_cols[1:2], intra_cands), drop = FALSE])
+        pm_k <- screen_gmm_point_mass_columns(X_pm, ref_mask = ref_mask, max_tie_frac = 0.25)
+        intra_cands <- intersect(intra_cands, if (is.character(pm_k)) pm_k else colnames(X_pm)[pm_k])
+      }
+      if (length(intra_cands) > 0L && exists("prune_collinear_dissection_scalars", mode = "function")) {
+        intra_cands <- prune_collinear_dissection_scalars(closed_df, base_cols = pc_cols, cand_scalars = intra_cands, active_mask = ref_mask, group_vec = NULL, max_r = 0.75)
+      }
+      gmm_cols <- unique(c(pc_cols, intra_cands))
+    } else {
+      gmm_cols <- unique(c(pc_cols, intersect(c("ECT_PC1_std", "ECT_PC2_std", "ECT_PC3_std"), dis_var)))
+    }
   } else {
     gmm_cand <- intersect(c("solidity_std", "q25_solidity_std", "dissection_index_std", "ect_lobe_complexity_std"), dis_var)
     gmm_extra <- if (length(gmm_cand) > 0L && exists("prune_collinear_dissection_scalars", mode = "function")) {

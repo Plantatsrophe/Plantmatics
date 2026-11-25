@@ -122,12 +122,19 @@ tc_hom <- compute_type_locality_ecological_control(df_base, primary_env_vars = e
 tc_het <- compute_type_locality_ecological_control(df_het, primary_env_vars = ev_c1, primary_edaph_vars = c("fine_soil_ph", "fine_bedrock_depth_cm"))
 df_het$is_heterotypic_type_audit <- tc_het$is_heterotypic_type_audit; rf_het <- compute_spatial_rf_mems(df_het, ev_c1, n_trees = 25L)
 cons_het <- execute_crossmodal_consensus(df_het, rf_res = rf_het, primary_env_vars = ev_c1, primary_edaph_vars = c("fine_soil_ph", "fine_bedrock_depth_cm"), primary_clim_vars = c("bio1_temp_mean", "bio12_precip_annual"))
+df_no_homo <- df_het[14:25, , drop = FALSE]; df_no_homo$stateProvince <- c(rep("South Carolina", 4L), rep("Georgia", 7L), "Alabama")
+df_no_homo$county <- c(rep("Kershaw County", 4L), rep("Bibb", 7L), "Houston"); df_no_homo$regional_group <- "Southeastern_Plains"
+df_no_homo$decimalLatitude[1:4] <- 34.45; df_no_homo$decimalLongitude[1:4] <- -80.58; df_no_homo$latitude[1:4] <- 34.45; df_no_homo$longitude[1:4] <- -80.58
+df_no_homo$decimalLatitude[5:11] <- 32.80; df_no_homo$decimalLongitude[5:11] <- -83.63; df_no_homo$latitude[5:11] <- 32.80; df_no_homo$longitude[5:11] <- -83.63
+df_no_homo$fine_soil_ph[1:4] <- c(4.8, 4.9, 5.0, 4.9); df_no_homo$fine_soil_ph[5:11] <- 6.4
+tc_nh <- compute_type_locality_ecological_control(df_no_homo, primary_env_vars = ev_c1, primary_edaph_vars = c("fine_soil_ph", "fine_bedrock_depth_cm"))
 res$c2 <- list(
   hom_z_shift = max(abs(tc_hom$type_edaphic_z_score[13:24] - tc_het$type_edaphic_z_score[13:24]), na.rm = TRUE), hom_holo_z = as.numeric(tc_het$type_edaphic_z_score[13L]),
   het_vs_hom_z = as.numeric(tc_het$type_edaphic_z_score[25L]), tc_het_st = as.character(tc_het$type_niche_status[25L]), tc_het_hint = as.character(tc_het$rf_prediction_source_hint[25L]),
   het_rf_src = as.character(rf_het$rf_prediction_source[25L]), het_audit_flag = isTRUE(tc_het$is_heterotypic_type_audit[25L]), het_conf_flag = isTRUE(cons_het$multimodal_conflict_flag[25L]),
   bas_hom_a = as.character(cons_het$nearest_type_niche_basionym[1L]), bas_hom_d = as.character(cons_het$nearest_type_niche_basionym[13L]), bas_het = as.character(cons_het$nearest_type_niche_basionym[25L]),
-  bas_z_het = as.numeric(cons_het$nearest_type_basionym_edaphic_z[25L]), bas_z_hom = as.numeric(cons_het$nearest_type_basionym_edaphic_z[13L])
+  bas_z_het = as.numeric(cons_het$nearest_type_basionym_edaphic_z[25L]), bas_z_hom = as.numeric(cons_het$nearest_type_basionym_edaphic_z[13L]),
+  nh_topo_ph = as.numeric(tc_nh$type_niche_profiles[["Packera dubia"]]$mu[["fine_soil_ph"]]), nh_het_st = as.character(tc_nh$type_niche_status[12L])
 )
 
 # 3. Pedology, hardpan ignore, smooth indices, point-mass screening, & coastal/Canadian NA cache
@@ -188,13 +195,22 @@ ss_calls <- 0L; mock_ss_na <- function(d_in, cache_dir = NULL, batch_size = 75, 
 df_can <- data.frame(catalogNumber = c("COAST_NA", "CAN_NA"), latitude = c(34.2104, 46.5000), longitude = c(-77.8868, -75.0000), coordinateUncertaintyInMeters = 100.0, stringsAsFactors = FALSE); can_csv <- file.path(can_env, "fine_grain_edaphic_cache.csv")
 load_and_update_fine_grain_cache(df_can, env_dir = can_env, demo = FALSE, query_ssurgo_fn = mock_ss_na, cache_path = can_csv); calls_1 <- ss_calls
 msg_can2 <- capture.output({ load_and_update_fine_grain_cache(df_can, env_dir = can_env, demo = FALSE, query_ssurgo_fn = mock_ss_na, cache_path = can_csv) }, type = "message")
+set.seed(503L); is_out36 <- c(rep(FALSE, 30L), rep(TRUE, 6L))
+res_out <- resolve_analysis_group(data.frame(
+  catalogNumber = sprintf("OUT_%02d", 1:36), species_standardized = "Packera dubia", determiner_tier = "Tier_1_Gold",
+  latitude = seq(33.5, 36.5, length.out = 36L), longitude = seq(-81.5, -78.5, length.out = 36L), coordinateUncertaintyInMeters = 120.0,
+  lithic_outcrop_index = ifelse(is_out36, runif(36L, 0.72, 0.92), runif(36L, 0.05, 0.22)),
+  fine_soil_ph = ifelse(is_out36, rnorm(36L, 4.5, 0.22), rnorm(36L, 6.2, 0.35)),
+  summer_moisture_deficit_idx = ifelse(is_out36, rnorm(36L, 2.4, 0.25), rnorm(36L, 0.6, 0.30)),
+  topo_slope_deg = ifelse(is_out36, rnorm(36L, 18.0, 2.0), rnorm(36L, 4.0, 1.5)), stringsAsFactors = FALSE
+), intraspecific_mode = TRUE)
 res$c3 <- list(
   rion_pct = as.numeric(agg_ss$ssurgo_rock_outcrop_pct[1L]), lou_pct = as.numeric(agg_ss$ssurgo_rock_outcrop_pct[2L]), wake_out_pct = as.numeric(agg_ss$ssurgo_rock_outcrop_pct[3L]), wake_lith_pct = as.numeric(agg_ss$ssurgo_lithic_series_pct[3L]),
   excl_ro = !("ssurgo_rock_outcrop_pct" %in% cand_ex), excl_aws = !("ssurgo_aws_0_50cm" %in% cand_ex), keep_ph = "fine_soil_ph" %in% cand_ex,
   hp_sol_bd = as.numeric(hp_sol$fine_bedrock_depth_cm[1L]), hp_buf_bd = as.numeric(hp_buf$min_bedrock_depth_buffer_cm[1L]),
   loi_v_max = max(df_loi$lithic_outcrop_index), loi_r_max = max(r_loi_pts, na.rm = TRUE), loi_formula_err = max(abs(df_loi$lithic_outcrop_index - exp_loi)), loi_vr_err = max(abs(df_loi$lithic_outcrop_index - r_loi_pts), na.rm = TRUE),
   wsi_formula_err = max(abs(df_loi$wetland_seepage_index - exp_wsi)), pm_dropped_bd = !("fine_bedrock_depth_cm" %in% pm_kept) && ("fine_soil_ph" %in% pm_kept),
-  pan_grps = unique(as.character(res_pan$analysis_group)), can_calls_1 = as.integer(calls_1), can_calls_2 = as.integer(ss_calls - calls_1), can_zero_refresh = any(grepl("0 coordinates requiring refresh", msg_can2, fixed = TRUE))
+  pan_grps = unique(as.character(res_pan$analysis_group)), out_n_grps = length(unique(as.character(res_out$ecotype_regime))), can_calls_1 = as.integer(calls_1), can_calls_2 = as.integer(ss_calls - calls_1), can_zero_refresh = any(grepl("0 coordinates requiring refresh", msg_can2, fixed = TRUE))
 )
 
 # 4. Haversine ocean-box exclusion, fold-safe SDM CV, fruiting gate, allochronic bimodality, & R SQLite persist
@@ -215,10 +231,10 @@ sdm_sc <- suppressWarnings(fit_and_project_maxent_sdm_maps(data.frame(
 ), NULL, empty_env, file.path(tmp_root, "sdm_sc"), kept_vars = c("bio1_temp_mean", "bio1_dup", "bio12_precip_annual", "fine_bedrock_depth_cm"), focal_taxon = "Packera aurea", demo = FALSE))
 lat_a <- seq(33.0, 37.5, length.out = 12L)
 ph_anth <- compute_phenological_anomalies(data.frame(
-  catalogNumber = c(sprintf("PK_%02d", 1:12), "FR_DOM_01", "FR_DOM_02"), species_standardized = "Packera dubia", determiner_tier = "Tier_1_Gold",
-  decimalLatitude = c(lat_a, 35.0, 35.2), decimalLongitude = c(seq(-81.5, -78.5, length.out = 12L), -80.0, -79.8), doy = c(round(95.0 + 4.0 * (lat_a - 33.0)), 195.0, 198.0),
-  n_anthesis = c(rep(8L, 12L), 1L, 1L), n_fruiting = c(rep(1L, 12L), 25L, 25L), total_capitula = c(rep(9L, 12L), 26L, 26L),
-  voucher_phenological_state = c(rep("Peak_Anthesis", 12L), "anthesis", "anthesis"), reproductiveCondition = c(rep("fl", 12L), "fl; fr", "fl; fr"), stringsAsFactors = FALSE
+  catalogNumber = c(sprintf("PK_%02d", 1:12), "FR_DOM_01", "FR_DOM_02", "ST_ZERO_01", "VG_ZERO_02"), species_standardized = "Packera dubia", determiner_tier = "Tier_1_Gold",
+  decimalLatitude = c(lat_a, 35.0, 35.2, 34.8, 35.1), decimalLongitude = c(seq(-81.5, -78.5, length.out = 12L), -80.0, -79.8, -80.2, -79.9), doy = c(round(95.0 + 4.0 * (lat_a - 33.0)), 195.0, 198.0, 108.0, 112.0),
+  n_anthesis = c(rep(8L, 12L), 1L, 1L, 0L, 0L), n_fruiting = c(rep(1L, 12L), 25L, 25L, 0L, 0L), total_capitula = c(rep(9L, 12L), 26L, 26L, 0L, 0L),
+  voucher_phenological_state = c(rep("Peak_Anthesis", 12L), "anthesis", "anthesis", "sterile", "vegetative"), reproductiveCondition = c(rep("fl", 12L), "fl; fr", "fl; fr", "", ""), stringsAsFactors = FALSE
 ), demo = FALSE)
 set.seed(505L); bm_res <- test_allochronic_bimodality_von_mises(c(rnorm(20L, -30.0, 4.0), rnorm(20L, 30.0, 4.0))); um_res <- test_allochronic_bimodality_von_mises(rnorm(40L, 0.0, 5.0), weights = rep(1.0, 40L))
 Sys.setenv(PLANTMATICS_DB_PATH = db_path, PACKERA_DB_PATH = db_path, RUN_ID = "run_s05_clarity_r")
@@ -233,6 +249,7 @@ res$c4 <- list(
   bg_n = nrow(bg_oc$coords), bg_all_land = all(bg_oc$coords[, 1L] <= -76.5), bg_max_km = as.numeric(max_near_km), sdm_auc_ens = as.numeric(sdm_sc$performance$AUC_Block_Ensemble[1L]),
   has_adw = "anthesis_dominance_weight" %in% names(ph_anth$df), has_hresid = "hopkins_adjusted_doy_resid" %in% names(ph_anth$df),
   fr_ver = as.logical(ph_anth$df$is_verified_anthesis[13:14]), pk_ver = all(as.logical(ph_anth$df$is_verified_anthesis[1:12])),
+  st_ver = as.logical(ph_anth$df$is_verified_anthesis[15:16]), st_adw = as.numeric(ph_anth$df$anthesis_dominance_weight[15:16]), st_afs = as.character(ph_anth$df$anthesis_filter_status[15:16]),
   fr_adw = as.numeric(ph_anth$df$anthesis_dominance_weight[13:14]), pk_adw_min = min(as.numeric(ph_anth$df$anthesis_dominance_weight[1:12])),
   anth_base_n = as.integer(ph_anth$baseline$n), hresid_fin = all(is.finite(as.numeric(ph_anth$df$hopkins_adjusted_doy_resid[1:12]))),
   bm_dbic = as.numeric(bm_res$allochronic_bimodality_delta_bic), bm_ashman = as.numeric(bm_res$ashman_d), um_dbic = as.numeric(um_res$allochronic_bimodality_delta_bic), ok_r_sql = isTRUE(ok_r_sql)
@@ -285,6 +302,7 @@ class TestStep05TaxonomicClarity(unittest.TestCase):
         self.assertTrue(bool(c2["het_audit_flag"]) and bool(c2["het_conf_flag"]))
         self.assertEqual((str(c2["bas_hom_a"]), str(c2["bas_hom_d"]), str(c2["bas_het"])), ("Senecio aureus", "Cineraria dubia", "Senecio alabamensis"))
         self.assertTrue(_is_finite(c2["bas_z_het"]) and float(c2["bas_z_het"]) < 1.0 and _is_finite(c2["bas_z_hom"]))
+        self.assertTrue(float(c2["nh_topo_ph"]) < 5.3 and str(c2["nh_het_st"]) == "Type_Synonymy_Candidate")
 
     @unittest.skipIf(SKIP_R_COND, SKIP_R_REASON)
     def test_03_pedology_layer_hygiene_smooth_indices_point_mass_and_cache(self) -> None:
@@ -295,6 +313,7 @@ class TestStep05TaxonomicClarity(unittest.TestCase):
         self.assertAlmostEqual(float(c3["hp_sol_bd"]), 175.0, places=1); self.assertAlmostEqual(float(c3["hp_buf_bd"]), 175.0, places=1)
         self.assertTrue(float(c3["loi_v_max"]) <= 1.0 and float(c3["loi_r_max"]) <= 1.0 and float(c3["loi_formula_err"]) < 1e-3 and float(c3["loi_vr_err"]) < 0.04 and float(c3["wsi_formula_err"]) < 1e-3)
         self.assertTrue(bool(c3["pm_dropped_bd"]) and (c3["pan_grps"] if isinstance(c3["pan_grps"], list) else [c3["pan_grps"]]) == ["Packera aurea"])
+        self.assertEqual(int(c3["out_n_grps"]), 2)
         self.assertTrue((int(c3["can_calls_1"]), int(c3["can_calls_2"])) == (1, 0) and bool(c3["can_zero_refresh"]))
 
     @unittest.skipIf(SKIP_R_COND, SKIP_R_REASON)
@@ -303,6 +322,7 @@ class TestStep05TaxonomicClarity(unittest.TestCase):
         self.assertTrue(int(c4["bg_n"]) >= 20 and bool(c4["bg_all_land"]) and float(c4["bg_max_km"]) <= 260.0 and _is_finite(c4["sdm_auc_ens"]) and 0.0 <= float(c4["sdm_auc_ens"]) < 0.78)
         self.assertTrue(bool(c4["has_adw"]) and bool(c4["has_hresid"]) and bool(c4["pk_ver"]) and bool(c4["hresid_fin"]) and int(c4["anth_base_n"]) == 12)
         self.assertTrue([bool(x) for x in c4["fr_ver"]] == [False, False] and all(float(w) < 0.15 for w in c4["fr_adw"]) and float(c4["pk_adw_min"]) >= 0.80)
+        self.assertEqual(([bool(x) for x in c4["st_ver"]], [float(w) for w in c4["st_adw"]], [str(s) for s in c4["st_afs"]]), ([False, False], [0.0, 0.0], ["Excluded_Sterile", "Excluded_Sterile"]))
         self.assertTrue(_is_finite(c4["bm_dbic"]) and float(c4["bm_dbic"]) > 0.0 and float(c4["bm_ashman"]) > 2.0 and _is_finite(c4["um_dbic"]) and float(c4["um_dbic"]) <= 2.0)
 
     def test_05_sqlite_roundtrip_python_and_r_step05_clarity_columns(self) -> None:

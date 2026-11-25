@@ -226,15 +226,37 @@ def run_coalescent_delimitation(
     gdi_csv, gdi_samp_csv = out_dir / "coalescent_gdi_delimitation.csv", out_dir / "coalescent_gdi_samples.csv"
     svdq_csv, model_sel_csv, adequacy_csv = out_dir / "svdquartets_support.csv", out_dir / "substitution_model_selection.csv", out_dir / "coalescent_model_adequacy.csv"
 
-    def _apply_intraspecific_demes(gdi_df: pd.DataFrame, sids_in: Sequence[str], taxa_in: Sequence[str], diff_blk: np.ndarray, call_blk: np.ndarray, within_het: np.ndarray, within_call: np.ndarray, nb: int, smod: str, bpp_p: Optional[Path]) -> pd.DataFrame:
-        if not intraspecific_mode or not focal_taxon or not cluster_map: return gdi_df
+    def _apply_intraspecific_demes(
+        gdi_df: pd.DataFrame, gdi_s_df: pd.DataFrame, adeq_df: pd.DataFrame,
+        sids_in: Sequence[str], taxa_in: Sequence[str], diff_blk: np.ndarray, call_blk: np.ndarray,
+        within_het: np.ndarray, within_call: np.ndarray, nb: int, smod: str, bpp_p: Optional[Path],
+    ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+        if not intraspecific_mode or not focal_taxon or not cluster_map:
+            return gdi_df, gdi_s_df, adeq_df
         f_low = focal_taxon.strip().lower()
         deme_lbls = [cluster_map.get(sid, tx) if tx.strip().lower() == f_low else tx for sid, tx in zip(sids_in, taxa_in)]
         focal_demes = {lbl for lbl, tx in zip(deme_lbls, taxa_in) if tx.strip().lower() == f_low and lbl.startswith("Geno_Cluster_")}
-        if len(focal_demes) < 2: return gdi_df
-        d_df, _ = compute_coalescent_gdi_delimitation(sids_in, deme_lbls, diff_blk, call_blk, within_het, within_call, n_boot=nb, substitution_model=smod, bpp_out_path=bpp_p)
-        d_sub = d_df[d_df["taxon"].isin(focal_demes)] if not d_df.empty else d_df
-        return pd.concat([gdi_df, d_sub], ignore_index=True) if not d_sub.empty else gdi_df
+        if len(focal_demes) < 2:
+            return gdi_df, gdi_s_df, adeq_df
+        d_df, d_s_df = compute_coalescent_gdi_delimitation(sids_in, deme_lbls, diff_blk, call_blk, within_het, within_call, n_boot=nb, substitution_model=smod, bpp_out_path=bpp_p)
+        d_adeq = d_df.attrs.pop("adequacy_df", pd.DataFrame())
+        base_clean = gdi_df.copy(); base_clean.attrs.clear()
+        d_sub = d_df[d_df["taxon"].isin(focal_demes)].copy() if not d_df.empty else pd.DataFrame()
+        d_sub.attrs.clear()
+        out_gdi = pd.concat([base_clean, d_sub], ignore_index=True) if not d_sub.empty else base_clean
+        ad_clean = adeq_df.copy(); ad_clean.attrs.clear()
+        ad_sub = d_adeq[d_adeq["taxon"].isin(focal_demes)].copy() if not d_adeq.empty else pd.DataFrame()
+        ad_sub.attrs.clear()
+        out_adeq = pd.concat([ad_clean, ad_sub], ignore_index=True) if not ad_sub.empty else ad_clean
+        out_s = gdi_s_df.copy(); out_s.attrs.clear()
+        if not d_s_df.empty and not out_s.empty:
+            d_s_map = {str(r["genetic_sample_id"]): r for _, r in d_s_df.iterrows() if str(r.get("lineage_taxon") or "") in focal_demes}
+            for r_i, s_id in enumerate(out_s["genetic_sample_id"].astype(str).tolist()):
+                if (dr := d_s_map.get(s_id)) is not None:
+                    for col_s in ("lineage_taxon", "nearest_sister_taxon", "coalescent_gdi", "gdi_ci_low", "gdi_ci_high", "gdi_classification", "bpp_introgression_bf"):
+                        if col_s in out_s.columns and col_s in dr:
+                            out_s.at[r_i, col_s] = dr[col_s]
+        return out_gdi, out_s, out_adeq
 
     if align_cands:
         primary_path = align_cands[0]
@@ -266,8 +288,8 @@ def run_coalescent_delimitation(
             sids, taxa_labels, diff_blk, call_blk, within_het, within_call,
             n_boot=eff_n_boot, substitution_model=best_model, bpp_out_path=out_dir / "bpp_msci_out.txt",
         )
-        adequacy_df = gdi_df.attrs.get("adequacy_df", pd.DataFrame())
-        gdi_df = _apply_intraspecific_demes(gdi_df, sids, taxa_labels, diff_blk, call_blk, within_het, within_call, eff_n_boot, best_model, out_dir / "bpp_msci_out.txt")
+        adequacy_df = gdi_df.attrs.pop("adequacy_df", pd.DataFrame())
+        gdi_df, gdi_s_df, adequacy_df = _apply_intraspecific_demes(gdi_df, gdi_s_df, adequacy_df, sids, taxa_labels, diff_blk, call_blk, within_het, within_call, eff_n_boot, best_model, out_dir / "bpp_msci_out.txt")
         gdi_df["gdi_source"] = gdi_source
         gdi_s_df = _expand_gdi_samples(gdi_s_df, group_members, orig_sids)
         gdi_s_df["gdi_source"] = gdi_source
@@ -310,8 +332,8 @@ def run_coalescent_delimitation(
             w_call[bi] = np.sum(ok_f, axis=1) * site_scale
             w_het[bi] = np.sum(2.0 * xs * omx, axis=1)
         gdi_df, gdi_s_df = compute_coalescent_gdi_delimitation(sids, taxa_labels, diff_blk, call_blk, w_het, w_call, n_boot=eff_n_boot)
-        adequacy_df = gdi_df.attrs.get("adequacy_df", pd.DataFrame())
-        gdi_df = _apply_intraspecific_demes(gdi_df, sids, taxa_labels, diff_blk, call_blk, w_het, w_call, eff_n_boot, "JC69", None)
+        adequacy_df = gdi_df.attrs.pop("adequacy_df", pd.DataFrame())
+        gdi_df, gdi_s_df, adequacy_df = _apply_intraspecific_demes(gdi_df, gdi_s_df, adequacy_df, sids, taxa_labels, diff_blk, call_blk, w_het, w_call, eff_n_boot, "JC69", None)
         gdi_df["gdi_source"] = gdi_source
         gdi_s_df = _expand_gdi_samples(gdi_s_df, group_members, orig_sids)
         gdi_s_df["gdi_source"] = gdi_source

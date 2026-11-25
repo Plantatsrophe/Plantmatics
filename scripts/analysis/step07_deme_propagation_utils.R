@@ -181,7 +181,7 @@ if (!exists(".is_step07_centroid_coord", mode = "function")) {
       lat = la[ok], lon = lo[ok], taxon = tx[ok], prob = ifelse(is.finite(pr[ok]), pr[ok], 0.85),
       azonal = .pick_num_prop(tbl, "is_azonal_lithology")[ok], ploidy = .extract_known_ploidy_vec(tbl)[ok],
       ph = .pick_num_prop(tbl, "fine_soil_ph")[ok], doy = ifelse(anth_v[ok] & is.finite(doy_v[ok]), doy_v[ok], NA_real_),
-      cat = .pick_chr_prop(tbl, c("catalogNumber", "linked_catalog_number"), "")[ok], sid = .pick_chr_prop(tbl, "genetic_sample_id", "")[ok],
+      cat = .pick_chr_prop(tbl, c("catalogNumber", "linked_catalog_number"), "")[ok], sid = .pick_chr_prop(tbl, "genetic_sample_id", "")[ok], gcl = trimws(.pick_chr_prop(tbl, "genetic_cluster", ""))[ok],
       df_row = if (track_row) which(ok) else rep(NA_integer_, sum(ok)), stringsAsFactors = FALSE
     )
   }

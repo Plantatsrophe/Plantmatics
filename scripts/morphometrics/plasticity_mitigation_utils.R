@@ -245,102 +245,72 @@ residualize_ontogenetic_phenophase_plasticity <- function(
 }
 
 merge_plastic_gmm_components_ridgeline <- function(
-    X_eval,
-    X_core,
-    probs_eval,
-    probs_core,
-    intraspecific_mode = FALSE,
-    ridge_intraspecific_max = 0.45,
-    ridge_interspecific_max = 0.90
+    X_eval, X_core, probs_eval, probs_core,
+    intraspecific_mode = FALSE, ridge_intraspecific_max = 0.55, ridge_interspecific_max = 0.90
 ) {
   if (is.null(probs_eval) || !is.matrix(probs_eval) || ncol(probs_eval) < 2L) {
-    return(list(
-      best_k = 1L,
-      classification = rep(1L, nrow(X_eval)),
-      uncertainty = rep(0.0, nrow(X_eval)),
-      probs_eval = matrix(1.0, nrow = nrow(X_eval), ncol = 1L),
-      merged_any = FALSE
-    ))
+    return(list(best_k = 1L, classification = rep(1L, nrow(X_eval)), uncertainty = rep(0.0, nrow(X_eval)),
+                probs_eval = matrix(1.0, nrow = nrow(X_eval), ncol = 1L), merged_any = FALSE))
   }
-
-  Z_core <- as.matrix(probs_core)
-  Z_eval <- as.matrix(probs_eval)
-  p <- ncol(X_core)
-  merged_any <- FALSE
+  Z_core <- as.matrix(probs_core); Z_eval <- as.matrix(probs_eval); p <- ncol(X_core); merged_any <- FALSE
   ridge_thr <- if (isTRUE(intraspecific_mode)) as.numeric(ridge_intraspecific_max) else as.numeric(ridge_interspecific_max)
-
+  nk_0 <- colSums(Z_core, na.rm = TRUE); valid_0 <- which(nk_0 > 1e-6)
+  if (length(valid_0) < ncol(Z_core)) {
+    if (length(valid_0) == 0L) valid_0 <- 1L
+    Z_core <- sweep(Z_core[, valid_0, drop = FALSE], 1L, pmax(rowSums(Z_core[, valid_0, drop = FALSE]), 1e-12), "/")
+    Z_eval <- sweep(Z_eval[, valid_0, drop = FALSE], 1L, pmax(rowSums(Z_eval[, valid_0, drop = FALSE]), 1e-12), "/")
+    merged_any <- TRUE; nk_0 <- colSums(Z_core, na.rm = TRUE)
+  }
+  G_0 <- ncol(Z_core)
+  if (G_0 < 2L) {
+    return(list(best_k = 1L, classification = rep(1L, nrow(Z_eval)), uncertainty = rep(0.0, nrow(Z_eval)),
+                probs_eval = matrix(1.0, nrow = nrow(Z_eval), ncol = 1L), merged_any = merged_any))
+  }
+  # Precompute pairwise ridgelines on initial components so merging never chains inflated pooled covariances.
+  pis_0 <- nk_0 / sum(nk_0)
+  mus_0 <- lapply(seq_len(G_0), function(k) colSums(X_core * Z_core[, k]) / max(sum(Z_core[, k]), 1e-12))
+  Sigs_0 <- lapply(seq_len(G_0), function(k) {
+    wk <- Z_core[, k]; Xc_k <- sweep(X_core, 2L, mus_0[[k]], "-"); Sk <- crossprod(Xc_k * sqrt(wk)) / max(sum(wk), 1.0)
+    Sk + diag(0.02 * mean(diag(as.matrix(Sk))) + 1e-4, nrow = p, ncol = p)
+  })
+  nm_0 <- matrix(2L, nrow = G_0, ncol = G_0); rr_0 <- matrix(0.0, nrow = G_0, ncol = G_0)
+  for (j in seq_len(G_0 - 1L)) for (l in (j + 1L):G_0) {
+    rl <- .compute_ridgeline_valley_ratio(pis_0[j], mus_0[[j]], Sigs_0[[j]], pis_0[l], mus_0[[l]], Sigs_0[[l]])
+    nm_0[j, l] <- nm_0[l, j] <- as.integer(rl$n_modes); rr_0[j, l] <- rr_0[l, j] <- as.numeric(rl$ridge_ratio)
+  }
+  grps <- as.list(seq_len(G_0))
   repeat {
-    G_cur <- ncol(Z_core)
-    if (G_cur < 2L) break
-
-    nk <- colSums(Z_core, na.rm = TRUE)
-    valid_k <- which(nk > 1e-6)
-    if (length(valid_k) < G_cur) {
-      if (length(valid_k) == 0L) valid_k <- 1L
-      Z_core <- Z_core[, valid_k, drop = FALSE]
-      Z_eval <- Z_eval[, valid_k, drop = FALSE]
-      Z_core <- sweep(Z_core, 1L, pmax(rowSums(Z_core), 1e-12), "/")
-      Z_eval <- sweep(Z_eval, 1L, pmax(rowSums(Z_eval), 1e-12), "/")
-      merged_any <- TRUE
-      next
-    }
-
-    pis <- nk / sum(nk)
-    mus <- lapply(seq_len(G_cur), function(k) {
-      wk <- Z_core[, k]
-      colSums(X_core * wk) / max(sum(wk), 1e-12)
-    })
-    Sigs <- lapply(seq_len(G_cur), function(k) {
-      wk <- Z_core[, k]
-      Xc_k <- sweep(X_core, 2L, mus[[k]], "-")
-      Sk <- crossprod(Xc_k * sqrt(wk)) / max(sum(wk), 1.0)
-      Sk + diag(0.02 * mean(diag(as.matrix(Sk))) + 1e-4, nrow = p, ncol = p)
-    })
-
-    best_pair <- NULL
-    best_ratio <- -1.0
-
-    for (j in seq_len(G_cur - 1L)) {
-      for (l in (j + 1L):G_cur) {
-        rl <- .compute_ridgeline_valley_ratio(pis[j], mus[[j]], Sigs[[j]], pis[l], mus[[l]], Sigs[[l]])
-        should_merge <- (rl$n_modes <= 1L) || (rl$ridge_ratio >= ridge_thr)
-        if (should_merge && rl$ridge_ratio > best_ratio) {
-          best_ratio <- rl$ridge_ratio
-          best_pair <- c(j, l)
-        }
+    if (length(grps) < 2L) break
+    best_pair <- NULL; best_ratio <- -1.0
+    for (a in seq_len(length(grps) - 1L)) for (b in (a + 1L):length(grps)) {
+      nm_sub <- nm_0[grps[[a]], grps[[b]], drop = FALSE]; rr_sub <- rr_0[grps[[a]], grps[[b]], drop = FALSE]
+      pair_rr <- max(rr_sub)
+      if ((any(nm_sub <= 1L) || (pair_rr >= ridge_thr)) && (pair_rr > best_ratio)) {
+        best_ratio <- pair_rr; best_pair <- c(a, b)
       }
     }
-
     if (is.null(best_pair)) break
-
-    j_keep <- best_pair[1L]
-    l_drop <- best_pair[2L]
-    Z_core[, j_keep] <- Z_core[, j_keep] + Z_core[, l_drop]
-    Z_core <- Z_core[, -l_drop, drop = FALSE]
-    Z_eval[, j_keep] <- Z_eval[, j_keep] + Z_eval[, l_drop]
-    Z_eval <- Z_eval[, -l_drop, drop = FALSE]
+    grps[[best_pair[1L]]] <- c(grps[[best_pair[1L]]], grps[[best_pair[2L]]]); grps[[best_pair[2L]]] <- NULL
     merged_any <- TRUE
   }
-
-  best_k <- ncol(Z_eval)
-  cls_out <- if (best_k == 1L) rep(1L, nrow(Z_eval)) else as.integer(max.col(Z_eval, ties.method = "first"))
-  unc_out <- if (best_k == 1L) rep(0.0, nrow(Z_eval)) else round(pmax(0.0, 1.0 - apply(Z_eval, 1L, max)), 6)
-  list(
-    best_k = as.integer(best_k),
-    classification = cls_out,
-    uncertainty = unc_out,
-    probs_eval = Z_eval,
-    merged_any = merged_any
-  )
+  Z_out <- do.call(cbind, lapply(grps, function(idx) rowSums(Z_eval[, idx, drop = FALSE])))
+  best_k <- ncol(Z_out)
+  cls_out <- if (best_k == 1L) rep(1L, nrow(Z_out)) else as.integer(max.col(Z_out, ties.method = "first"))
+  unc_out <- if (best_k == 1L) rep(0.0, nrow(Z_out)) else round(pmax(0.0, 1.0 - apply(Z_out, 1L, max)), 6)
+  list(best_k = as.integer(best_k), classification = cls_out, uncertainty = unc_out, probs_eval = Z_out, merged_any = merged_any)
 }
 
-# Empirical Bayes institutional location-offset shrinkage accounting for biological taxon structure
+# Empirical Bayes institutional location-offset shrinkage accounting for biological taxon & ecoregion structure
 apply_eb_institution_batch_centering <- function(df, target_cols, min_inst_n = 10L, allow_shape_centering = FALSE) {
   if (!is.data.frame(df) || nrow(df) < 10L || !("institutionCode" %in% names(df))) return(df)
   cand_cols <- intersect(unique(as.character(target_cols)), names(df))
   if (length(cand_cols) == 0L) return(df)
   inst_all <- trimws(as.character(df$institutionCode))
   inst_all[is.na(df$institutionCode) | !nzchar(inst_all)] <- NA_character_
+  cent_all <- if ("is_centroid_or_inst_coord" %in% names(df)) {
+    cv_a <- df$is_centroid_or_inst_coord
+    if (is.logical(cv_a)) !is.na(cv_a) & cv_a else if (is.numeric(cv_a)) !is.na(cv_a) & cv_a != 0 else tolower(trimws(as.character(cv_a))) %in% c("true", "1", "t", "yes")
+  } else rep(FALSE, nrow(df))
   ref_mask <- !is.na(inst_all)
   if ("authority_weight" %in% names(df)) ref_mask <- ref_mask & !is.na(df$authority_weight) & (suppressWarnings(as.numeric(df$authority_weight)) > 0)
   if ("is_passive" %in% names(df)) ref_mask <- ref_mask & (is.na(df$is_passive) | !as.logical(df$is_passive))
@@ -349,18 +319,18 @@ apply_eb_institution_batch_centering <- function(df, target_cols, min_inst_n = 1
   if (sum(ref_mask, na.rm = TRUE) < 10L || length(unique(inst_all[ref_mask])) < 2L) return(df)
 
   is_regionally_confounded <- FALSE
-  inst_ref <- inst_all[ref_mask]
-  cent_ref <- if ("is_centroid_or_inst_coord" %in% names(df)) {
-    cv_c <- df$is_centroid_or_inst_coord[ref_mask]
-    if (is.logical(cv_c)) !is.na(cv_c) & cv_c else if (is.numeric(cv_c)) !is.na(cv_c) & cv_c != 0 else tolower(trimws(as.character(cv_c))) %in% c("true", "1", "t", "yes")
-  } else rep(FALSE, sum(ref_mask))
+  inst_ref <- inst_all[ref_mask]; cent_ref <- cent_all[ref_mask]; phot_reg_col <- NULL
+  for (g_col in intersect(c("regional_group", "epa_ecoregion_l3"), names(df))) {
+    rg_chk <- trimws(as.character(df[[g_col]][ref_mask]))
+    ok_ph <- !cent_ref & !is.na(inst_ref) & !is.na(df[[g_col]][ref_mask]) & nzchar(rg_chk) & !(tolower(rg_chk) %in% c("na", "unknown", "unknown_ecoregion"))
+    if (length(unique(rg_chk[ok_ph])) >= 2L) { phot_reg_col <- g_col; break }
+  }
   for (g_col in intersect(c("regional_group", "epa_ecoregion_l3", "stateProvince"), names(df))) {
     reg_raw <- trimws(as.character(df[[g_col]][ref_mask]))
     ok_rg <- !cent_ref & !is.na(inst_ref) & !is.na(df[[g_col]][ref_mask]) & nzchar(reg_raw)
     if (length(unique(reg_raw[ok_rg])) >= 2L) {
       tab_rg <- table(inst_ref[ok_rg], reg_raw[ok_rg])
-      tab_rg <- tab_rg[rowSums(tab_rg) >= 2L, , drop = FALSE]
-      tab_rg <- tab_rg[, colSums(tab_rg) >= 1L, drop = FALSE]
+      tab_rg <- tab_rg[rowSums(tab_rg) >= 2L, , drop = FALSE]; tab_rg <- tab_rg[, colSums(tab_rg) >= 1L, drop = FALSE]
       if (nrow(tab_rg) >= 2L && ncol(tab_rg) >= 2L) {
         chi_v <- suppressWarnings(stats::chisq.test(tab_rg, simulate.p.value = FALSE)$statistic)
         cramers_v <- sqrt(as.numeric(chi_v) / max(1.0, sum(tab_rg) * (min(nrow(tab_rg), ncol(tab_rg)) - 1L)))
@@ -399,17 +369,31 @@ apply_eb_institution_batch_centering <- function(df, target_cols, min_inst_n = 1
       pre_eta[[col]] <- as.numeric(fit_pre$`Sum Sq`[ii] / max(fit_pre$`Sum Sq`[ii] + fit_pre$`Sum Sq`[ri], 1e-12))
     }
     is_phot <- grepl("^(blade_cie_|basal_zone_cie_l_delta|abaxial_cie_l_sheet_delta|blade_.*browning)", col)
-    if (!((isTRUE(allow_shape_centering) || is_phot) && !isTRUE(is_regionally_confounded))) next
+    if (!is_phot && !(isTRUE(allow_shape_centering) && !isTRUE(is_regionally_confounded))) next
+    r_bio <- r_sp
+    if (is_phot && !is.null(phot_reg_col)) {
+      rg_r <- trimws(as.character(df[[phot_reg_col]][r_idx]))
+      ok_st <- !cent_all[r_idx] & !is.na(df[[phot_reg_col]][r_idx]) & nzchar(rg_r) & !(tolower(rg_r) %in% c("na", "unknown", "unknown_ecoregion"))
+      st_lbl <- paste(r_sp[ok_st], rg_r[ok_st], sep = "||")
+      min_st_n <- max(4L, as.integer(ceiling(0.5 * min_inst_n)))
+      sh_st <- names(Filter(function(v) sum(table(v) >= min_st_n) >= 2L, split(r_inst[ok_st], st_lbl)))
+      if (length(sh_st) > 0L) {
+        keep_s <- which(ok_st)[st_lbl %in% sh_st]
+        if (length(keep_s) >= 6L && length(unique(r_inst[keep_s])) >= 2L) {
+          r_inst <- r_inst[keep_s]; r_bio <- paste(r_sp[keep_s], rg_r[keep_s], sep = "||"); r_y <- r_y[keep_s]; r_w <- r_w[keep_s]; u_inst <- unique(r_inst)
+        } else if (isTRUE(is_regionally_confounded)) next
+      } else if (isTRUE(is_regionally_confounded)) next
+    } else if (is_phot && isTRUE(is_regionally_confounded)) next
 
-    # Estimate marginal species means and zero-mean institutional location shifts iteratively
+    # Estimate marginal stratum/species means and zero-mean institutional location shifts iteratively
     d_raw <- stats::setNames(rep(0.0, length(u_inst)), u_inst)
-    mu_sp <- stats::setNames(rep(mean(r_y), length(unique(r_sp))), unique(r_sp))
+    mu_sp <- stats::setNames(rep(mean(r_y), length(unique(r_bio))), unique(r_bio))
     for (it in seq_len(6L)) {
       for (sp_u in names(mu_sp)) {
-        si <- which(r_sp == sp_u)
+        si <- which(r_bio == sp_u)
         mu_sp[sp_u] <- stats::weighted.mean(r_y[si] - d_raw[r_inst[si]], w = r_w[si])
       }
-      e_it <- r_y - mu_sp[r_sp]
+      e_it <- r_y - mu_sp[r_bio]
       for (ih in u_inst) {
         hi <- which(r_inst == ih)
         d_raw[ih] <- if (length(hi) >= 2L) stats::weighted.mean(e_it[hi], w = r_w[hi]) else 0.0
@@ -418,8 +402,8 @@ apply_eb_institution_batch_centering <- function(df, target_cols, min_inst_n = 1
       d_raw <- d_raw - w_mean_d
     }
 
-    res_w <- r_y - mu_sp[r_sp] - d_raw[r_inst]
-    s2_in <- sum(r_w * res_w^2) / max(1.0, sum(r_w) - length(unique(r_sp)) - length(u_inst))
+    res_w <- r_y - mu_sp[r_bio] - d_raw[r_inst]
+    s2_in <- sum(r_w * res_w^2) / max(1.0, sum(r_w) - length(unique(r_bio)) - length(u_inst))
     n_by_i <- vapply(u_inst, function(ih) sum(r_inst == ih), integer(1))
     elig_v <- which(n_by_i >= min_inst_n)
     if (length(elig_v) < 2L) elig_v <- which(n_by_i >= 2L)

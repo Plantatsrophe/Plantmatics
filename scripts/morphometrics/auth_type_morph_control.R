@@ -330,7 +330,10 @@ compute_type_specimen_morph_control <- function(
       p_sp <- if (!is.na(pred_vec[i]) && nzchar(pred_vec[i])) pred_vec[i] else r_sp
       pp <- post_vec[i]
       tx_i <- taxa_vec[i]
-      has_homo_ref_i <- !is.na(tx_i) && (tx_i %in% names(has_emp_homo_map)) && isTRUE(has_emp_homo_map[tx_i])
+      has_homo_ref_i <- !is.na(tx_i) && (
+        ((tx_i %in% names(has_emp_homo_map)) && isTRUE(has_emp_homo_map[tx_i])) ||
+        ((tx_i %in% names(n_eff_type_vec)) && is.finite(n_eff_type_vec[tx_i]) && n_eff_type_vec[tx_i] >= 2.0 && sum(!is_type_specimen & taxa_vec == tx_i) >= 3L)
+      )
       is_het_type_i <- !.is_homotypic_sensu_stricto_basionym(
         basionym_vec_all[i], tx_i, df = df[i, , drop = FALSE]
       )

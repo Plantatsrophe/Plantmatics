@@ -195,18 +195,20 @@ run_step06_genomic_phylogenomics <- function(opts) {
     pred_taxon[pol_i] <- pass_df$species_standardized[pol_i]; post_prob[pol_i] <- 1.0; margin_vec[pol_i] <- 1.0
   }
   oof_pred <- rep(NA_character_, length(ref_idx)); oof_logloss <- rep(NA_real_, length(ref_idx))
+  is_single_sp_intra <- isTRUE(opts[["intraspecific-mode"]]) && (length(unique(y_ref[!is.na(y_ref) & nzchar(y_ref)])) < 2L)
+  y_loro <- if (is_single_sp_intra && best_k >= 2L) gen_cluster[ref_idx] else y_ref
   eval_loro_ri <- function(ri) {
     i_global <- ref_idx[ri]; rep_i <- rep_ids[i_global]
     hold_mask <- if (!is.na(rep_i) && nzchar(rep_i)) (rep_ids[ref_idx] == rep_i) else (seq_along(ref_idx) == ri)
     tr_sub <- which(!hold_mask)
-    if (length(tr_sub) < 3L || sum(y_ref[tr_sub] == y_ref[ri], na.rm = TRUE) < 1L || length(unique(y_ref[tr_sub])) < 2L) return(NULL)
+    if (length(tr_sub) < 3L || sum(y_loro[tr_sub] == y_loro[ri], na.rm = TRUE) < 1L || length(unique(y_loro[tr_sub])) < 2L) return(NULL)
     tr_idx <- match(ref_idx[tr_sub], ord_idx); te_idx <- match(i_global, ord_idx)
     if (any(is.na(tr_idx)) || is.na(te_idx)) return(NULL)
-    k_fold <- min(5L, max(2L, length(tr_idx) - length(unique(y_ref[tr_sub]))), max(1L, length(tr_idx) - 1L))
+    k_fold <- min(5L, max(2L, length(tr_idx) - length(unique(y_loro[tr_sub]))), max(1L, length(tr_idx) - 1L))
     oos_cv <- .project_pcoa_gower_oos(d_ord[tr_idx, tr_idx, drop = FALSE], d_ord[te_idx, tr_idx, drop = FALSE], k_max = k_fold)
     if (ncol(oos_cv$X_train) < 1L) return(NULL)
-    cv_fit <- .fit_shrinkage_dapc(oos_cv$X_train, y_ref[tr_sub], oos_cv$X_test)
-    p_true <- if (as.character(y_ref[ri]) %in% colnames(cv_fit$probs)) as.numeric(cv_fit$probs[1L, as.character(y_ref[ri])]) else 1e-6
+    cv_fit <- .fit_shrinkage_dapc(oos_cv$X_train, y_loro[tr_sub], oos_cv$X_test)
+    p_true <- if (as.character(y_loro[ri]) %in% colnames(cv_fit$probs)) as.numeric(cv_fit$probs[1L, as.character(y_loro[ri])]) else 1e-6
     list(ri = ri, ig = i_global, pred = cv_fit$pred[1L], max_p = cv_fit$max_p[1L], margin = cv_fit$margin[1L],
          probs = cv_fit$probs, ll = -log(min(1.0 - 1e-6, max(1e-6, p_true))))
   }
@@ -214,14 +216,16 @@ run_step06_genomic_phylogenomics <- function(opts) {
   loro_res <- if (nw_lr > 1L) packera_mclapply(seq_along(ref_idx), eval_loro_ri, mc.cores = nw_lr) else lapply(seq_along(ref_idx), eval_loro_ri)
   for (lr in loro_res) {
     if (is.null(lr)) next
-    oof_pred[lr$ri] <- lr$pred; pred_taxon[lr$ig] <- lr$pred; post_prob[lr$ig] <- lr$max_p; margin_vec[lr$ig] <- lr$margin
-    probs_mat[lr$ig, ] <- 0.0; common_cols <- intersect(colnames(probs_mat), colnames(lr$probs))
-    if (length(common_cols) > 0L) probs_mat[lr$ig, common_cols] <- lr$probs[1L, common_cols]
-    oof_logloss[lr$ri] <- lr$ll
+    oof_pred[lr$ri] <- lr$pred; oof_logloss[lr$ri] <- lr$ll
+    if (!is_single_sp_intra) {
+      pred_taxon[lr$ig] <- lr$pred; post_prob[lr$ig] <- lr$max_p; margin_vec[lr$ig] <- lr$margin
+      probs_mat[lr$ig, ] <- 0.0; common_cols <- intersect(colnames(probs_mat), colnames(lr$probs))
+      if (length(common_cols) > 0L) probs_mat[lr$ig, common_cols] <- lr$probs[1L, common_cols]
+    }
   }
   valid_oof <- !is.na(oof_pred)
-  loro_acc <- if (any(valid_oof)) mean(oof_pred[valid_oof] == y_ref[valid_oof], na.rm = TRUE) else NA_real_
-  loro_kappa <- if (sum(valid_oof) >= 2L) .compute_kappa_r(y_ref[valid_oof], oof_pred[valid_oof]) else NA_real_
+  loro_acc <- if (any(valid_oof)) mean(oof_pred[valid_oof] == y_loro[valid_oof], na.rm = TRUE) else NA_real_
+  loro_kappa <- if (sum(valid_oof) >= 2L) .compute_kappa_r(y_loro[valid_oof], oof_pred[valid_oof]) else NA_real_
   loro_logloss <- if (any(is.finite(oof_logloss))) mean(oof_logloss, na.rm = TRUE) else NA_real_
 
   tree_files <- character(0); q_files <- character(0)
@@ -273,6 +277,9 @@ run_step06_genomic_phylogenomics <- function(opts) {
     q_json[i] <- paste0("{", paste(vapply(nz[order(wi[nz], decreasing = TRUE)], function(j) .json_escape_kv(q_cols[j], wi[j]), character(1)), collapse = ", "), "}")
     p1[i] <- q_cols[ord_w[1L]]; p2[i] <- if (length(ord_w) >= 2L && wi[ord_w[2L]] >= 0.15) q_cols[ord_w[2L]] else NA_character_
     is_admixed[i] <- if (q_max[i] < 0.80 && !is.na(p2[i])) 1L else 0L
+  }
+  if (length(unique(y_ref[!is.na(y_ref) & nzchar(y_ref)])) < 2L) {
+    margin_vec <- ifelse(is_admixed == 0L & is.finite(q_max), pmax(margin_vec, pmax(0.0, 2.0 * q_max - 1.0)), margin_vec)
   }
   phylo_res <- .extract_phylo_metrics(tree_files, pass_df)
 

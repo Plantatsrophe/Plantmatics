@@ -235,7 +235,9 @@ compute_phenological_anomalies <- function(df, output_csv = NULL, summary_csv = 
   w_anth_raw <- ifelse(has_head_phase, n_anth_vec / (n_anth_vec + n_fruit_vec + 0.5 * pmax(n_bud_vec, 0.0)), NA_real_)
   is_late_fruit_sen <- (has_head_phase & (w_anth_raw < 0.20)) | ((.as_flag01("Seed_Fruit_MANY") == 1L) & (.as_flag01("Flower_MANY") == 0L) & (n_anth_vec <= 0.0))
 
-  has_valid_cv <- ((v_state != "" & v_state != "unknown" & v_state != "na") & tot_caps > 0) | (n_anth_vec > 0) | (n_fruit_vec > 0)
+  is_explicit_non_anth_cv <- (v_state %in% c("sterile", "vegetative", "rosette_only", "bud", "bud_only", "fruiting", "fruiting_only", "post_fruiting", "senescent")) |
+    grepl("sterile|vegetative|rosette|bud_only|fruiting_only|post_fruiting|senescent", v_state)
+  has_valid_cv <- ((v_state != "" & v_state != "unknown" & v_state != "na") & (tot_caps > 0 | is_explicit_non_anth_cv)) | (n_anth_vec > 0) | (n_fruit_vec > 0)
   is_cv_anth_label <- (grepl("anthesis", v_state) | (n_anth_vec > 0)) & !is_late_fruit_sen
   raw_anthesis_cand <- valid_doy & valid_lat & pass_dwc & !is_late_fruit_sen & ((has_valid_cv & is_cv_anth_label) | (!has_valid_cv))
 
@@ -271,7 +273,7 @@ compute_phenological_anomalies <- function(df, output_csv = NULL, summary_csv = 
   pass_calendar <- pass_doy_gate & valid_lat & (df$decimalLatitude >= lat_min_gate) & (df$decimalLatitude <= lat_max_gate)
   cv_anthesis <- (has_valid_cv & is_cv_anth_label) | (!has_valid_cv & pass_calendar & pass_dwc & !is_late_fruit_sen)
   cv_fruit <- (has_valid_cv & !is_cv_anth_label & grepl("fruit", v_state)) | (!has_valid_cv & dwc_fruit_only)
-  cv_sterile <- (has_valid_cv & !is_cv_anth_label & (v_state %in% c("sterile", "bud", "senescent") | grepl("sterile|bud", v_state))) | (!has_valid_cv & dwc_sterile_only)
+  cv_sterile <- (has_valid_cv & !is_cv_anth_label & (v_state %in% c("sterile", "vegetative", "rosette_only", "bud", "bud_only", "senescent") | grepl("sterile|vegetative|rosette|bud|senescent", v_state))) | (!has_valid_cv & dwc_sterile_only)
 
   is_verified_anthesis <- pass_calendar & pass_dwc & cv_anthesis & !offseason_vernal_mask & !is_late_fruit_sen
   is_fruit_excluded <- (pass_calendar & (cv_fruit | dwc_fruit_only) & !is_verified_anthesis) | is_late_fruit_sen
