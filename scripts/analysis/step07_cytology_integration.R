@@ -1,3 +1,4 @@
+if (grDevices::dev.cur() == 1L) grDevices::pdf(NULL)
 # Step 07 non-circular cytological integration, heteroploid barrier gate, and gigas audit.
 # Cytology never enters Step 03/04/05 feature matrices; it acts solely in Step 07.
 
@@ -37,8 +38,14 @@
 }
 
 .pick_col_chr <- function(df, candidates, default = "") {
-  for (nm in candidates) if (nm %in% names(df)) return(.norm_cyto_str(df[[nm]]))
-  rep(default, nrow(df))
+  n <- nrow(df); if (n == 0L) return(character(0))
+  out <- rep("", n)
+  for (nm in candidates) if (nm %in% names(df)) {
+    v <- .norm_cyto_str(df[[nm]]); fill <- !nzchar(out) & nzchar(v)
+    if (any(fill)) out[fill] <- v[fill]
+  }
+  if (nzchar(default)) out[!nzchar(out)] <- default
+  out
 }
 
 .pick_col_raw <- function(df, candidates) {

@@ -39,16 +39,21 @@ if (!exists(".sort_numbered_pc_cols", mode = "function")) {
     "edaphic_z_score", "climatic_z_score", "edaphic_niche_overlap_d", "edaphic_schoener_d",
     "schoener_d", "sgmc_lithology_class", "Dominant_Lithology_Class", "edaphic_best_fit_taxon",
     "rf_predicted_taxon", "primary_env_predictors", "primary_clim_predictors", "primary_edaph_predictors",
-    "type_edaphic_z_score", "nearest_type_niche_taxon", "matches_type_lithology"
+    "type_edaphic_z_score", "nearest_type_niche_taxon", "matches_type_lithology", "nearest_type_basionym_edaphic_z"
   )
+  banned_edaph <- c("ssurgo_rock_outcrop_pct", "ssurgo_aws_0_50cm", "ssurgo_lithic_series_pct", "ultramafic_calcareous_gradient")
+  edaph_idx <- c("lithic_outcrop_index", "wetland_seepage_index")
+  clim_idx <- c("summer_moisture_deficit_idx", "maritime_continentality_idx")
   keep_num <- function(cands) {
-    cs <- setdiff(unique(cands), exclude_cols)
+    cs <- setdiff(unique(cands), c(exclude_cols, banned_edaph))
+    cs <- cs[!grepl("_buffer", cs, ignore.case = TRUE)]
     cs[vapply(cs, function(cc) cc %in% names(df) && !is.logical(df[[cc]]) && any(is.finite(suppressWarnings(as.numeric(df[[cc]])))), logical(1))]
   }
   p_ed <- keep_num(.parse_step07_semicolon_cols(df, "primary_edaph_predictors")); if (length(p_ed) > 0L) return(p_ed)
   p_en <- keep_num(.parse_step07_semicolon_cols(df, "primary_env_predictors")); if (length(p_en) > 0L) return(p_en)
-  p_fn <- keep_num(grep("^(fine_|ilr_texture_|ssurgo_|solus_|topo_)", names(df), value = TRUE)); if (length(p_fn) > 0L) return(p_fn)
-  keep_num(grep("^(soil_|bio[0-9]+_)", names(df), value = TRUE))
+  p_fn <- keep_num(c(grep("^(fine_|ilr_texture_|ssurgo_|solus_|topo_)", names(df), value = TRUE), intersect(edaph_idx, names(df))))
+  if (length(p_fn) > 0L) return(keep_num(c(p_fn, intersect(clim_idx, names(df)))))
+  keep_num(c(grep("^(soil_|bio[0-9]+_)", names(df), value = TRUE), intersect(c(edaph_idx, clim_idx), names(df))))
 }
 
 .compute_dynamic_edaphic_z_scores <- function(df, sp_all_vec, active_taxa, ref_idx_by_taxon, clean_coh_mask = NULL) {

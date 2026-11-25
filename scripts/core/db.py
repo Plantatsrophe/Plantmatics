@@ -2886,6 +2886,7 @@ def ingest_existing_run_tables_into_db(
                 "taxon_reported_cytotypes",
                 "hydro_edaphic_niche_regime",
                 "basionym_synonymy_type",
+                "portal_lag_trigger_gate",
             ):
                 if sc in r:
                     d_tri[sc] = _to_str(r.get(sc))
@@ -2907,6 +2908,8 @@ def ingest_existing_run_tables_into_db(
                 "is_completed_voucher",
                 "is_multi_cytotype_taxon",
                 "cytotype_reproductive_barrier_pass",
+                "portal_metadata_lag_flag",
+                "is_marginal_range_extension",
             ):
                 if bc in r:
                     d_tri[bc] = _to_bool_int(r.get(bc))
@@ -2915,6 +2918,11 @@ def ingest_existing_run_tables_into_db(
                 "w_edaphic_kappa",
                 "w_pheno_kappa",
                 "w_geno_kappa",
+                "w_morph_simplex",
+                "w_edaphic_simplex",
+                "w_pheno_simplex",
+                "w_geno_simplex",
+                "geno_deme_weight_scale",
                 "probabilistic_consensus_conflict",
                 "probabilistic_consensus_score",
                 "hopkins_adjusted_doy",

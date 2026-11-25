@@ -89,6 +89,8 @@ FORBIDDEN_OBSOLETE_SAM2_AND_PRUNED_HELPER_TOKENS: Tuple[str, ...] = (
     # Retired Step 05 pedology, hardpan, & discontinuous composite tokens
     "resdept_all_cm_p", "dom_comp <- tab_res", "100.0 * pmax(0.0, 1.0 - bd_v",
     "0.65 * az_flag", "0.50 * wet_u",
+    # Retired Step 07 post-selection helper tokens
+    ".circular_watson_williams_or_perm_p",
     # LeafMachine2 tokens
     *FORBIDDEN_LEGACY_LM2_TOKENS,
 )
@@ -205,22 +207,27 @@ RAW_STRICT_LINE_CEILINGS: Tuple[Tuple[str, int], ...] = (
     ("scripts/tests/test_step06_dynamic_tiers.py", 420), ("scripts/tests/test_step06_ingestion_hdplot_ploidy.py", 460),
     ("scripts/tests/test_step06_organellar_coalescent.py", 460), ("scripts/tests/test_step06_phylogenomics_r_pipeline.py", 460),
     ("scripts/tests/test_step06_public_backbone_dryad.py", 460), ("scripts/tests/test_step06_voucher_exsiccatae_linking.py", 460),
-    # Step 07 synthesis, figures, & tests
-    ("scripts/analysis/07_triage_dashboard_synthesis.R", 500), ("scripts/analysis/step07_hopkins_consensus_utils.R", 480),
-    ("scripts/analysis/step07_ancova_merge_utils.R", 490), ("scripts/analysis/step07_reports_html_utils.R", 490),
-    ("scripts/analysis/step07_biogeo_hybrid_utils.R", 490), ("scripts/analysis/step07_cluster_cohesion_utils.R", 460),
-    ("scripts/analysis/step07_decision_stages_utils.R", 490), ("scripts/analysis/step07_postprocess_guards_utils.R", 460),
-    ("scripts/analysis/step07_cytology_integration.R", 380), ("scripts/analysis/step07_deme_propagation_utils.R", 260),
-    ("scripts/analysis/step07_genomic_propagation.R", 400), ("scripts/analysis/step07_organellar_triage_utils.R", 260),
-    ("scripts/analysis/taxon_complex_discovery_utils.R", 480), ("scripts/analysis/step07_complex_affinity_utils.R", 450),
-    ("scripts/figures/step07_figures.R", 420), ("scripts/figures/step07b_network_figures.R", 320),
-    ("scripts/tests/test_step07_deme_propagation.py", 300), ("scripts/tests/test_step07_organellar_triage.py", 280),
-    ("scripts/tests/test_step07_genomic_propagation_contract.py", 460), ("scripts/tests/test_step07_audit_hygiene.py", 400),
-    ("scripts/tests/test_parallel_thread_scaling.py", 300),
+    # Step 07 synthesis, focal orchestrator, figures, & split test suites
+    ("scripts/analysis/07_triage_dashboard_synthesis.R", 500), ("scripts/analysis/step07_hopkins_consensus_utils.R", 320),
+    ("scripts/analysis/step07_consensus_weights_utils.R", 300), ("scripts/analysis/step07_ancova_merge_utils.R", 490),
+    ("scripts/analysis/step07_reports_html_utils.R", 490), ("scripts/analysis/step07_biogeo_hybrid_utils.R", 490),
+    ("scripts/analysis/step07_cluster_cohesion_utils.R", 460), ("scripts/analysis/step07_decision_stages_utils.R", 490),
+    ("scripts/analysis/step07_postprocess_guards_utils.R", 460), ("scripts/analysis/step07_cytology_integration.R", 380),
+    ("scripts/analysis/step07_deme_propagation_utils.R", 260), ("scripts/analysis/step07_genomic_propagation.R", 400),
+    ("scripts/analysis/step07_organellar_triage_utils.R", 300), ("scripts/analysis/genomic_triage_utils.R", 320),
+    ("scripts/analysis/step07_genomic_report_utils.R", 320), ("scripts/analysis/taxon_complex_discovery_utils.R", 480),
+    ("scripts/analysis/step07_complex_affinity_utils.R", 450), ("scripts/figures/step07_figures.R", 420),
+    ("scripts/figures/step07b_network_figures.R", 320), ("scripts/pipeline/resolve_focal_species_complex.py", 340),
+    ("scripts/pipeline/step07_focal_cohort_utils.py", 450), ("scripts/pipeline/step07_focal_stage_runners.py", 450),
+    ("scripts/tests/test_step07_queue_and_ancova.py", 440), ("scripts/tests/test_step07_hopkins_and_consensus.py", 440),
+    ("scripts/tests/test_step07_type_and_basionym_rules.py", 440), ("scripts/tests/test_step07_hybrid_and_biogeo_gates.py", 440),
+    ("scripts/tests/test_step07_cryptic_and_cohesion.py", 440), ("scripts/tests/test_step07_complex_discovery.py", 440),
+    ("scripts/tests/test_step07_sqlite_and_reports.py", 440), ("scripts/tests/test_step07_deme_propagation.py", 300),
+    ("scripts/tests/test_step07_organellar_triage.py", 280), ("scripts/tests/test_step07_genomic_propagation_contract.py", 460),
+    ("scripts/tests/test_step07_audit_hygiene.py", 400), ("scripts/tests/test_parallel_thread_scaling.py", 300),
 )
 
 EXTRA_500_LINE_BOUNDED_MODULES: Tuple[str, ...] = (
-    "scripts/analysis/genomic_triage_utils.R",
     "scripts/pipeline/resolve_eastern_na_packera.py",
     "scripts/tests/test_eastern_na_monograph_cli.py",
 )

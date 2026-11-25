@@ -23,27 +23,33 @@ select_taxon_anchors <- function(morph_df) {
   sub_call <- if ("taxonomic_treatment_subtype" %in% names(morph_df)) as.character(morph_df$taxonomic_treatment_subtype) else rep("", n)
   is_misid <- !is.na(sub_call) & (sub_call == "Misidentification_Reassign")
   prom <- if ("is_promoted_bronze" %in% names(morph_df)) (!is.na(morph_df$is_promoted_bronze) & as.logical(morph_df$is_promoted_bronze)) else rep(FALSE, n)
+  ats <- if ("anchor_tier_source" %in% names(morph_df)) trimws(as.character(morph_df$anchor_tier_source)) else rep("", n)
+  css <- if ("concept_synonymy_status" %in% names(morph_df)) trimws(as.character(morph_df$concept_synonymy_status)) else rep("", n)
+  q_oh <- if ("is_open_or_hybrid_concept" %in% names(morph_df)) { v <- morph_df$is_open_or_hybrid_concept; if (is.logical(v)) !is.na(v) & v else if (is.numeric(v) || is.integer(v)) !is.na(v) & (v != 0) else tolower(trimws(as.character(v))) %in% c("1", "true", "t", "yes", "y") } else rep(FALSE, n)
+  quarantined <- (!is.na(ats) & ats %in% c("Passive_Heterotypic_Type_Audit", "Passive_Type_Uncertain_Coord", "Passive_Open_or_Hybrid_Concept")) | (!is.na(css) & css == "Heterotypic_Synonym") | q_oh
+  is_clean_type <- is_type & !quarantined
   det_tier <- if ("determiner_tier" %in% names(morph_df)) ifelse(is.na(morph_df$determiner_tier) | !nzchar(trimws(as.character(morph_df$determiner_tier))), "Tier_3_Bronze", as.character(morph_df$determiner_tier)) else rep("Tier_1_Gold", n)
-  is_gs <- ((grepl("tier_?0|tier_?1|tier_?2|gold|silver|type", det_tier, ignore.case = TRUE) | prom | is_type) & !noise & (!is_pass | is_type) & (!is_misid | is_type) & !dna$dna_bad) | dna$dna_ok
-  clean_non_gs <- !noise & !is_misid & !mo_out & !dna$dna_bad
+  is_gs <- ((grepl("tier_?0|tier_?1|tier_?2|gold|silver|type", det_tier, ignore.case = TRUE) | prom | is_clean_type) & !noise & (!is_pass | is_clean_type) & (!is_misid | is_clean_type) & !dna$dna_bad & !quarantined) | (dna$dna_ok & !quarantined)
+  clean_non_gs <- !noise & !is_misid & !mo_out & !dna$dna_bad & !quarantined
   d2_col <- if ("mahalanobis_d2" %in% names(morph_df)) suppressWarnings(as.numeric(morph_df$mahalanobis_d2)) else rep(NA_real_, n)
   p_est <- max(2L, length(.parse_step07_complex_semicolon(morph_df, "selected_morph_features")))
-  type_extreme <- is_type & is.finite(d2_col) & (d2_col > stats::qchisq(0.99, df = p_est))
+  type_extreme <- is_clean_type & is.finite(d2_col) & (d2_col > stats::qchisq(0.99, df = p_est))
   taxa <- sort(unique(as.character(morph_df$species_standardized))); anchor_mask <- rep(FALSE, n)
   n_gs_vec <- stats::setNames(integer(length(taxa)), taxa); n_type_vec <- stats::setNames(integer(length(taxa)), taxa)
   for (tx in taxa) {
-    tx_idx <- which(morph_df$species_standardized == tx); type_idx <- tx_idx[is_type[tx_idx]]; n_type_vec[tx] <- length(type_idx)
+    tx_idx <- which(morph_df$species_standardized == tx); type_idx <- tx_idx[is_clean_type[tx_idx]]; n_type_vec[tx] <- length(type_idx)
     gs_pure_idx <- tx_idx[is_t1_pure[tx_idx] & is_gs[tx_idx] & !mo_out[tx_idx]]
     if (length(gs_pure_idx) < 3L) gs_pure_idx <- tx_idx[is_t1_pure[tx_idx] & is_gs[tx_idx]]
     n_gs_vec[tx] <- sum(is_t1_pure[tx_idx] & is_gs[tx_idx]); clean_pure_idx <- tx_idx[is_t1_pure[tx_idx] & clean_non_gs[tx_idx]]
-    clean_any_idx <- tx_idx[clean_non_gs[tx_idx]]
+    clean_any_idx <- tx_idx[clean_non_gs[tx_idx]]; unq_idx <- tx_idx[!quarantined[tx_idx]]
     if (length(gs_pure_idx) >= 5L) anchor_mask[gs_pure_idx] <- TRUE
     else if (length(clean_pure_idx) >= 3L) anchor_mask[clean_pure_idx] <- TRUE
     else if (length(clean_any_idx) >= 2L) anchor_mask[clean_any_idx] <- TRUE
-    else anchor_mask[tx_idx] <- TRUE
+    else if (length(unq_idx) >= 1L) anchor_mask[unq_idx] <- TRUE
     intact_types <- type_idx[!type_extreme[type_idx]]; if (length(intact_types) > 0L) anchor_mask[intact_types] <- TRUE
-    dna_pure <- tx_idx[dna$dna_ok[tx_idx] & is_t1_pure[tx_idx] & !mo_out[tx_idx]]; if (length(dna_pure) > 0L) anchor_mask[dna_pure] <- TRUE
+    dna_pure <- tx_idx[dna$dna_ok[tx_idx] & is_t1_pure[tx_idx] & !mo_out[tx_idx] & !quarantined[tx_idx]]; if (length(dna_pure) > 0L) anchor_mask[dna_pure] <- TRUE
     if (any(anchor_mask[tx_idx] & !dna$dna_bad[tx_idx])) anchor_mask[tx_idx[dna$dna_bad[tx_idx]]] <- FALSE
+    anchor_mask[tx_idx[quarantined[tx_idx]]] <- FALSE
   }
   list(anchor_df = morph_df[anchor_mask, , drop = FALSE], anchor_mask = anchor_mask, n_gold_silver = n_gs_vec, n_type_specimens = n_type_vec)
 }
@@ -122,35 +128,44 @@ compute_modality_kappa_weights <- function(morph_df, anchor_mask = NULL, ...) {
     kp_p <- compute_cohens_kappa_stat(yt_p, yp_p); if (is.finite(kp_p)) max(0.05, min(0.95, kp_p)) else 0.15
   } else if (!is.na(dd_col) && sum(anth_k & is.finite(suppressWarnings(as.numeric(anch_df[[dd_col]])))) >= 4L) { 0.20
   } else if (has_doy) { 0.20 } else NA_real_
-  present_w <- c(morph = w_morph_raw, edaphic = w_eco_raw, pheno = w_pheno_raw); avail <- is.finite(present_w)
+  w_geno_raw <- NA_real_
+  if ("geno_predicted_taxon" %in% names(anch_df)) {
+    g_qc <- if ("geno_quality_pass" %in% names(anch_df)) { v <- anch_df$geno_quality_pass; if (is.logical(v)) !is.na(v) & v else if (is.numeric(v) || is.integer(v)) !is.na(v) & (v != 0) else tolower(trimws(as.character(v))) %in% c("1", "true", "t", "yes", "y") } else rep(TRUE, nrow(anch_df))
+    gp_k <- trimws(as.character(anch_df$geno_predicted_taxon))
+    ok_g <- g_qc & !is.na(yt_morph) & nzchar(yt_morph) & (yt_morph != "Unknown") & !is.na(gp_k) & nzchar(gp_k) & !(tolower(gp_k) %in% c("unknown", "unresolved", "na", "nan", "null", "none"))
+    if (sum(ok_g) >= 2L && length(unique(yt_morph[ok_g])) >= 2L && is.finite(kg <- compute_cohens_kappa_stat(yt_morph[ok_g], gp_k[ok_g]))) w_geno_raw <- max(0.05, min(0.99, kg))
+  }
+  present_w <- c(morph = w_morph_raw, edaphic = w_eco_raw, pheno = w_pheno_raw, geno = w_geno_raw); avail <- is.finite(present_w)
   norm_w <- rep(0.0, length(present_w)); names(norm_w) <- names(present_w)
   if (any(avail)) norm_w[avail] <- present_w[avail] / sum(present_w[avail]) else norm_w["morph"] <- 1.0
-  list(
-    w_morph_raw = w_morph_raw, w_edaphic_raw = w_eco_raw, w_pheno_raw = w_pheno_raw, w_morph = unname(norm_w["morph"]),
-    w_edaphic = unname(norm_w["edaphic"]), w_pheno = unname(norm_w["pheno"]))
+  list(w_morph_raw = w_morph_raw, w_edaphic_raw = w_eco_raw, w_pheno_raw = w_pheno_raw, w_geno_raw = w_geno_raw,
+       w_morph = unname(norm_w["morph"]), w_edaphic = unname(norm_w["edaphic"]), w_pheno = unname(norm_w["pheno"]), w_geno = unname(norm_w["geno"]))
 }
-compute_multimodal_complex_affinity <- function(morph_res, eco_res, pheno_res, kappa_wts, taxa) {
+compute_multimodal_complex_affinity <- function(morph_res, eco_res, pheno_res, kappa_wts, taxa, geno_res = NULL, morph_df = NULL, anchor_mask = NULL) {
+  if (is.data.frame(geno_res) && is.null(morph_df)) { morph_df <- geno_res; geno_res <- NULL }
+  if (is.null(geno_res) && !is.null(morph_df) && exists("compute_genomic_complex_affinity", mode = "function")) geno_res <- compute_genomic_complex_affinity(morph_df, taxa, anchor_mask)
   n_taxa <- length(taxa); S_m <- morph_res$S_morph; S_e <- eco_res$S_env; S_p <- pheno_res$S_pheno
+  A_g <- if (is.list(geno_res) && isTRUE(geno_res$available) && is.matrix(geno_res$mat)) { if (!is.null(rownames(geno_res$mat)) && all(taxa %in% rownames(geno_res$mat)) && all(taxa %in% colnames(geno_res$mat))) geno_res$mat[taxa, taxa, drop = FALSE] else geno_res$mat } else NULL
   wm <- if (is.finite(kappa_wts$w_morph_raw)) kappa_wts$w_morph_raw else 0.75
   we <- if (isTRUE(eco_res$has_env) && is.finite(kappa_wts$w_edaphic_raw)) kappa_wts$w_edaphic_raw else 0.0
   wp <- if (isTRUE(pheno_res$has_pheno) && is.finite(kappa_wts$w_pheno_raw)) kappa_wts$w_pheno_raw else 0.0
+  wg_k <- if (!is.null(kappa_wts$w_geno_raw) && is.finite(kappa_wts$w_geno_raw)) kappa_wts$w_geno_raw else if (!is.null(kappa_wts$w_geno) && is.finite(kappa_wts$w_geno) && kappa_wts$w_geno > 0.0) kappa_wts$w_geno else 0.0
+  wg <- if (!is.null(A_g) && wg_k > 0.0) wg_k else 0.0
   W <- matrix(0.0, nrow = n_taxa, ncol = n_taxa, dimnames = list(taxa, taxa))
   for (i in seq_len(n_taxa)) for (j in seq_len(n_taxa)) if (i != j) {
     sm_ij <- max(0.0, min(1.0, S_m[i, j]))
     # Morphological proximity gate prevents distantly related sympatric clades on shared substrates from merging
     g_ij <- sqrt(sm_ij); num <- wm * sm_ij; den <- wm
-    if (we > 0.0 && is.finite(S_e[i, j])) {
-      num <- num + g_ij * we * max(0.0, min(1.0, S_e[i, j])); den <- den + g_ij * we
-    }
-    if (wp > 0.0 && is.finite(S_p[i, j])) {
-      num <- num + g_ij * wp * max(0.0, min(1.0, S_p[i, j])); den <- den + g_ij * wp
-    }
+    if (we > 0.0 && is.finite(S_e[i, j])) { num <- num + g_ij * we * max(0.0, min(1.0, S_e[i, j])); den <- den + g_ij * we }
+    if (wp > 0.0 && is.finite(S_p[i, j])) { num <- num + g_ij * wp * max(0.0, min(1.0, S_p[i, j])); den <- den + g_ij * wp }
+    if (wg > 0.0 && is.finite(A_g[i, j])) { num <- num + wg * max(0.0, min(1.0, A_g[i, j])); den <- den + wg }
     W[i, j] <- if (den > 1e-12) num / den else sm_ij
   }
-  W <- 0.5 * (W + t(W)); diag(W) <- 0.0; round(W, 6)
+  W <- 0.5 * (W + t(W)); diag(W) <- 0.0; W <- round(W, 6)
+  attr(W, "A_geno") <- A_g; attr(W, "w_geno") <- if (!is.null(kappa_wts$w_geno) && is.finite(kappa_wts$w_geno)) kappa_wts$w_geno else 0.0; W
 }
 # 5. Row-Wise Canonical Triage Subtype Resolution (Padial et al. 2010; Zero Fabricated Constants)
-evaluate_hierarchical_complex_delimitation <- function(morph_df, pheno_res = NULL, eco_res = NULL, ...) {
+evaluate_hierarchical_complex_delimitation <- function(morph_df, pheno_res = NULL, eco_res = NULL, geno_res = NULL, ...) {
   if (!is.list(pheno_res) || !("delta_doy_resid" %in% names(pheno_res))) {
     dots <- list(...)
     if (length(dots) >= 1L && is.list(dots[[1L]]) && ("delta_doy_resid" %in% names(dots[[1L]]))) {
@@ -206,14 +221,24 @@ evaluate_hierarchical_complex_delimitation <- function(morph_df, pheno_res = NUL
   morph_disagrees <- !is.na(cda_pred) & nzchar(cda_pred) & (cda_pred != sp_given) & is.finite(cda_prob) & (cda_prob >= 0.50)
   edaph_disagrees <- !is.na(ed_pred) & nzchar(ed_pred) & (ed_pred != sp_given) & is.finite(d_edaph) & (d_edaph < 0.45)
   both_alt_agree <- morph_disagrees & edaph_disagrees & (cda_pred == ed_pred)
+  has_geno_ev <- is.list(geno_res) && isTRUE(geno_res$available)
+  geno_gdi_barrier <- rep(FALSE, n); geno_gdi_block <- rep(FALSE, n)
+  if (has_geno_ev) {
+    g_qc <- if ("geno_quality_pass" %in% names(morph_df)) { v <- morph_df$geno_quality_pass; if (is.logical(v)) !is.na(v) & v else if (is.numeric(v) || is.integer(v)) !is.na(v) & (v != 0) else tolower(trimws(as.character(v))) %in% c("1", "true", "t", "yes", "y") } else rep(TRUE, n)
+    g_pred <- if ("geno_predicted_taxon" %in% names(morph_df)) trimws(as.character(morph_df$geno_predicted_taxon)) else rep(NA_character_, n)
+    g_dis <- g_qc & !is.na(g_pred) & nzchar(g_pred) & (g_pred != "Unknown") & (g_pred != sp_given)
+    both_alt_agree <- both_alt_agree | (morph_disagrees & g_dis & (cda_pred == g_pred)) | (edaph_disagrees & g_dis & (ed_pred == g_pred))
+    g_gdi <- if ("coalescent_gdi" %in% names(morph_df)) suppressWarnings(as.numeric(morph_df$coalescent_gdi)) else rep(NA_real_, n)
+    geno_gdi_barrier <- g_qc & is.finite(g_gdi) & (g_gdi > 0.70); geno_gdi_block <- g_qc & is.finite(g_gdi) & (g_gdi < 0.20)
+  }
   can_hyb_d <- length(unique(sp_given[!is.na(sp_given) & grepl("^Packera[[:space:]]+[a-z][a-z-]+$", sp_given)])) >= 2L
   congener_osr_reassign <- is.finite(min_cong_d2) & (min_cong_d2 <= stats::qchisq(0.90, df = p_morph)) & !is.na(min_cong_tx) & nzchar(min_cong_tx) & (min_cong_tx != sp_given) & m_flag
   single_strong_reassign <- (morph_disagrees & is.finite(cda_prob) & cda_prob >= 0.72) | congener_osr_reassign
   is_stage1_misid <- !is_type_spec & (both_alt_agree | single_strong_reassign)
   is_stage2_hybrid <- can_hyb_d & !is_type_spec & !is_stage1_misid & morph_disagrees & is.finite(cda_prob) & (cda_prob >= 0.35 & cda_prob <= 0.65) & is.finite(cda_margin) & (cda_margin <= 0.22) & (!is.finite(cda_sec) | (cda_sec >= 0.25 & (cda_prob + cda_sec) >= 0.75)) & (!is.finite(d_edaph) | d_edaph >= 0.30)
-  has_evol_barrier <- (is.finite(d_doy) & abs(d_doy) >= 18.0) | (is.finite(d_edaph) & d_edaph < 0.30)
+  has_evol_barrier <- (is.finite(d_doy) & abs(d_doy) >= 18.0) | (is.finite(d_edaph) & d_edaph < 0.30) | geno_gdi_barrier
   coh_pass <- if ("cryptic_cluster_cohesion_pass" %in% names(morph_df)) { cp <- as.logical(morph_df$cryptic_cluster_cohesion_pass); cp[is.na(cp)] <- FALSE; cp } else rep(TRUE, n)
-  is_stage3_cryptic <- !is_type_spec & !is_stage1_misid & !is_stage2_hybrid & is_t1_pure & coh_pass & (is.finite(cda_prob) & cda_prob < 0.70) &
+  is_stage3_cryptic <- !is_type_spec & !is_stage1_misid & !is_stage2_hybrid & is_t1_pure & coh_pass & !geno_gdi_block & (is.finite(cda_prob) & cda_prob < 0.70) &
     (m_flag | (!is.na(gmm_cl) & gmm_cl > length(unique(sp_given)) & is.finite(gmm_bf) & gmm_bf >= 6.0)) & has_evol_barrier
   is_stage4_ecotype <- !is_type_spec & !is_stage1_misid & !is_stage2_hybrid & !is_stage3_cryptic &
     ((is.finite(d_edaph) & d_edaph < 0.30) | (is.finite(d_doy) & abs(d_doy) >= 14.0)) & (m_flag | (!is.na(gmm_cl) & gmm_cl > 1L))
@@ -278,7 +303,7 @@ partition_taxon_complexes <- function(W, taxa, n_vouchers_vec, n_gs_vec, leiden_
   consensus_id <- relabel_clusters_sequential(consensus_id, taxa); complex_labels <- character(n_taxa); deg_vec <- rowSums(W)
   for (cid in sort(unique(consensus_id))) {
     m_idx <- which(consensus_id == cid); ord <- m_idx[order(-deg_vec[m_idx], -nv_map[m_idx], taxa[m_idx])]
-    top_ep <- gsub("[[:space:]]*\\[K([0-9]+)\\]", "_K\\1", sub("^(?:Packera|P\\.)[[:space:]]+", "", taxa[ord[seq_len(min(2L, length(ord)))]]))
+    top_ep <- gsub("[[:space:]]*\\[K([0-9]+)\\]", "_K\\1", sub("^(Packera|P\\.)[[:space:]]+", "", taxa[ord[seq_len(min(2L, length(ord)))]]))
     complex_labels[m_idx] <- paste0("Complex_", cid, "_", paste(top_ep, collapse = "_"))
   }
   nn1 <- character(n_taxa); na1 <- numeric(n_taxa); nn2 <- character(n_taxa); na2 <- numeric(n_taxa); within_mean_aff <- numeric(n_taxa)
@@ -373,15 +398,13 @@ run_step07_complex_discovery <- function(full_df, opts = list()) {
   }
   n_vouchers_vec <- stats::setNames(as.integer(table(morph_df$species_standardized)[taxa]), taxa); anc <- select_taxon_anchors(morph_df)
   kappa_wts <- compute_modality_kappa_weights(morph_df, anc$anchor_mask)
-  message(sprintf(
-    "[Step 07 Complex Discovery] Evaluating %d vouchers across %d Packera groups (%d anchors; kappa weights: morph=%.3f, edaphic=%.3f, pheno=%.3f).",
-    nrow(morph_df), n_taxa, nrow(anc$anchor_df), kappa_wts$w_morph, kappa_wts$w_edaphic, kappa_wts$w_pheno
-  ))
+  message(sprintf("[Step 07 Complex Discovery] Evaluating %d vouchers across %d Packera groups (%d anchors; kappa weights: morph=%.3f, edaphic=%.3f, pheno=%.3f%s).", nrow(morph_df), n_taxa, nrow(anc$anchor_df), kappa_wts$w_morph, kappa_wts$w_edaphic, kappa_wts$w_pheno, if (is.finite(kappa_wts$w_geno_raw)) sprintf(", geno=%.3f", kappa_wts$w_geno) else ""))
   morph_res <- compute_morphometric_affinity(morph_df, anc$anchor_df, taxa)
   pheno_res <- compute_hopkins_phenological_affinity(morph_df, taxa, anc$anchor_mask)
   eco_res <- compute_ecological_affinity(morph_df, taxa, anc$anchor_mask)
-  specimen_subtypes <- evaluate_hierarchical_complex_delimitation(morph_df, pheno_res, eco_res)
-  W <- compute_multimodal_complex_affinity(morph_res, eco_res, pheno_res, kappa_wts, taxa)
+  geno_res <- if (exists("compute_genomic_complex_affinity", mode = "function")) compute_genomic_complex_affinity(morph_df, taxa, anc$anchor_mask) else list(available = FALSE, mat = NULL, n_taxa = 0L)
+  specimen_subtypes <- evaluate_hierarchical_complex_delimitation(morph_df, pheno_res, eco_res, geno_res = geno_res)
+  W <- compute_multimodal_complex_affinity(morph_res, eco_res, pheno_res, kappa_wts, taxa, geno_res = geno_res)
   part_res <- partition_taxon_complexes(W = W, taxa = taxa, n_vouchers_vec = n_vouchers_vec, n_gs_vec = anc$n_gold_silver)
   cdf <- part_res$complexes_df; hop_ov <- rep(NA_real_, n_taxa); eco_ov <- rep(NA_real_, n_taxa); int_cong <- logical(n_taxa)
   n_misid <- integer(n_taxa); n_hyb <- integer(n_taxa); n_crypt <- integer(n_taxa)
@@ -393,9 +416,8 @@ run_step07_complex_discovery <- function(full_df, opts = list()) {
     if (nzchar(nn_tx) && nn_tx %in% taxa) {
       if (isTRUE(pheno_res$has_pheno) && is.finite(pheno_res$S_pheno[tx_i, nn_tx])) hop_ov[i] <- round(pheno_res$S_pheno[tx_i, nn_tx], 4)
       if (isTRUE(eco_res$has_env) && is.finite(eco_res$S_env[tx_i, nn_tx])) eco_ov[i] <- round(eco_res$S_env[tx_i, nn_tx], 4)
-      n_mod <- as.integer(morph_res$S_morph[tx_i, nn_tx] >= min_aff) +
-               as.integer(is.finite(hop_ov[i]) && hop_ov[i] >= 0.25) +
-               as.integer(is.finite(eco_ov[i]) && eco_ov[i] >= 0.25)
+      n_mod <- as.integer(morph_res$S_morph[tx_i, nn_tx] >= min_aff) + as.integer(is.finite(hop_ov[i]) && hop_ov[i] >= 0.25) +
+               as.integer(is.finite(eco_ov[i]) && eco_ov[i] >= 0.25) + as.integer(isTRUE(geno_res$available) && is.finite(geno_res$mat[tx_i, nn_tx]) && geno_res$mat[tx_i, nn_tx] >= 0.25)
       int_cong[i] <- n_mod >= 2L
     }
   }
@@ -404,7 +426,7 @@ run_step07_complex_discovery <- function(full_df, opts = list()) {
   part_res$complexes_df$w_morph_kappa <- round(kappa_wts$w_morph, 4); part_res$complexes_df$w_edaphic_kappa <- round(kappa_wts$w_edaphic, 4)
   part_res$complexes_df$w_pheno_kappa <- round(kappa_wts$w_pheno, 4); part_res$complexes_df$n_misidentification_reassign <- n_misid
   part_res$complexes_df$n_hybrid_introgressant <- n_hyb; part_res$complexes_df$n_putative_cryptic <- n_crypt
-  # Reorder columns into canonical 24-column sequence (zero duplicate/twin columns)
+  # Reorder columns into canonical sequence (zero duplicate/twin columns)
   canon_order <- c(
     "species_standardized", "n_vouchers", "n_gold_silver_anchors", "n_type_specimens",
     "consensus_complex_id", "complex_label", "leiden_complex_id", "ward_complex_id", "silhouette_width", "within_complex_mean_affinity",
@@ -412,13 +434,9 @@ run_step07_complex_discovery <- function(full_df, opts = list()) {
     "hopkins_pheno_overlap", "eco_schoener_overlap", "integrative_congruence", "w_morph_kappa", "w_edaphic_kappa", "w_pheno_kappa",
     "n_misidentification_reassign", "n_hybrid_introgressant", "n_putative_cryptic")
   part_res$complexes_df <- part_res$complexes_df[, canon_order, drop = FALSE]
-  if (!is.null(opts$output_complexes) && nzchar(opts$output_complexes)) {
-    .atomic_write_complex_csv(part_res$complexes_df, opts$output_complexes)
-  }
+  if (!is.null(opts$output_complexes) && nzchar(opts$output_complexes)) .atomic_write_complex_csv(part_res$complexes_df, opts$output_complexes)
   aff_df <- data.frame(species_standardized = taxa, as.data.frame(W, check.names = FALSE), stringsAsFactors = FALSE, check.names = FALSE)
-  if (!is.null(opts$output_affinity) && nzchar(opts$output_affinity)) {
-    .atomic_write_complex_csv(aff_df, opts$output_affinity)
-  }
+  if (!is.null(opts$output_affinity) && nzchar(opts$output_affinity)) .atomic_write_complex_csv(aff_df, opts$output_affinity)
   focal_raw <- if (!is.null(opts$focal_taxon)) trimws(as.character(opts$focal_taxon)) else ""; selected_neighbors <- character(0)
   if (nzchar(focal_raw)) {
     focal_std <- .std_complex_taxon(focal_raw); focal_short <- sub("^Packera[[:space:]]+", "P. ", focal_std)
@@ -429,24 +447,15 @@ run_step07_complex_discovery <- function(full_df, opts = list()) {
       aff_mask <- apply(morph_res$C_morph_sym[focal_nodes, , drop = FALSE] >= min_aff, 2L, any)
       selected_neighbors <- sort(setdiff(union(same_complex, taxa[aff_mask]), focal_nodes))
     }
-    if (!is.null(opts$output_neighbors) && nzchar(opts$output_neighbors)) {
-      .atomic_write_complex_lines(selected_neighbors, opts$output_neighbors)
-    }
-  } else if (!is.null(opts$output_neighbors) && nzchar(opts$output_neighbors)) {
-    .atomic_write_complex_lines(part_res$complexes_df$species_standardized, opts$output_neighbors)
-  }
+    if (!is.null(opts$output_neighbors) && nzchar(opts$output_neighbors)) .atomic_write_complex_lines(selected_neighbors, opts$output_neighbors)
+  } else if (!is.null(opts$output_neighbors) && nzchar(opts$output_neighbors)) .atomic_write_complex_lines(part_res$complexes_df$species_standardized, opts$output_neighbors)
   if (!is.null(opts$output_complex_plot) && nzchar(opts$output_complex_plot)) {
-    if (!exists("render_step07_complex_discovery_png", mode = "function") && file.exists("scripts/morphometrics/pub_figures_utils.R")) {
-      source("scripts/morphometrics/pub_figures_utils.R")
-    }
-    if (exists("render_step07_complex_discovery_png", mode = "function")) {
-      tryCatch(render_step07_complex_discovery_png(W = W, part_res = part_res, out_path = opts$output_complex_plot), error = function(e) warning("Step 07 complex network figure warning: ", e$message))
-    }
+    if (!exists("render_step07_complex_discovery_png", mode = "function") && file.exists("scripts/morphometrics/pub_figures_utils.R")) source("scripts/morphometrics/pub_figures_utils.R")
+    if (exists("render_step07_complex_discovery_png", mode = "function")) tryCatch(render_step07_complex_discovery_png(W = W, part_res = part_res, out_path = opts$output_complex_plot), error = function(e) warning("Step 07 complex network figure warning: ", e$message))
   }
-  if (!isTRUE(opts$demo) && exists("persist_step07_complexes_to_sqlite", mode = "function")) {
-    tryCatch(persist_step07_complexes_to_sqlite(part_res$complexes_df, vouchers_path = opts$vouchers, demo = isTRUE(opts$demo)), error = function(e) warning("SQLite taxon_complexes persistence note: ", e$message))
-  }
+  if (!isTRUE(opts$demo) && exists("persist_step07_complexes_to_sqlite", mode = "function")) tryCatch(persist_step07_complexes_to_sqlite(part_res$complexes_df, vouchers_path = opts$vouchers, demo = isTRUE(opts$demo)), error = function(e) warning("SQLite taxon_complexes persistence note: ", e$message))
   list(
     complexes_df = part_res$complexes_df, affinity_matrix = W, part_res = part_res, morph_res = morph_res, eco_res = eco_res,
-    pheno_res = pheno_res, selected_neighbors = selected_neighbors, subcluster_mode = isTRUE(sub_res$subcluster_mode))
+    pheno_res = pheno_res, geno_res = geno_res, A_geno = if (isTRUE(geno_res$available)) geno_res$mat else NULL,
+    w_geno = if (!is.null(kappa_wts$w_geno)) kappa_wts$w_geno else 0.0, selected_neighbors = selected_neighbors, subcluster_mode = isTRUE(sub_res$subcluster_mode))
 }

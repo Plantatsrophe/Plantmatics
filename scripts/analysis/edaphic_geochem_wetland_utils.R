@@ -1,29 +1,14 @@
-#!/usr/bin/env Rscript
 if (grDevices::dev.cur() == 1L) grDevices::pdf(NULL)
-# ==============================================================================
 # LeafMachine3 + Plantmatics: Soil Geochemistry, NWI Wetland, and Basionym Guard Helpers
-# ==============================================================================
 for (.lh_p in c("scripts/analysis/step05_layer_hygiene_utils.R", file.path(dirname(c(sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE)), unlist(lapply(sys.frames(), function(fr) fr$ofile)))), "step05_layer_hygiene_utils.R"))) {
   if (!exists("mask_micro_scale_predictors_by_uncertainty", mode = "function") && !is.na(.lh_p) && nzchar(.lh_p) && file.exists(.lh_p)) { source(.lh_p); break }
 }
 .GW_RAW_NUM_COLS <- c("soil_ca_mg_molar_ratio", "soil_ultramafic_ni_cr_index", "soil_carbonate_c_pct", "nwi_wetland_dist_m")
 
 .is_valid_gw_db <- function(db_conn) !is.null(db_conn) && requireNamespace("DBI", quietly = TRUE) && isTRUE(tryCatch(DBI::dbIsValid(db_conn), error = function(e) FALSE))
-
-.has_finite_variation <- function(x, min_n = 3L, min_sd = 1e-6) {
-  v <- suppressWarnings(as.numeric(x)); v <- v[is.finite(v)]
-  length(v) >= min_n && is.finite(stats::sd(v)) && stats::sd(v) > min_sd
-}
-
-.pick_gw_chr <- function(df, col_nm, n) {
-  if (!(col_nm %in% names(df))) return(rep(NA_character_, n))
-  s <- trimws(as.character(df[[col_nm]])); s[!nzchar(s) | tolower(s) %in% c("na", "null", "nan")] <- NA_character_; s
-}
-
-.pick_gw_num <- function(df, col_nm, n) {
-  if (!(col_nm %in% names(df))) return(rep(NA_real_, n))
-  v <- df[[col_nm]]; suppressWarnings(as.numeric(if (is.factor(v)) as.character(v) else v))
-}
+.has_finite_variation <- function(x, min_n = 3L, min_sd = 1e-6) { v <- suppressWarnings(as.numeric(x)); v <- v[is.finite(v)]; length(v) >= min_n && is.finite(stats::sd(v)) && stats::sd(v) > min_sd }
+.pick_gw_chr <- function(df, col_nm, n) { if (!(col_nm %in% names(df))) return(rep(NA_character_, n)); s <- trimws(as.character(df[[col_nm]])); s[!nzchar(s) | tolower(s) %in% c("na", "null", "nan")] <- NA_character_; s }
+.pick_gw_num <- function(df, col_nm, n) { if (!(col_nm %in% names(df))) return(rep(NA_real_, n)); v <- df[[col_nm]]; suppressWarnings(as.numeric(if (is.factor(v)) as.character(v) else v)) }
 
 .coerce_int_flag <- function(x, n) {
   if (is.null(x)) return(rep(NA_integer_, n))
@@ -41,8 +26,7 @@ for (.lh_p in c("scripts/analysis/step05_layer_hygiene_utils.R", file.path(dirna
 }
 
 .apply_gw_lookup <- function(df, hit_idx, lookup_df, avail_cols) {
-  ok_pos <- which(!is.na(hit_idx) & hit_idx >= 1L & hit_idx <= nrow(lookup_df))
-  if (!length(ok_pos)) return(df)
+  ok_pos <- which(!is.na(hit_idx) & hit_idx >= 1L & hit_idx <= nrow(lookup_df)); if (!length(ok_pos)) return(df)
   for (col_nm in intersect(avail_cols, names(lookup_df))) {
     raw_v <- lookup_df[[col_nm]][hit_idx[ok_pos]]
     if (col_nm == "nwi_wetland_system") {
@@ -59,8 +43,7 @@ for (.lh_p in c("scripts/analysis/step05_layer_hygiene_utils.R", file.path(dirna
 }
 
 .query_in_chunks <- function(db_conn, keys, build_sql_fn, chunk_size = 450L) {
-  keys <- unique(keys[!is.na(keys) & nzchar(trimws(keys))])
-  if (length(keys) == 0L) return(NULL)
+  keys <- unique(keys[!is.na(keys) & nzchar(trimws(keys))]); if (length(keys) == 0L) return(NULL)
   parts <- list()
   for (s_i in seq(1L, length(keys), by = chunk_size)) {
     sub_k <- keys[s_i:min(length(keys), s_i + chunk_size - 1L)]
@@ -74,31 +57,21 @@ for (.lh_p in c("scripts/analysis/step05_layer_hygiene_utils.R", file.path(dirna
 .backfill_gw_from_sqlite <- function(df, db_conn) {
   if (nrow(df) == 0L || !.is_valid_gw_db(db_conn) || !isTRUE(tryCatch(DBI::dbExistsTable(db_conn, "environmental_cache"), error = function(e) FALSE))) return(df)
   ec_fields <- tryCatch(DBI::dbListFields(db_conn, "environmental_cache"), error = function(e) character(0))
-  avail_cols <- intersect(c(.GW_RAW_NUM_COLS, "is_nwi_wetland", "nwi_wetland_system"), ec_fields)
-  if (length(avail_cols) == 0L) return(df)
-  needs_any <- Reduce(`|`, lapply(avail_cols, function(cn) is.na(df[[cn]])))
-  if (!any(needs_any)) return(df)
-
+  avail_cols <- intersect(c(.GW_RAW_NUM_COLS, "is_nwi_wetland", "nwi_wetland_system"), ec_fields); if (length(avail_cols) == 0L) return(df)
+  needs_any <- Reduce(`|`, lapply(avail_cols, function(cn) is.na(df[[cn]]))); if (!any(needs_any)) return(df)
   key_vec <- if ("lat_lon_key" %in% names(df)) .pick_gw_chr(df, "lat_lon_key", nrow(df)) else if (all(c("decimalLatitude", "decimalLongitude") %in% names(df)) && exists("format_lat_lon_key", mode = "function")) format_lat_lon_key(df$decimalLatitude, df$decimalLongitude) else rep(NA_character_, nrow(df))
   if ("lat_lon_key" %in% ec_fields && any(!is.na(key_vec) & needs_any)) {
     sel_ec <- paste(avail_cols, collapse = ", ")
     ec_df <- .query_in_chunks(db_conn, key_vec[!is.na(key_vec) & needs_any], function(q_in) sprintf("SELECT lat_lon_key, %s FROM environmental_cache WHERE lat_lon_key IN (%s);", sel_ec, q_in))
-    if (!is.null(ec_df) && nrow(ec_df) > 0L) {
-      ec_df <- ec_df[!duplicated(ec_df$lat_lon_key), , drop = FALSE]
-      df <- .apply_gw_lookup(df, match(key_vec, trimws(as.character(ec_df$lat_lon_key))), ec_df, avail_cols)
-    }
+    if (!is.null(ec_df) && nrow(ec_df) > 0L) { ec_df <- ec_df[!duplicated(ec_df$lat_lon_key), , drop = FALSE]; df <- .apply_gw_lookup(df, match(key_vec, trimws(as.character(ec_df$lat_lon_key))), ec_df, avail_cols) }
   }
-
   needs_still <- Reduce(`|`, lapply(avail_cols, function(cn) is.na(df[[cn]])))
   if (any(needs_still) && ("catalogNumber" %in% names(df)) && isTRUE(tryCatch(DBI::dbExistsTable(db_conn, "vouchers"), error = function(e) FALSE))) {
     v_fields <- tryCatch(DBI::dbListFields(db_conn, "vouchers"), error = function(e) character(0))
     if (all(c("catalogNumber", "lat_lon_key") %in% v_fields) && ("lat_lon_key" %in% ec_fields)) {
       cat_vec <- .pick_gw_chr(df, "catalogNumber", nrow(df)); sel_join <- paste(paste0("ec.", avail_cols), collapse = ", ")
       v_df <- .query_in_chunks(db_conn, cat_vec[needs_still], function(q_in) sprintf("SELECT v.catalogNumber, %s FROM vouchers v INNER JOIN environmental_cache ec ON v.lat_lon_key = ec.lat_lon_key WHERE v.catalogNumber IN (%s);", sel_join, q_in))
-      if (!is.null(v_df) && nrow(v_df) > 0L) {
-        v_df <- v_df[!duplicated(v_df$catalogNumber), , drop = FALSE]
-        df <- .apply_gw_lookup(df, match(cat_vec, trimws(as.character(v_df$catalogNumber))), v_df, avail_cols)
-      }
+      if (!is.null(v_df) && nrow(v_df) > 0L) { v_df <- v_df[!duplicated(v_df$catalogNumber), , drop = FALSE]; df <- .apply_gw_lookup(df, match(cat_vec, trimws(as.character(v_df$catalogNumber))), v_df, avail_cols) }
     }
   }
   df
@@ -108,7 +81,6 @@ enrich_geochem_wetland_predictors <- function(df, db_conn = NULL, env_dir = "dat
   if (is.null(df) || !is.data.frame(df)) return(df)
   df <- .ensure_gw_cols(df); if (nrow(df) == 0L) return(df)
   df <- .backfill_gw_from_sqlite(df, db_conn)
-
   ca_mg <- df$soil_ca_mg_molar_ratio; ni_cr <- df$soil_ultramafic_ni_cr_index; carb_c <- df$soil_carbonate_c_pct
   if (.has_finite_variation(ca_mg) && (.has_finite_variation(ni_cr) || .has_finite_variation(carb_c))) {
     ok_g <- is.finite(ca_mg) & (is.finite(ni_cr) | is.finite(carb_c)) & !is.finite(df$ultramafic_calcareous_gradient)
@@ -117,24 +89,19 @@ enrich_geochem_wetland_predictors <- function(df, db_conn = NULL, env_dir = "dat
       df$ultramafic_calcareous_gradient[ok_g] <- round(log1p(1.0 / pmax(ca_mg, 0.05)) * (0.5 + 0.5 * pmin(ni_u / 6.0, 1.5)) - 0.5 * log1p(cb_u), 4)[ok_g]
     }
   }
-
   dist_m <- df$nwi_wetland_dist_m; is_wet <- suppressWarnings(as.numeric(df$is_nwi_wetland))
   has_sys_var <- length(unique(stats::na.omit(df$nwi_wetland_system))) >= 2L
   if (.has_finite_variation(dist_m, min_n = 2L) || .has_finite_variation(is_wet, min_n = 2L) ||
       ((nrow(df) <= 2L || has_sys_var) && any(is.finite(dist_m) | is.finite(is_wet)))) {
     ok_wsi <- (is.finite(dist_m) | is.finite(is_wet)) & !is.finite(df$wetland_seepage_index)
     if (any(ok_wsi)) {
-      nwi_sys <- ifelse(is.na(df$nwi_wetland_system), "", df$nwi_wetland_system)
-      wet_flag <- ifelse(is.finite(is_wet), ifelse(is_wet > 0, 1.0, 0.0), 0.0)
+      nwi_sys <- ifelse(is.na(df$nwi_wetland_system), "", df$nwi_wetland_system); wet_flag <- ifelse(is.finite(is_wet), ifelse(is_wet > 0, 1.0, 0.0), 0.0)
       dist_u <- ifelse(is.finite(dist_m), pmax(dist_m, 0.0), ifelse(wet_flag > 0, 0.0, Inf))
       decay <- ifelse(grepl("^(PEM|PFO|PSS)", nwi_sys, ignore.case = TRUE), exp(-dist_u / 90.0), 0.45 * exp(-dist_u / 90.0))
       twi_norm <- rep(NA_real_, nrow(df))
       if ("topo_twi_30m" %in% names(df)) {
         twi_v <- suppressWarnings(as.numeric(df$topo_twi_30m))
-        if (.has_finite_variation(twi_v, min_n = 2L)) {
-          rng <- range(twi_v[is.finite(twi_v)])
-          twi_norm <- ifelse(is.finite(twi_v), pmin(1.0, pmax(0.0, (twi_v - rng[1L]) / max(rng[2L] - rng[1L], 1e-6))), NA_real_)
-        }
+        if (.has_finite_variation(twi_v, min_n = 2L)) { rng <- range(twi_v[is.finite(twi_v)]); twi_norm <- ifelse(is.finite(twi_v), pmin(1.0, pmax(0.0, (twi_v - rng[1L]) / max(rng[2L] - rng[1L], 1e-6))), NA_real_) }
       }
       wsi_raw <- ifelse(is.finite(twi_norm), 0.70 * decay + 0.30 * twi_norm, decay)
       df$wetland_seepage_index[ok_wsi] <- round(pmin(1.0, pmax(0.0, wsi_raw[ok_wsi])), 4)
@@ -148,13 +115,11 @@ enrich_geochem_wetland_predictors <- function(df, db_conn = NULL, env_dir = "dat
   if (is.null(x) || length(x) == 0L || is.na(x)) return(character(0))
   s <- trimws(as.character(x)[1L]); if (!nzchar(s) || tolower(s) %in% c("na", "null", "[]")) return(character(0))
   parsed <- if (requireNamespace("jsonlite", quietly = TRUE)) tryCatch(jsonlite::fromJSON(s, simplifyVector = TRUE), error = function(e) character(0)) else s
-  vals <- trimws(as.character(unlist(parsed, use.names = FALSE)))
-  vals[!is.na(vals) & nzchar(vals) & !(tolower(vals) %in% c("na", "null"))]
+  vals <- trimws(as.character(unlist(parsed, use.names = FALSE))); vals[!is.na(vals) & nzchar(vals) & !(tolower(vals) %in% c("na", "null"))]
 }
 
 .norm_name_tokens <- function(vals) {
-  vals <- trimws(as.character(vals)); vals <- vals[!is.na(vals) & nzchar(vals)]
-  if (length(vals) == 0L) return(character(0))
+  vals <- trimws(as.character(vals)); vals <- vals[!is.na(vals) & nzchar(vals)]; if (length(vals) == 0L) return(character(0))
   toks <- character(0)
   pat_inf <- "^[a-z-]+([[:space:]]+(×[[:space:]]*|x[[:space:]]+)|[[:space:]]+)[a-z-]+[[:space:]]+(var\\.|subsp\\.|f\\.)[[:space:]]+[a-z-]+"
   pat_bin <- "^[a-z-]+([[:space:]]+(×[[:space:]]*|x[[:space:]]+)|[[:space:]]+)[a-z-]+"
@@ -178,8 +143,7 @@ enrich_geochem_wetland_predictors <- function(df, db_conn = NULL, env_dir = "dat
   if (length(keep) == 0L) return(prof_map)
   tbl <- tryCatch(DBI::dbGetQuery(db_conn, sprintf("SELECT %s FROM taxon_backbone_profiles;", paste(keep, collapse = ", "))), error = function(e) NULL)
   if (is.null(tbl) || nrow(tbl) == 0L) return(prof_map)
-  n_t <- nrow(tbl)
-  bas_v <- .pick_gw_chr(tbl, "basionym_name", n_t); acc_v <- .pick_gw_chr(tbl, "accepted_scientific_name", n_t)
+  n_t <- nrow(tbl); bas_v <- .pick_gw_chr(tbl, "basionym_name", n_t); acc_v <- .pick_gw_chr(tbl, "accepted_scientific_name", n_t)
   sp_v <- .pick_gw_chr(tbl, "species_standardized", n_t); ic_v <- .pick_gw_chr(tbl, "nwpl_indicator_code", n_t); sc_v <- .pick_gw_num(tbl, "nwpl_wetland_score", n_t)
   for (r in seq_len(n_t)) {
     ho_r <- if ("homotypic_synonyms_json" %in% names(tbl)) .parse_syn_json(tbl$homotypic_synonyms_json[r]) else character(0)
@@ -191,12 +155,43 @@ enrich_geochem_wetland_predictors <- function(df, db_conn = NULL, env_dir = "dat
   prof_map
 }
 
+.fallback_is_homotypic_gw <- function(bas_s, acc_s, row_df = NULL) {
+  norm_core <- function(s) { tk <- .norm_name_tokens(s); if (length(tk) >= 1L) tk[which.min(nchar(tk))] else gsub("[[:space:]]+", " ", tolower(trimws(as.character(s)[1L]))) }
+  b_low <- norm_core(bas_s); a_low <- norm_core(acc_s)
+  stem_fn <- function(s) {
+    toks <- strsplit(s, "[[:space:]]+")[[1L]]
+    toks <- toks[!grepl("^(var\\.?|subsp\\.?|ssp\\.?|f\\.?|x|×)$", toks)]
+    sub("(us|a|um|is|e)$", "", gsub("[^a-z]", "", if (length(toks) >= 1L) toks[length(toks)] else ""))
+  }
+  bs <- stem_fn(b_low); as_ <- stem_fn(a_low); out <- (nzchar(bs) && nzchar(as_) && (bs == as_)) || (a_low == "packera dubia" && b_low %in% c("cineraria dubia", "senecio dubius", "senecio tomentosus", "packera tomentosa"))
+  if (!is.null(row_df) && nrow(row_df) >= 1L) {
+    if ("backbone_basionym_name" %in% names(row_df)) { bb <- norm_core(row_df$backbone_basionym_name[1L]); if (!is.na(bb) && nzchar(bb) && nzchar(b_low) && (bb == b_low || startsWith(bb, paste0(b_low, " ")))) out <- TRUE }
+    if ("concept_synonymy_status" %in% names(row_df)) { cs <- trimws(as.character(row_df$concept_synonymy_status[1L])); if (!is.na(cs) && cs == "Heterotypic_Synonym") out <- FALSE else if (!is.na(cs) && cs %in% c("Homotypic_Synonym", "Accepted_Sensu_Stricto")) out <- TRUE }
+  }
+  out
+}
+
+.check_homotypic_gw <- function(cand_bas, sp_i, row_df = NULL) {
+  if (is.na(cand_bas) || !nzchar(trimws(cand_bas)) || is.na(sp_i) || !nzchar(trimws(sp_i))) return(NA)
+  ctx_df <- row_df
+  if (!is.null(ctx_df) && nrow(ctx_df) >= 1L && ("concept_synonymy_status" %in% names(ctx_df))) {
+    is_tp_r <- ("is_type_specimen" %in% names(ctx_df)) && isTRUE(.coerce_int_flag(ctx_df$is_type_specimen[1L], 1L) == 1L)
+    tb_r <- if ("typified_basionym" %in% names(ctx_df)) trimws(as.character(ctx_df$typified_basionym[1L])) else ""
+    same_tb <- is_tp_r && !is.na(tb_r) && nzchar(tb_r) && any(.norm_name_tokens(cand_bas) %in% .norm_name_tokens(tb_r))
+    if (!same_tb) ctx_df <- ctx_df[, setdiff(names(ctx_df), "concept_synonymy_status"), drop = FALSE]
+  }
+  if (exists(".is_homotypic_sensu_stricto_basionym", mode = "function")) return(isTRUE(.is_homotypic_sensu_stricto_basionym(cand_bas, sp_i, df = ctx_df)[1L]))
+  .fallback_is_homotypic_gw(cand_bas, sp_i, ctx_df)
+}
+
 evaluate_step07_hydro_edaphic_and_basionym_guards <- function(master_df, db_conn = NULL) {
   if (is.null(master_df) || !is.data.frame(master_df)) return(master_df)
   n <- nrow(master_df)
   if (!("hydro_edaphic_niche_regime" %in% names(master_df))) master_df$hydro_edaphic_niche_regime <- rep(NA_character_, n)
   if (!("wetland_fidelity_concordance" %in% names(master_df))) master_df$wetland_fidelity_concordance <- rep(NA_real_, n)
   if (!("basionym_synonymy_type" %in% names(master_df))) master_df$basionym_synonymy_type <- rep(NA_character_, n)
+  if (!("basionym_guard_status" %in% names(master_df))) master_df$basionym_guard_status <- rep(NA_character_, n)
+  if (!("basionym_niche_corroborated" %in% names(master_df))) master_df$basionym_niche_corroborated <- rep(FALSE, n)
   if (n == 0L) return(master_df)
 
   master_df <- enrich_geochem_wetland_predictors(master_df, db_conn = db_conn)
@@ -205,26 +200,18 @@ evaluate_step07_hydro_edaphic_and_basionym_guards <- function(master_df, db_conn
   ca_mg <- master_df$soil_ca_mg_molar_ratio; ni_cr <- master_df$soil_ultramafic_ni_cr_index
   carb_c <- master_df$soil_carbonate_c_pct; uc_grad <- master_df$ultramafic_calcareous_gradient
   dist_m <- master_df$nwi_wetland_dist_m; sgmc <- .pick_gw_chr(master_df, "sgmc_lithology_class", n)
-
   regime <- as.character(master_df$hydro_edaphic_niche_regime)
   for (i in seq_len(n)) {
-    if (!(is.finite(ca_mg[i]) || is.finite(ni_cr[i]) || is.finite(carb_c[i]) || is.finite(uc_grad[i]) ||
-          is.finite(is_wet[i]) || is.finite(dist_m[i]) || is.finite(wsi[i]) || !is.na(sgmc[i]))) next
+    if (!(is.finite(ca_mg[i]) || is.finite(ni_cr[i]) || is.finite(carb_c[i]) || is.finite(uc_grad[i]) || is.finite(is_wet[i]) || is.finite(dist_m[i]) || is.finite(wsi[i]) || !is.na(sgmc[i]))) next
     is_um_sgmc <- !is.na(sgmc[i]) && grepl("ultramafic|serpentin|peridotit|dunite", sgmc[i], ignore.case = TRUE)
     is_um_chem <- (is.na(sgmc[i]) || grepl("mafic|ultramafic|serpentin|metamorphic", sgmc[i], ignore.case = TRUE)) && is.finite(ni_cr[i]) &&
       ((ni_cr[i] >= 3.85 && (!is.finite(ca_mg[i]) || ca_mg[i] <= 0.90)) || (is.na(sgmc[i]) && ni_cr[i] >= 2.0 && is.finite(ca_mg[i]) && ca_mg[i] <= 0.25))
-    regime[i] <- if (is_um_sgmc || is_um_chem) {
-      "Ultramafic_Serpentine_Barren"
-    } else if ((!is.na(is_wet[i]) && is_wet[i] == 1) || (is.finite(wsi[i]) && wsi[i] >= 0.65)) {
-      "Palustrine_Wetland_Fen"
-    } else if ((is.finite(ca_mg[i]) && ca_mg[i] >= 2.0) || (is.finite(carb_c[i]) && carb_c[i] >= 0.5) || (is.finite(uc_grad[i]) && uc_grad[i] <= -0.35)) {
-      "Calcareous_Carbonate_Glade"
-    } else if ((is.finite(ca_mg[i]) && ca_mg[i] < 1.2 && (!is.finite(ni_cr[i]) || ni_cr[i] < 4.0)) ||
-               (!is.na(sgmc[i]) && grepl("felsic|granit|quartzit", sgmc[i], ignore.case = TRUE) && (!is.finite(ca_mg[i]) || (ca_mg[i] < 2.0 && (!is.finite(ni_cr[i]) || ni_cr[i] < 4.0) && (!is.finite(carb_c[i]) || carb_c[i] < 0.5))))) {
-      "Siliceous_Felsic_Outcrop"
-    } else {
-      "Mesic_Upland_Matrix"
-    }
+    regime[i] <- if (is_um_sgmc || is_um_chem) "Ultramafic_Serpentine_Barren"
+    else if ((!is.na(is_wet[i]) && is_wet[i] == 1) || (is.finite(wsi[i]) && wsi[i] >= 0.65)) "Palustrine_Wetland_Fen"
+    else if ((is.finite(ca_mg[i]) && ca_mg[i] >= 2.0) || (is.finite(carb_c[i]) && carb_c[i] >= 0.5) || (is.finite(uc_grad[i]) && uc_grad[i] <= -0.35)) "Calcareous_Carbonate_Glade"
+    else if ((is.finite(ca_mg[i]) && ca_mg[i] < 1.2 && (!is.finite(ni_cr[i]) || ni_cr[i] < 4.0)) ||
+             (!is.na(sgmc[i]) && grepl("felsic|granit|quartzit", sgmc[i], ignore.case = TRUE) && (!is.finite(ca_mg[i]) || (ca_mg[i] < 2.0 && (!is.finite(ni_cr[i]) || ni_cr[i] < 4.0) && (!is.finite(carb_c[i]) || carb_c[i] < 0.5))))) "Siliceous_Felsic_Outcrop"
+    else "Mesic_Upland_Matrix"
   }
   master_df$hydro_edaphic_niche_regime <- regime
 
@@ -232,35 +219,56 @@ evaluate_step07_hydro_edaphic_and_basionym_guards <- function(master_df, db_conn
   nwpl_sc <- .pick_gw_num(master_df, "nwpl_wetland_score", n); nwpl_ic <- .pick_gw_chr(master_df, "nwpl_indicator_code", n)
   has_res_col <- "resurrection_basionym" %in% names(master_df)
   res_vec <- .pick_gw_chr(master_df, "resurrection_basionym", n); ntb_vec <- .pick_gw_chr(master_df, "nearest_type_basionym", n)
+  ntnb_vec <- .pick_gw_chr(master_df, "nearest_type_niche_basionym", n); ntbz_vec <- .pick_gw_num(master_df, "nearest_type_basionym_edaphic_z", n)
   row_bas <- if ("backbone_basionym_name" %in% names(master_df)) .pick_gw_chr(master_df, "backbone_basionym_name", n) else .pick_gw_chr(master_df, "basionym_name", n)
   row_ho <- if ("homotypic_synonyms_json" %in% names(master_df)) as.character(master_df$homotypic_synonyms_json) else rep(NA_character_, n)
   row_he <- if ("heterotypic_synonyms_json" %in% names(master_df)) as.character(master_df$heterotypic_synonyms_json) else rep(NA_character_, n)
   is_tp <- if ("is_type_specimen" %in% names(master_df)) (.coerce_int_flag(master_df$is_type_specimen, n) == 1L) else rep(FALSE, n); is_tp[is.na(is_tp)] <- FALSE
+  syn_type <- as.character(master_df$basionym_synonymy_type); guard_status <- as.character(master_df$basionym_guard_status)
+  niche_corrob <- as.logical(master_df$basionym_niche_corroborated); niche_corrob[is.na(niche_corrob)] <- FALSE
 
-  syn_type <- as.character(master_df$basionym_synonymy_type)
+  classify_bas <- function(cand, sp_i, row_df, ho_toks, he_toks, ac_toks, allow_acc, prefer_he) {
+    if (is.na(cand) || !nzchar(trimws(cand))) return(NA_character_)
+    ct <- .norm_name_tokens(cand)
+    if (prefer_he && any(ct %in% he_toks)) return("Heterotypic")
+    if (any(ct %in% ho_toks)) return("Homotypic")
+    if (!prefer_he && any(ct %in% he_toks)) return("Heterotypic")
+    if (isTRUE(allow_acc) && any(ct %in% ac_toks)) return("Accepted_Type")
+    is_ho <- .check_homotypic_gw(cand, sp_i, row_df)
+    if (isTRUE(is_ho)) return(if (isTRUE(allow_acc) && any(ct %in% ac_toks)) "Accepted_Type" else "Homotypic")
+    if (identical(is_ho, FALSE)) return("Heterotypic")
+    NA_character_
+  }
   for (i in seq_len(n)) {
-    prof <- NULL
+    prof <- NULL; sp_i <- if (!is.na(sp_vec[i])) sp_vec[i] else acc_vec[i]; row_i <- master_df[i, , drop = FALSE]
     for (k in .norm_name_tokens(c(sp_vec[i], acc_vec[i]))) if (k %in% names(prof_map)) { prof <- prof_map[[k]]; break }
-    if (!is.null(prof)) {
-      if (!is.finite(nwpl_sc[i]) && is.finite(prof$nwpl_score)) nwpl_sc[i] <- prof$nwpl_score
-      if (is.na(nwpl_ic[i]) && !is.na(prof$nwpl_code)) nwpl_ic[i] <- prof$nwpl_code
-    }
+    if (!is.null(prof)) { if (!is.finite(nwpl_sc[i]) && is.finite(prof$nwpl_score)) nwpl_sc[i] <- prof$nwpl_score; if (is.na(nwpl_ic[i]) && !is.na(prof$nwpl_code)) nwpl_ic[i] <- prof$nwpl_code }
     ho_toks <- unique(c(if (!is.null(prof)) prof$homo_toks else character(0), .norm_name_tokens(c(row_bas[i], .parse_syn_json(row_ho[i])))))
     he_toks <- unique(c(if (!is.null(prof)) prof$hetero_toks else character(0), .norm_name_tokens(.parse_syn_json(row_he[i]))))
     ac_toks <- unique(c(if (!is.null(prof)) prof$acc_toks else character(0), .norm_name_tokens(c(sp_vec[i], acc_vec[i]))))
     has_prof <- !is.null(prof) || length(ho_toks) > 0L || length(he_toks) > 0L
+    morph_bas_i <- if (!is.na(res_vec[i])) res_vec[i] else ntb_vec[i]
     if (!is.na(res_vec[i])) {
-      r_toks <- .norm_name_tokens(res_vec[i])
-      if (any(r_toks %in% ho_toks)) { syn_type[i] <- "Homotypic"; res_vec[i] <- NA_character_ } else if (any(r_toks %in% he_toks)) syn_type[i] <- "Heterotypic"
+      cls_r <- classify_bas(res_vec[i], sp_i, row_i, ho_toks, he_toks, ac_toks, allow_acc = FALSE, prefer_he = FALSE)
+      if (identical(cls_r, "Homotypic")) { syn_type[i] <- "Homotypic"; guard_status[i] <- "Homotypic_Sensu_Stricto_Lock"; res_vec[i] <- NA_character_ }
+      else if (identical(cls_r, "Heterotypic")) { syn_type[i] <- "Heterotypic"; guard_status[i] <- "Heterotypic_Resurrection_Candidate" }
     } else if (!is.na(ntb_vec[i])) {
-      n_toks <- .norm_name_tokens(ntb_vec[i])
-      if (any(n_toks %in% he_toks)) syn_type[i] <- "Heterotypic" else if (any(n_toks %in% ho_toks)) syn_type[i] <- "Homotypic" else if (is_tp[i] && any(n_toks %in% ac_toks)) syn_type[i] <- "Accepted_Type"
-    } else if (is_tp[i] && has_prof) syn_type[i] <- "Accepted_Type"
+      cls_n <- classify_bas(ntb_vec[i], sp_i, row_i, ho_toks, he_toks, ac_toks, allow_acc = is_tp[i], prefer_he = TRUE)
+      if (identical(cls_n, "Heterotypic")) { syn_type[i] <- "Heterotypic"; guard_status[i] <- "Heterotypic_Resurrection_Candidate" }
+      else if (identical(cls_n, "Homotypic")) { syn_type[i] <- "Homotypic"; guard_status[i] <- "Homotypic_Sensu_Stricto_Lock" }
+      else if (identical(cls_n, "Accepted_Type")) { syn_type[i] <- "Accepted_Type"; guard_status[i] <- "Homotypic_Sensu_Stricto_Lock" }
+    } else if (is_tp[i] && has_prof) { syn_type[i] <- "Accepted_Type"; guard_status[i] <- "Homotypic_Sensu_Stricto_Lock" }
+    if (!is.na(ntnb_vec[i]) && is.finite(ntbz_vec[i]) && (ntbz_vec[i] <= 2.5)) {
+      cls_nb <- classify_bas(ntnb_vec[i], sp_i, row_i, ho_toks, he_toks, ac_toks, allow_acc = is_tp[i], prefer_he = TRUE)
+      same_bas <- is.na(morph_bas_i) || any(.norm_name_tokens(ntnb_vec[i]) %in% .norm_name_tokens(morph_bas_i))
+      if (identical(cls_nb, "Heterotypic") && (is.na(syn_type[i]) || identical(syn_type[i], "Heterotypic"))) {
+        syn_type[i] <- "Heterotypic"; guard_status[i] <- "Heterotypic_Resurrection_Candidate"; if (same_bas) niche_corrob[i] <- TRUE
+      } else if (identical(cls_nb, "Homotypic") && is.na(syn_type[i])) { syn_type[i] <- "Homotypic"; guard_status[i] <- "Homotypic_Sensu_Stricto_Lock" }
+    }
   }
-
   ok_wfc <- is.finite(wsi) & is.finite(nwpl_sc)
   if (any(ok_wfc)) master_df$wetland_fidelity_concordance[ok_wfc] <- round(pmin(1.0, pmax(0.0, 1.0 - abs(wsi[ok_wfc] - nwpl_sc[ok_wfc]))), 4)
-  master_df$basionym_synonymy_type <- syn_type
+  master_df$basionym_synonymy_type <- syn_type; master_df$basionym_guard_status <- guard_status; master_df$basionym_niche_corroborated <- niche_corrob
   if (has_res_col) master_df$resurrection_basionym <- res_vec
   if (any(is.finite(nwpl_sc)) || ("nwpl_wetland_score" %in% names(master_df))) master_df$nwpl_wetland_score <- nwpl_sc
   if (any(!is.na(nwpl_ic)) || ("nwpl_indicator_code" %in% names(master_df))) master_df$nwpl_indicator_code <- nwpl_ic

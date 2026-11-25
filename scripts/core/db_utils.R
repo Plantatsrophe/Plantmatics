@@ -565,7 +565,15 @@ PACKERA_DB_SRF_COLS <- c(
       cytotype_reproductive_barrier_pass = "INTEGER",
       hydro_edaphic_niche_regime = "TEXT",
       wetland_fidelity_concordance = "REAL",
-      basionym_synonymy_type = "TEXT"
+      basionym_synonymy_type = "TEXT",
+      w_morph_simplex = "REAL",
+      w_edaphic_simplex = "REAL",
+      w_pheno_simplex = "REAL",
+      w_geno_simplex = "REAL",
+      geno_deme_weight_scale = "REAL",
+      portal_metadata_lag_flag = "INTEGER",
+      portal_lag_trigger_gate = "TEXT",
+      is_marginal_range_extension = "INTEGER"
     ))
   }
   if (identical(table_name, "cytological_records")) {
@@ -1032,6 +1040,11 @@ connect_packera_db <- function(
     "is_centroid_or_inst_coord", "coord_quarantine_reason",
     "typified_basionym", "concept_synonymy_status", "is_open_or_hybrid_concept"
   )
+  ct_fields_chk <- if (db_table_exists_safe(conn, "curation_triage")) tryCatch(DBI::dbListFields(conn, "curation_triage"), error = function(e) character(0)) else c(
+    "w_morph_simplex", "w_edaphic_simplex", "w_pheno_simplex", "w_geno_simplex",
+    "geno_deme_weight_scale", "portal_metadata_lag_flag", "portal_lag_trigger_gate",
+    "is_marginal_range_extension"
+  )
   mv_fields_chk <- if (db_table_exists_safe(conn, "v_integrative_triage_master")) tryCatch(DBI::dbListFields(conn, "v_integrative_triage_master"), error = function(e) character(0)) else character(0)
   v_has_concept <- all(c("typified_basionym", "verbatim_taxon_concept", "concept_synonymy_status", "identification_year", "is_open_or_hybrid_concept") %in% v_fields_chk)
   el_has_zone <- all(c("leaf_zone", "ect_path", "bbox_x1", "basal_cordate_index", "blade_cie_l_q85_sheet_delta", "is_abaxial_pressed_leaf") %in% el_fields_chk)
@@ -1050,6 +1063,11 @@ connect_packera_db <- function(
     "is_centroid_or_inst_coord", "coord_quarantine_reason",
     "typified_basionym", "concept_synonymy_status", "is_open_or_hybrid_concept"
   ) %in% gs_fields_chk)
+  ct_has_latest <- all(c(
+    "w_morph_simplex", "w_edaphic_simplex", "w_pheno_simplex", "w_geno_simplex",
+    "geno_deme_weight_scale", "portal_metadata_lag_flag", "portal_lag_trigger_gate",
+    "is_marginal_range_extension"
+  ) %in% ct_fields_chk)
   mv_has_latest <- identical(eff_path, ":memory:") || all(c(
     "is_passive", "scale_source", "AR_inv_std", "reproductive_trait_status",
     "corymb_head_count_est", "radiate_head_fraction",
@@ -1065,6 +1083,9 @@ connect_packera_db <- function(
     "soil_ca_mg_molar_ratio", "soil_ultramafic_ni_cr_index", "soil_carbonate_c_pct",
     "is_nwi_wetland", "nwi_wetland_system", "nwi_wetland_dist_m",
     "hydro_edaphic_niche_regime", "wetland_fidelity_concordance", "basionym_synonymy_type",
+    "w_morph_simplex", "w_edaphic_simplex", "w_pheno_simplex", "w_geno_simplex",
+    "geno_deme_weight_scale", "portal_metadata_lag_flag", "portal_lag_trigger_gate",
+    "is_marginal_range_extension",
     "backbone_basionym_name", "protologue_url", "natureserve_global_rank",
     "nwpl_indicator_code", "nwpl_wetland_score",
     "is_centroid_or_inst_coord", "coord_quarantine_reason",
@@ -1078,7 +1099,7 @@ connect_packera_db <- function(
   ) %in% mv_fields_chk)
   if (cur_ver >= PLANTMATICS_SCHEMA_USER_VERSION &&
     v_has_concept && el_has_zone && vrp_has_latest && leh_has_latest && om_has_cauline &&
-    ec_has_latest && srf_has_latest && gs_has_latest && mv_has_latest &&
+    ec_has_latest && srf_has_latest && gs_has_latest && ct_has_latest && mv_has_latest &&
     (identical(eff_path, ":memory:") || (
       db_table_exists_safe(conn, "v_integrative_triage_master") &&
         db_table_exists_safe(conn, "genomic_samples") &&
@@ -1129,6 +1150,9 @@ connect_packera_db <- function(
         "soil_ca_mg_molar_ratio", "soil_ultramafic_ni_cr_index", "soil_carbonate_c_pct",
         "is_nwi_wetland", "nwi_wetland_system", "nwi_wetland_dist_m",
         "hydro_edaphic_niche_regime", "wetland_fidelity_concordance", "basionym_synonymy_type",
+        "w_morph_simplex", "w_edaphic_simplex", "w_pheno_simplex", "w_geno_simplex",
+        "geno_deme_weight_scale", "portal_metadata_lag_flag", "portal_lag_trigger_gate",
+        "is_marginal_range_extension",
         "backbone_basionym_name", "protologue_url", "natureserve_global_rank",
         "nwpl_indicator_code", "nwpl_wetland_score",
         "is_centroid_or_inst_coord", "coord_quarantine_reason",
@@ -3515,7 +3539,9 @@ try_fetch_master_view_for_cohort <- function(
   }
 
   has_m <- ("cda_predicted_taxon" %in% names(master_df) && any(!is.na(master_df$cda_predicted_taxon))) ||
-    ("PC1" %in% names(master_df) && any(!is.na(master_df$PC1)))
+    ("PC1" %in% names(master_df) && any(!is.na(master_df$PC1))) ||
+    ("ECT_PC1" %in% names(master_df) && any(is.finite(suppressWarnings(as.numeric(master_df$ECT_PC1))))) ||
+    ("can1" %in% names(master_df) && any(is.finite(suppressWarnings(as.numeric(master_df$can1)))))
   has_s <- ("rf_predicted_taxon" %in% names(master_df) && any(!is.na(master_df$rf_predicted_taxon))) ||
     ("edaphic_best_fit_taxon" %in% names(master_df) && any(!is.na(master_df$edaphic_best_fit_taxon)))
 
@@ -3528,7 +3554,10 @@ try_fetch_master_view_for_cohort <- function(
 
   if (!isTRUE(require_step07)) {
     stale_ct_cols <- c(
-      "w_morph_kappa", "w_edaphic_kappa", "w_pheno_kappa", "w_geno_kappa", "n_available_modalities",
+      "w_morph_kappa", "w_edaphic_kappa", "w_pheno_kappa", "w_geno_kappa",
+      "w_morph_simplex", "w_edaphic_simplex", "w_pheno_simplex", "w_geno_simplex",
+      "geno_deme_weight_scale", "portal_metadata_lag_flag", "portal_lag_trigger_gate",
+      "is_marginal_range_extension", "n_available_modalities",
       "probabilistic_consensus_conflict", "probabilistic_consensus_score",
       "delta_doy_resid", "taxonomic_status_call", "recommended_determination",
       "taxonomic_treatment_broad", "taxonomic_treatment_subtype",
@@ -3542,6 +3571,8 @@ try_fetch_master_view_for_cohort <- function(
       "taxon_reported_cytotypes", "is_multi_cytotype_taxon", "cytotype_reproductive_barrier_pass",
       "hydro_edaphic_niche_regime", "wetland_fidelity_concordance", "basionym_synonymy_type"
     )
+    # Strip stale ct.delta_doy_resid while explicitly preserving Step 05 hopkins_adjusted_doy_resid
+    stale_ct_cols <- setdiff(stale_ct_cols, "hopkins_adjusted_doy_resid")
     master_df <- master_df[, setdiff(names(master_df), stale_ct_cols), drop = FALSE]
   }
   if (!isTRUE(require_step05) && !isTRUE(require_step07)) {
@@ -3595,7 +3626,7 @@ persist_step07_to_sqlite <- function(
   for (.bcol in intersect(c("cryptic_cluster_cohesion_pass", "cryptic_non_clinal_pass", "hybrid_zone_cohesion_pass", "is_completed_voucher"), names(ct_df))) {
     ct_df[[.bcol]] <- ifelse(is.na(ct_df[[.bcol]]), NA_integer_, as.integer(as.logical(ct_df[[.bcol]])))
   }
-  for (.fcol in intersect(c("tier0_abstention_flag", "is_multi_cytotype_taxon", "cytotype_reproductive_barrier_pass"), names(ct_df))) {
+  for (.fcol in intersect(c("tier0_abstention_flag", "is_multi_cytotype_taxon", "cytotype_reproductive_barrier_pass", "portal_metadata_lag_flag", "is_marginal_range_extension"), names(ct_df))) {
     v_abs <- ct_df[[.fcol]]
     if (is.logical(v_abs)) {
       ct_df[[.fcol]] <- as.integer(v_abs)
@@ -3603,8 +3634,8 @@ persist_step07_to_sqlite <- function(
       s_abs <- trimws(as.character(v_abs))
       out_abs <- suppressWarnings(as.integer(s_abs))
       u_abs <- toupper(s_abs)
-      out_abs[is.na(out_abs) & u_abs %in% c("TRUE", "T", "YES", "Y")] <- 1L
-      out_abs[is.na(out_abs) & u_abs %in% c("FALSE", "F", "NO", "N")] <- 0L
+      out_abs[is.na(out_abs) & u_abs %in% c("TRUE", "T", "YES", "Y", "1.0")] <- 1L
+      out_abs[is.na(out_abs) & u_abs %in% c("FALSE", "F", "NO", "N", "0.0")] <- 0L
       ct_df[[.fcol]] <- out_abs
     } else {
       v_num <- suppressWarnings(as.numeric(v_abs))
@@ -3622,11 +3653,13 @@ persist_step07_to_sqlite <- function(
     out_i[ok_i] <- as.integer(round(v_num[ok_i]))
     ct_df[[.icol]] <- out_i
   }
-  for (.fcol in intersect(c("tier0_calibrated_prob", "deme_mahal_d2", "cluster_propagated_gdi", "wetland_fidelity_concordance"), names(ct_df))) {
+  for (.fcol in intersect(c("w_morph_simplex", "w_edaphic_simplex", "w_pheno_simplex", "w_geno_simplex", "geno_deme_weight_scale", "tier0_calibrated_prob", "deme_mahal_d2", "cluster_propagated_gdi", "wetland_fidelity_concordance"), names(ct_df))) {
     v_f <- ct_df[[.fcol]]
-    ct_df[[.fcol]] <- if (is.factor(v_f)) suppressWarnings(as.numeric(as.character(v_f))) else suppressWarnings(as.numeric(v_f))
+    v_num <- if (is.factor(v_f)) suppressWarnings(as.numeric(as.character(v_f))) else suppressWarnings(as.numeric(v_f))
+    v_num[!is.finite(v_num)] <- NA_real_
+    ct_df[[.fcol]] <- v_num
   }
-  for (.scol in intersect(c("genomic_propagation_tier", "tier0_calibrated_taxon", "cytology_linkage_tier", "taxon_reported_cytotypes", "hydro_edaphic_niche_regime", "basionym_synonymy_type"), names(ct_df))) {
+  for (.scol in intersect(c("genomic_propagation_tier", "tier0_calibrated_taxon", "cytology_linkage_tier", "taxon_reported_cytotypes", "hydro_edaphic_niche_regime", "basionym_synonymy_type", "portal_lag_trigger_gate"), names(ct_df))) {
     ct_df[[.scol]] <- as.character(ct_df[[.scol]])
   }
 

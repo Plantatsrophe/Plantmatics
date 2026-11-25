@@ -37,11 +37,13 @@ suppressPackageStartupMessages({
 .source_step07_dep("scripts/core/db_utils.R", "../core/db_utils.R", "persist_step07_to_sqlite")
 .source_step07_dep("scripts/analysis/taxon_complex_discovery_utils.R", "taxon_complex_discovery_utils.R", "run_step07_complex_discovery")
 .source_step07_dep("scripts/analysis/genomic_triage_utils.R", "genomic_triage_utils.R", "load_step07_genomic_metrics")
+.source_step07_dep("scripts/analysis/step07_genomic_report_utils.R", "step07_genomic_report_utils.R", "build_genomic_markdown_summary")
 .source_step07_dep("scripts/analysis/step07_genomic_propagation.R", "step07_genomic_propagation.R", "run_step07_genomic_propagation")
 .source_step07_dep("scripts/analysis/step07_cytology_integration.R", "step07_cytology_integration.R", "run_step07_cytology_integration")
 .source_step07_dep("scripts/analysis/edaphic_geochem_wetland_utils.R", "edaphic_geochem_wetland_utils.R", "evaluate_step07_hydro_edaphic_and_basionym_guards")
 .source_step07_dep("scripts/analysis/step07_organellar_triage_utils.R", "step07_organellar_triage_utils.R", "evaluate_step07_organellar_and_oop_signals")
-.source_step07_dep("scripts/analysis/step07_hopkins_consensus_utils.R", "step07_hopkins_consensus_utils.R", "compute_probabilistic_consensus_scores")
+.source_step07_dep("scripts/analysis/step07_hopkins_consensus_utils.R", "step07_hopkins_consensus_utils.R", "compute_hopkins_adjusted_phenology")
+.source_step07_dep("scripts/analysis/step07_consensus_weights_utils.R", "step07_consensus_weights_utils.R", "compute_probabilistic_consensus_scores")
 .source_step07_dep("scripts/analysis/step07_biogeo_hybrid_utils.R", "step07_biogeo_hybrid_utils.R", ".eval_five_gate_hybrid_pair_impl")
 .source_step07_dep("scripts/analysis/step07_cluster_cohesion_utils.R", "step07_cluster_cohesion_utils.R", ".build_step07_cluster_cohesion_context")
 .source_step07_dep("scripts/analysis/step07_decision_stages_utils.R", "step07_decision_stages_utils.R", ".evaluate_step07_specimen_stages")
@@ -146,7 +148,7 @@ apply_taxonomic_decision_matrix <- function(df, intraspecific_mode = FALSE, gmm_
   prop_morph_cols <- intersect(c("cda_predicted_taxon", "cda_posterior_prob", "cda_oof_posterior_prob", "cl_target_threshold", "self_morph_mahal_d2", "self_morph_df",
     "cda_posterior_margin", "cda_runner_up_taxon", "cda_second_taxon", "cda_second_predicted_taxon", "cda_second_posterior_prob", "cda_mahal_d2", "type_morph_mahal_d2",
     "nearest_type_morph_taxon", "nearest_type_basionym", "nearest_type_basionym_d2", "type_morph_concordance", "is_typical_morphotype", "min_congener_mahal_d2",
-    "min_congener_taxon", "open_set_novelty_p", "open_set_df", "gmm_cluster", "gmm_uncertainty", "is_morph_outlier", "morphometric_outlier_flag", "misidentification_flag"), names(df))
+    "min_congener_taxon", "open_set_novelty_p", "open_set_p_value", "open_set_df", "gmm_cluster", "gmm_uncertainty", "is_morph_outlier", "morphometric_outlier_flag", "misidentification_flag"), names(df))
   mts_init_v <- .chr_col(df, "morph_tier_source", n, "Basal_Rosette"); is_caul_init <- !is.na(mts_init_v) & (mts_init_v == "Cauline_Only_Fallback")
   is_basal_obs <- orig_has_obs_morph_v & !is_caul_init
   for (s_idx in sheet_idx_list) {
@@ -166,6 +168,8 @@ apply_taxonomic_decision_matrix <- function(df, intraspecific_mode = FALSE, gmm_
 
   active_taxa <- sort(unique(sp_all_vec[!is.na(sp_all_vec) & nzchar(sp_all_vec) & sp_all_vec != "Unknown"]))
   anchor_all <- .resolve_step07_anchor_mask(df); mo_all <- .lgl_col(df, "morphometric_outlier_flag", n); noise_all <- .lgl_col(df, "is_confident_label_noise", n)
+  open_hyb_raw <- .step07_safe_bool(if ("is_open_or_hybrid_concept" %in% names(df)) df$is_open_or_hybrid_concept else rep(FALSE, n))
+  open_hyb_dv <- if (exists(".identify_open_or_hybrid_concept_mask", mode = "function")) open_hyb_raw | .step07_safe_bool(.identify_open_or_hybrid_concept_mask(df)) else open_hyb_raw
   doy_num_all <- .num_col(df, "doy", n); valid_raw_doy <- is.finite(doy_num_all) & doy_num_all >= 1.0 & doy_num_all <= 366.0
   hop_in_all <- .num_col(df, "hopkins_adjusted_doy", n); valid_hop <- is.finite(hop_in_all) & hop_in_all >= 1.0 & hop_in_all <= 366.0
   valid_doy_all <- valid_raw_doy | valid_hop; hop_doy_all <- ifelse(valid_hop, hop_in_all, ifelse(valid_raw_doy, doy_num_all, NA_real_))
@@ -185,8 +189,8 @@ apply_taxonomic_decision_matrix <- function(df, intraspecific_mode = FALSE, gmm_
     med_d <- ((mu_th * (365.25 / (2.0 * pi)) - 1.0) %% 365.25) + 1.0
     list(mu_theta = mu_th, q75_arc = q75_a, q75_doy = ((med_d + q75_a - 1.0) %% 365.25) + 1.0, med_doy = med_d)
   }
-  glob_hop_pool <- hop_doy_all[valid_doy_all & anth_all & anchor_all & !mo_all & !noise_all]
-  if (length(glob_hop_pool) == 0L) glob_hop_pool <- hop_doy_all[valid_doy_all & anth_all & !noise_all]
+  glob_hop_pool <- hop_doy_all[valid_doy_all & anth_all & anchor_all & !mo_all & !noise_all & !open_hyb_dv]
+  if (length(glob_hop_pool) == 0L) glob_hop_pool <- hop_doy_all[valid_doy_all & anth_all & !noise_all & !open_hyb_dv]
   if (length(glob_hop_pool) == 0L) glob_hop_pool <- hop_doy_all[valid_doy_all]
   glob_circ <- .circ_hop_stats(glob_hop_pool)
   mu_theta_hop <- stats::setNames(rep(glob_circ$mu_theta, length(active_taxa)), active_taxa); q75_arc_hop <- stats::setNames(rep(glob_circ$q75_arc, length(active_taxa)), active_taxa)
@@ -198,25 +202,26 @@ apply_taxonomic_decision_matrix <- function(df, intraspecific_mode = FALSE, gmm_
     idx_t <- which(sp_all_vec == tx)
     if (!is.null(t0_info)) {
       pe <- t0_info$evict_from_given_anchor & (!t0_info$is_tier0_dna_anchor | t0_info$rectified_taxon != tx)
-      t0r <- which(t0_info$is_tier0_dna_anchor & !is.na(t0_info$rectified_taxon) & (t0_info$rectified_taxon == tx) & !noise_all & !ext_non_type_all)
-      ig <- unique(c(idx_t[anchor_all[idx_t] & !mo_all[idx_t] & !noise_all[idx_t] & !ext_non_type_all[idx_t] & !pe[idx_t]], t0r))
-      ic <- unique(c(idx_t[!mo_all[idx_t] & !noise_all[idx_t] & !ext_non_type_all[idx_t] & !pe[idx_t]], t0r)); inn <- unique(c(idx_t[!noise_all[idx_t] & !pe[idx_t]], t0r))
+      t0r <- which(t0_info$is_tier0_dna_anchor & !is.na(t0_info$rectified_taxon) & (t0_info$rectified_taxon == tx) & !noise_all & !ext_non_type_all & !open_hyb_dv)
+      ig <- unique(c(idx_t[anchor_all[idx_t] & !mo_all[idx_t] & !noise_all[idx_t] & !ext_non_type_all[idx_t] & !open_hyb_dv[idx_t] & !pe[idx_t]], t0r))
+      ic <- unique(c(idx_t[!mo_all[idx_t] & !noise_all[idx_t] & !ext_non_type_all[idx_t] & !open_hyb_dv[idx_t] & !pe[idx_t]], t0r)); inn <- unique(c(idx_t[!noise_all[idx_t] & !open_hyb_dv[idx_t] & !pe[idx_t]], t0r))
       ri <- if (length(ig) >= 2L) ig else if (length(ic) >= 2L) ic else if (length(inn) >= 1L) inn else idx_t; ref_idx_by_taxon[[tx]] <- ri
-      ra <- ri[valid_doy_all[ri] & anth_all[ri]]; if (length(ra) == 0L) ra <- idx_t[valid_doy_all[idx_t] & anth_all[idx_t] & !noise_all[idx_t] & !ext_non_type_all[idx_t] & !pe[idx_t]]
-      if (length(ra) == 0L) ra <- idx_t[valid_doy_all[idx_t] & !pe[idx_t]]; if (length(ra) == 0L) ra <- idx_t[valid_doy_all[idx_t]]
+      ra <- ri[valid_doy_all[ri] & anth_all[ri]]; if (length(ra) == 0L) ra <- idx_t[valid_doy_all[idx_t] & anth_all[idx_t] & !noise_all[idx_t] & !ext_non_type_all[idx_t] & !open_hyb_dv[idx_t] & !pe[idx_t]]
+      if (length(ra) == 0L) ra <- idx_t[valid_doy_all[idx_t] & !open_hyb_dv[idx_t] & !pe[idx_t]]; if (length(ra) == 0L) ra <- idx_t[valid_doy_all[idx_t]]
       if (length(ra) > 0L) {
         wa <- ifelse(t0_info$is_tier0_dna_anchor[ra] & (t0_info$rectified_taxon[ra] == tx), ifelse(is.finite(t0_info$tier0_weight[ra]), t0_info$tier0_weight[ra], 4.0), 1.0)
         tc <- .circ_hop_stats(hop_doy_all[ra], w_vals = wa); mu_theta_hop[[tx]] <- tc$mu_theta; q75_arc_hop[[tx]] <- tc$q75_arc; q75_doy[[tx]] <- tc$q75_doy; med_doy[[tx]] <- tc$med_doy
       }
     } else {
-      ig <- idx_t[anchor_all[idx_t] & !mo_all[idx_t] & !noise_all[idx_t] & !ext_non_type_all[idx_t]]; ic <- idx_t[!mo_all[idx_t] & !noise_all[idx_t] & !ext_non_type_all[idx_t]]; inn <- idx_t[!noise_all[idx_t]]
+      ig <- idx_t[anchor_all[idx_t] & !mo_all[idx_t] & !noise_all[idx_t] & !ext_non_type_all[idx_t] & !open_hyb_dv[idx_t]]; ic <- idx_t[!mo_all[idx_t] & !noise_all[idx_t] & !ext_non_type_all[idx_t] & !open_hyb_dv[idx_t]]; inn <- idx_t[!noise_all[idx_t] & !open_hyb_dv[idx_t]]
       ri <- if (length(ig) >= 2L) ig else if (length(ic) >= 2L) ic else if (length(inn) >= 1L) inn else idx_t; ref_idx_by_taxon[[tx]] <- ri
-      dr <- hop_doy_all[ri[valid_doy_all[ri] & anth_all[ri]]]; if (length(dr) == 0L) dr <- hop_doy_all[idx_t[valid_doy_all[idx_t] & anth_all[idx_t] & !noise_all[idx_t] & !ext_non_type_all[idx_t]]]; if (length(dr) == 0L) dr <- hop_doy_all[idx_t[valid_doy_all[idx_t]]]
+      dr <- hop_doy_all[ri[valid_doy_all[ri] & anth_all[ri]]]; if (length(dr) == 0L) dr <- hop_doy_all[idx_t[valid_doy_all[idx_t] & anth_all[idx_t] & !noise_all[idx_t] & !ext_non_type_all[idx_t] & !open_hyb_dv[idx_t]]]
+      if (length(dr) == 0L) dr <- hop_doy_all[idx_t[valid_doy_all[idx_t] & !open_hyb_dv[idx_t]]]; if (length(dr) == 0L) dr <- hop_doy_all[idx_t[valid_doy_all[idx_t]]]
       if (length(dr) > 0L) { tc <- .circ_hop_stats(dr); mu_theta_hop[[tx]] <- tc$mu_theta; q75_arc_hop[[tx]] <- tc$q75_arc; q75_doy[[tx]] <- tc$q75_doy; med_doy[[tx]] <- tc$med_doy }
     }
   }
-  edaph_z_vec <- .compute_dynamic_edaphic_z_scores(df, sp_all_vec, active_taxa, ref_idx_by_taxon, clean_coh_mask = (anchor_all & !mo_all & !noise_all))
-  pheno_taus <- .compute_taxon_pheno_thresholds(df); bg_ctx <- .build_step07_biogeo_and_morph_context(df, opts, sp_all_vec, cat_sheet_vec, ref_idx_by_taxon, active_taxa, is_intra, active_geno_ref, t0_info, valid_doy_all, anth_all, hop_doy_all, anchor_all, mo_all, noise_all)
+  edaph_z_vec <- .compute_dynamic_edaphic_z_scores(df, sp_all_vec, active_taxa, ref_idx_by_taxon, clean_coh_mask = (anchor_all & !mo_all & !noise_all & !open_hyb_dv))
+  pheno_taus <- .compute_taxon_pheno_thresholds(df); bg_ctx <- .build_step07_biogeo_and_morph_context(df, opts, sp_all_vec, cat_sheet_vec, ref_idx_by_taxon, active_taxa, is_intra, active_geno_ref, t0_info, valid_doy_all, anth_all, hop_doy_all, anchor_all & !open_hyb_dv, mo_all, noise_all)
   can_evaluate_hybrids <- bg_ctx$can_evaluate_hybrids
 
   .eval_five_gate_hybrid_pair <- function(row_i, p1_tx, p2_tx, morph_sp_i, cda_prob_i, cda_sec_tx_i, cda_sec_p_i, cda_marg_i, gmm_unc_i, edaph_sp_i, d_edaph_i, edaph_z_i, asym_i) {
@@ -249,6 +254,7 @@ apply_taxonomic_decision_matrix <- function(df, intraspecific_mode = FALSE, gmm_
   exs_conf_r <- if ("exsiccatae_taxonomic_conflict" %in% names(df)) df$exsiccatae_taxonomic_conflict else rep(0L, n)
   p_type_morph <- max(2L, if (length(bg_ctx$sel_mc) > 0L) length(bg_ctx$sel_mc) else if (length(bg_ctx$morph_coord_cols) > 0L) length(bg_ctx$morph_coord_cols) else 3L)
   osr_df_raw <- .num_col(df, "open_set_df", n); osr_df_vec <- ifelse(is.finite(osr_df_raw) & osr_df_raw >= 1.0, as.integer(round(osr_df_raw)), p_type_morph)
+  osr_p_1 <- .num_col(df, "open_set_novelty_p", n); osr_p_2 <- .num_col(df, "open_set_p_value", n); osr_p_dv <- ifelse(is.finite(osr_p_1), osr_p_1, osr_p_2)
   osr_chisq85_vec <- stats::qchisq(0.85, df = osr_df_vec); osr_chisq90_vec <- stats::qchisq(0.90, df = osr_df_vec); osr_chisq95_vec <- stats::qchisq(0.95, df = osr_df_vec)
 
   mv <- list(
@@ -287,7 +293,13 @@ apply_taxonomic_decision_matrix <- function(df, intraspecific_mode = FALSE, gmm_
     tm_d2_dv = tm_d2_init, nt_morph_dv = .chr_col(df, "nearest_type_morph_taxon", n, NA_character_), nt_bas_dv = .chr_col(df, "nearest_type_basionym", n, NA_character_),
     bas_d2_dv = .num_col(df, "nearest_type_basionym_d2", n), tm_conc_dv = .num_col(df, "type_morph_concordance", n), te_z_dv = .num_col(df, "type_edaphic_z_score", n),
     nt_niche_dv = .chr_col(df, "nearest_type_niche_taxon", n, NA_character_), min_cong_d2_dv = .num_col(df, "min_congener_mahal_d2", n),
-    min_cong_tx_dv = .chr_col(df, "min_congener_taxon", n, NA_character_), osr_p_dv = .num_col(df, "open_set_novelty_p", n), osr_df_vec = osr_df_vec,
+    min_cong_tx_dv = .chr_col(df, "min_congener_taxon", n, NA_character_), osr_p_dv = osr_p_dv, osr_df_vec = osr_df_vec,
+    nt_niche_bas_dv = .chr_col(df, "nearest_type_niche_basionym", n, NA_character_), nt_niche_bas_z_dv = .num_col(df, "nearest_type_basionym_edaphic_z", n),
+    typ_bas_dv = .chr_col(df, "typified_basionym", n, NA_character_), conc_syn_dv = .chr_col(df, "concept_synonymy_status", n, NA_character_),
+    anch_src_dv = .chr_col(df, "anchor_tier_source", n, NA_character_), rf_pred_src_dv = .chr_col(df, "rf_prediction_source", n, NA_character_),
+    is_het_audit_dv = .step07_safe_bool(if ("is_heterotypic_type_audit" %in% names(df)) df$is_heterotypic_type_audit else rep(FALSE, n)),
+    open_hyb_dv = open_hyb_dv, verb_conc_dv = .chr_col(df, "verbatim_taxon_concept", n, NA_character_),
+    allo_bimod_dbic_dv = .num_col(df, "allochronic_bimodality_delta_bic", n),
     self_d2_dv = .num_col(df, "self_morph_mahal_d2", n), self_df_raw = .num_col(df, "self_morph_df", n), cda_oof_p_dv = .num_col(df, "cda_oof_posterior_prob", n),
     cl_thr_dv = .num_col(df, "cl_target_threshold", n), exs_gold_tx_dv = exs_gold_tx_dv,
     usda_stat_dv = tolower(trimws(ifelse(is.na(.chr_col(df, "usda_county_status", n, "")), "", .chr_col(df, "usda_county_status", n, "")))),

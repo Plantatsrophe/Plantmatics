@@ -85,12 +85,40 @@ render_step07a_integrative_synthesis_png <- function(
   tdf$treatment_call <- factor(sub_call, levels = intersect(names(PACKERA_TREATMENT_PALETTE), unique(sub_call)))
 
   # Panel A: 2D Integrative Morphospace Stratified by 5-Stage Decision Calls
-  x1 <- if ("can1" %in% names(tdf) && any(is.finite(suppressWarnings(as.numeric(tdf$can1))))) suppressWarnings(as.numeric(tdf$can1)) else if ("PC1" %in% names(tdf)) suppressWarnings(as.numeric(tdf$PC1)) else rep(0.0, nrow(tdf))
-  x2 <- if ("can2" %in% names(tdf) && any(is.finite(suppressWarnings(as.numeric(tdf$can2)))) && isTRUE(stats::sd(suppressWarnings(as.numeric(tdf$can2)), na.rm = TRUE) > 1e-6)) {
-    suppressWarnings(as.numeric(tdf$can2))
-  } else if ("PC2" %in% names(tdf) && any(is.finite(suppressWarnings(as.numeric(tdf$PC2))))) {
-    suppressWarnings(as.numeric(tdf$PC2))
-  } else rep(0.0, nrow(tdf))
+  .num_m <- function(cn) if (cn %in% names(tdf)) suppressWarnings(as.numeric(tdf[[cn]])) else rep(NA_real_, nrow(tdf))
+  can1_v <- .num_m("can1"); pc1_v <- .num_m("PC1"); ect1_v <- .num_m("ECT_PC1")
+  can2_v <- .num_m("can2"); pc2_v <- .num_m("PC2"); ect2_v <- .num_m("ECT_PC2")
+  has_can1 <- any(is.finite(can1_v)); has_pc1 <- any(is.finite(pc1_v)); has_ect1 <- any(is.finite(ect1_v))
+  has_can2 <- any(is.finite(can2_v)) && isTRUE(stats::sd(can2_v, na.rm = TRUE) > 1e-6)
+  has_pc2 <- any(is.finite(pc2_v)); has_ect2 <- any(is.finite(ect2_v))
+  if (has_can1) {
+    x1 <- can1_v; x_lbl <- "Canonical Variate 1 (Can1)"
+  } else if (has_pc1) {
+    x1 <- pc1_v; x_lbl <- "Morphometric PC1"
+  } else if (has_ect1) {
+    x1 <- ect1_v; x_lbl <- "ECT PC1 (Topological)"
+  } else {
+    x1 <- rep(0.0, nrow(tdf)); x_lbl <- "Morphometric PC1"
+  }
+  fb_x_ect <- !is.finite(x1) & is.finite(ect1_v)
+  if (any(fb_x_ect)) {
+    x1[fb_x_ect] <- ect1_v[fb_x_ect]
+    if (x_lbl != "ECT PC1 (Topological)") x_lbl <- paste0(x_lbl, " / ECT PC1")
+  }
+  if (has_can2) {
+    x2 <- can2_v; y_lbl <- "Canonical Variate 2 (Can2)"
+  } else if (has_pc2) {
+    x2 <- pc2_v; y_lbl <- "Morphometric PC2"
+  } else if (has_ect2) {
+    x2 <- ect2_v; y_lbl <- "ECT PC2 (Topological)"
+  } else {
+    x2 <- rep(0.0, nrow(tdf)); y_lbl <- "Morphometric PC2"
+  }
+  fb_y_ect <- !is.finite(x2) & is.finite(ect2_v)
+  if (any(fb_y_ect)) {
+    x2[fb_y_ect] <- ect2_v[fb_y_ect]
+    if (y_lbl != "ECT PC2 (Topological)") y_lbl <- paste0(y_lbl, " / ECT PC2")
+  }
   tdf$mx <- x1; tdf$my <- x2
   sub_m <- tdf[is.finite(tdf$mx) & is.finite(tdf$my), , drop = FALSE]
 
@@ -104,8 +132,8 @@ render_step07a_integrative_synthesis_png <- function(
     ggplot2::labs(
       title = "A. Integrative Morphospace & Nomenclatural Type Baseline",
       subtitle = "Hollow symbols encode 5-stage decision calls (* = Type control)",
-      x = if ("can1" %in% names(tdf) && any(is.finite(suppressWarnings(as.numeric(tdf$can1))))) "Canonical Variate 1 (Can1)" else "Morphometric PC1",
-      y = if ("can2" %in% names(tdf) && any(is.finite(suppressWarnings(as.numeric(tdf$can2))))) "Canonical Variate 2 (Can2)" else "Morphometric PC2"
+      x = x_lbl,
+      y = y_lbl
     )
 
   # Panel B: Projected North American Geographic Contact Zones & Triage Map

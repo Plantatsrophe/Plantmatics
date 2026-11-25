@@ -112,6 +112,30 @@ if (grDevices::dev.cur() == 1L) grDevices::pdf(NULL)
   list(best = plaus_cands[which.max(scores)], max_score = max(scores), peer_votes = pv)
 }
 
+.is_het_bas_cand <- function(bas_v, sp_v, df_all, rows_idx) {
+  m <- length(bas_v); out <- rep(FALSE, m)
+  ok <- !is.na(bas_v) & nzchar(trimws(bas_v))
+  if (!any(ok)) return(out)
+  if (!exists(".is_homotypic_sensu_stricto_basionym", mode = "function")) { out[ok] <- TRUE; return(out) }
+  df_sub <- df_all[rows_idx[ok], , drop = FALSE]
+  if ("concept_synonymy_status" %in% names(df_sub)) {
+    cs_sub <- rep(NA_character_, nrow(df_sub))
+    if (all(c("typified_basionym", "is_type_specimen") %in% names(df_all))) {
+      tp_m <- .step07_safe_bool(df_all$is_type_specimen) & !is.na(df_all$typified_basionym) & nzchar(trimws(as.character(df_all$typified_basionym)))
+      if (any(tp_m)) {
+        tp_sp <- if ("species_standardized" %in% names(df_all)) as.character(df_all$species_standardized[tp_m]) else rep("", sum(tp_m))
+        tp_k <- paste(tolower(trimws(as.character(df_all$typified_basionym[tp_m]))), tolower(trimws(tp_sp)), sep = "||")
+        qr_k <- paste(tolower(trimws(bas_v[ok])), tolower(trimws(sp_v[ok])), sep = "||")
+        hm <- match(qr_k, tp_k); hit <- !is.na(hm)
+        if (any(hit)) cs_sub[hit] <- as.character(df_all$concept_synonymy_status[tp_m][hm[hit]])
+      }
+    }
+    df_sub$concept_synonymy_status <- cs_sub
+  }
+  out[ok] <- !.step07_safe_bool(.is_homotypic_sensu_stricto_basionym(trimws(bas_v[ok]), sp_v[ok], df = df_sub))
+  out
+}
+
 .build_step07_cluster_cohesion_context <- function(df, bg_ctx, mv, gmm_two_delta_bic, is_intra) {
   n <- nrow(df); nms <- names(df)
   sp_clean_vec <- ifelse(!is.na(mv$sp_all_vec) & nzchar(mv$sp_all_vec), mv$sp_all_vec, "Unknown")
@@ -154,7 +178,7 @@ if (grDevices::dev.cur() == 1L) grDevices::pdf(NULL)
   }
   coll_surname_all <- .norm_collector_surname(rec_by_v)
 
-  idx_cp <- which(mv$anchor_all & !mv$mo_all & !mv$noise_all & !mv$ext_non_type_all & nzchar(sp_clean_vec) & (sp_clean_vec != "Unknown"))
+  idx_cp <- which(mv$anchor_all & !mv$mo_all & !mv$noise_all & !mv$ext_non_type_all & !mv$open_hyb_dv & nzchar(sp_clean_vec) & (sp_clean_vec != "Unknown"))
   df_cp <- if (length(idx_cp) > 0L) data.frame(sp = sp_clean_vec[idx_cp], surname = coll_surname_all[idx_cp], deme_id = spatial_deme_vec[idx_cp],
     state_cnty = bg_ctx$state_cnty_geo[idx_cp], lat = bg_ctx$lat_vec_geo[idx_cp], lon = bg_ctx$lon_vec_geo[idx_cp], cat = mv$cat_sheet_vec[idx_cp], stringsAsFactors = FALSE) else NULL
   db_cp <- NULL
@@ -183,31 +207,37 @@ if (grDevices::dev.cur() == 1L) grDevices::pdf(NULL)
   u_sc <- unique(data.frame(sp = sp_clean_vec, cl = g_cl_all, stringsAsFactors = FALSE))
   for (ri in seq_len(nrow(u_sc))) {
     sp_k <- u_sc$sp[ri]; cl_k <- u_sc$cl[ri]; if (is.na(cl_k) || cl_k <= 1L) next
-    mk <- paste(sp_k, cl_k, sep = "||"); idx_cl <- which(sp_clean_vec == sp_k & g_cl_all == cl_k & t1_pure_all)
+    mk <- paste(sp_k, cl_k, sep = "||"); idx_cl <- which(sp_clean_vec == sp_k & g_cl_all == cl_k & t1_pure_all & !mv$open_hyb_dv)
     if (length(idx_cl) == 0L) { cryptic_cluster_pass_map[[mk]] <- FALSE; cryptic_non_clinal_map[[mk]] <- FALSE; next }
     has_cc <- any(!is.na(rec_by_v) & nzchar(trimws(rec_by_v))) || any(nzchar(exs_clean))
     pass_events <- if (n < 50L && !has_cc) length(idx_cl) >= 1L else {
       u_co <- unique(coll_surname_all[idx_cl][nzchar(coll_surname_all[idx_cl])]); u_in <- unique(tolower(trimws(inst_v[idx_cl][!is.na(inst_v[idx_cl]) & nzchar(trimws(inst_v[idx_cl]))])))
-      req_dm <- if (length(unique(spatial_deme_vec[sp_clean_vec == sp_k & t1_pure_all])) >= 3L) 3L else max(1L, length(unique(spatial_deme_vec[sp_clean_vec == sp_k & t1_pure_all])))
+      req_dm <- if (length(unique(spatial_deme_vec[sp_clean_vec == sp_k & t1_pure_all & !mv$open_hyb_dv])) >= 3L) 3L else max(1L, length(unique(spatial_deme_vec[sp_clean_vec == sp_k & t1_pure_all & !mv$open_hyb_dv])))
       (length(unique(gathering_event_key_all[idx_cl])) >= 5L) && (length(unique(spatial_deme_vec[idx_cl])) >= req_dm) && (if ((length(u_co) > 0L) || (length(u_in) > 0L)) (length(u_co) >= 2L || length(u_in) >= 2L) else TRUE)
     }
     fin_c <- idx_cl[is.finite(mv$min_cong_d2_dv[idx_cl])]
     pass_osr_d2 <- if (length(fin_c) > 0L) stats::median(mv$min_cong_d2_dv[fin_c] - mv$osr_chisq95_vec[fin_c], na.rm = TRUE) > 0.0 else (!is_intra || !nzchar(env_plantmatics_or_packera("PLANTMATICS_DB_PATH", "PACKERA_DB_PATH")))
     fin_p <- idx_cl[is.finite(mv$osr_p_dv[idx_cl]) & is.finite(mv$min_cong_d2_dv[idx_cl])]
     pass_osr <- isTRUE(pass_osr_d2 && (if (length(fin_p) > 0L) (stats::median(mv$osr_p_dv[fin_p], na.rm = TRUE) < 0.05) else TRUE))
-    cy_cl <- mv$cyto_barrier_pass_v[idx_cl]
-    div_v <- (is.finite(d_edaph_all[idx_cl]) & d_edaph_all[idx_cl] < 0.30) | (is.finite(edaph_z_all[idx_cl]) & edaph_z_all[idx_cl] > 2.5) | (mv$is_anth_dv[idx_cl] & is.finite(ddoy_all[idx_cl]) & abs(ddoy_all[idx_cl]) >= mv$tau_cryptic_vec[idx_cl]) | cy_cl
-    ev_m <- is.finite(edaph_z_all[idx_cl]) | !is.na(mv$d_ed1_dv[idx_cl]) | !is.na(mv$d_ed2_dv[idx_cl]) | !is.na(mv$d_ed3_dv[idx_cl]) | (mv$is_anth_dv[idx_cl] & is.finite(ddoy_all[idx_cl])) | cy_cl
+    cy_cl <- mv$cyto_barrier_pass_v[idx_cl]; gn_cl <- mv$geno_gdi_cryptic_support_v[idx_cl]
+    ed_div_cl <- (is.finite(d_edaph_all[idx_cl]) & d_edaph_all[idx_cl] < 0.30) | (is.finite(edaph_z_all[idx_cl]) & edaph_z_all[idx_cl] > 2.5)
+    bm_cl_v <- mv$allo_bimod_dbic_dv[idx_cl]; ph_bm_ok_cl <- !is.finite(bm_cl_v) | (bm_cl_v > 2.0)
+    raw_ph_cl <- mv$is_anth_dv[idx_cl] & is.finite(ddoy_all[idx_cl]) & (abs(ddoy_all[idx_cl]) >= mv$tau_cryptic_vec[idx_cl])
+    ph_div_cl <- raw_ph_cl & (ph_bm_ok_cl | ed_div_cl | cy_cl | gn_cl)
+    div_v <- ed_div_cl | ph_div_cl | cy_cl | gn_cl
+    ev_m <- is.finite(edaph_z_all[idx_cl]) | !is.na(mv$d_ed1_dv[idx_cl]) | !is.na(mv$d_ed2_dv[idx_cl]) | !is.na(mv$d_ed3_dv[idx_cl]) | (mv$is_anth_dv[idx_cl] & is.finite(ddoy_all[idx_cl])) | cy_cl | gn_cl
     div_f <- if (any(ev_m)) mean(div_v[ev_m], na.rm = TRUE) else mean(div_v, na.rm = TRUE); bf_m <- stats::median(bf_all[idx_cl], na.rm = TRUE)
     pass_div <- is.finite(div_f) && (div_f >= 0.50) && is.finite(bf_m) && (bf_m >= (if (n < 50L) 6.0 else 10.0))
 
-    non_clinal_ok <- TRUE; r2_cl <- NA_real_; idx_core <- which(sp_clean_vec == sp_k & g_cl_all == 1L & t1_pure_all)
+    non_clinal_ok <- TRUE; r2_cl <- NA_real_; idx_core <- which(sp_clean_vec == sp_k & g_cl_all == 1L & t1_pure_all & !mv$open_hyb_dv)
     if (length(idx_cl) >= 5L && length(idx_core) >= 5L) {
       ll_cl <- idx_cl[is.finite(lat_v_cl[idx_cl]) & is.finite(lon_v_cl[idx_cl])]; ll_co <- idx_core[is.finite(lat_v_cl[idx_core]) & is.finite(lon_v_cl[idx_core])]
       min_km <- if (length(ll_cl) >= 3L && length(ll_co) >= 3L) min(vapply(ll_cl, function(ic1) min(.haversine_km_step07(lat_v_cl[ic1], lon_v_cl[ic1], lat_v_cl[ll_co], lon_v_cl[ll_co])), numeric(1))) else Inf
       parap <- (is.finite(min_km) && min_km <= 50.0) || any(nzchar(bg_ctx$state_cnty_geo[idx_cl]) & (bg_ctx$state_cnty_geo[idx_cl] %in% bg_ctx$state_cnty_geo[idx_core]))
       anth_cl <- idx_cl[mv$is_anth_dv[idx_cl] & is.finite(ddoy_all[idx_cl])]
-      allo_j <- (length(anth_cl) >= 3L) && (stats::median(abs(ddoy_all[anth_cl]), na.rm = TRUE) >= stats::median(mv$tau_cryptic_vec[anth_cl], na.rm = TRUE))
+      bm_anth_cl <- mv$allo_bimod_dbic_dv[anth_cl]
+      bm_anth_ok <- if (any(is.finite(bm_anth_cl))) (stats::median(bm_anth_cl[is.finite(bm_anth_cl)], na.rm = TRUE) > 2.0) else TRUE
+      allo_j <- bm_anth_ok && (length(anth_cl) >= 3L) && (stats::median(abs(ddoy_all[anth_cl]), na.rm = TRUE) >= stats::median(mv$tau_cryptic_vec[anth_cl], na.rm = TRUE))
       if (!parap && !allo_j && !(mean(azonal_flag_all[idx_cl], na.rm = TRUE) >= 0.50) && length(ll_cl) >= 4L && length(ll_co) >= 4L) {
         comb <- c(ll_co, ll_cl)
         Xc <- if (!is.null(bg_ctx$morph_X)) bg_ctx$morph_X[comb, , drop = FALSE] else if (length(bg_ctx$morph_coord_cols) >= 1L) as.matrix(df[comb, bg_ctx$morph_coord_cols, drop = FALSE]) else NULL
@@ -226,12 +256,20 @@ if (grDevices::dev.cur() == 1L) grDevices::pdf(NULL)
         }
       }
     }
-    bas_cl <- trimws(ifelse(is.na(mv$nt_bas_dv[idx_cl]), "", mv$nt_bas_dv[idx_cl])); hm_cl <- nzchar(bas_cl)
-    if (any(hm_cl) && exists(".is_homotypic_sensu_stricto_basionym", mode = "function")) hm_cl[hm_cl] <- !vapply(bas_cl[hm_cl], function(bs) isTRUE(.is_homotypic_sensu_stricto_basionym(bs, sp_k)[1L]), logical(1))
-    if (any(hm_cl)) {
-      tb <- names(sort(table(bas_cl[hm_cl]), decreasing = TRUE))[1L]; tbi <- idx_cl[hm_cl & bas_cl == tb]
-      d2b <- ifelse(is.finite(mv$bas_d2_dv[tbi]), mv$bas_d2_dv[tbi], mv$tm_d2_dv[tbi]); d2bf <- d2b[is.finite(d2b)]
-      if ((length(tbi) / length(idx_cl)) >= 0.50 && ((length(d2bf) == 0L) || (stats::median(d2bf) <= mv$type_morph_chisq95))) cluster_resurrect_bas_map[[mk]] <- tb
+    bm_cl <- trimws(ifelse(is.na(mv$nt_bas_dv[idx_cl]), "", mv$nt_bas_dv[idx_cl]))
+    d2m_cl <- ifelse(is.finite(mv$bas_d2_dv[idx_cl]), mv$bas_d2_dv[idx_cl], mv$tm_d2_dv[idx_cl])
+    hm_m <- .is_het_bas_cand(bm_cl, rep(sp_k, length(idx_cl)), df, idx_cl) & (!is.finite(d2m_cl) | (d2m_cl <= mv$type_morph_chisq95))
+    bn_cl <- trimws(ifelse(is.na(mv$nt_niche_bas_dv[idx_cl]), "", mv$nt_niche_bas_dv[idx_cl]))
+    zn_cl <- mv$nt_niche_bas_z_dv[idx_cl]
+    hm_n <- .is_het_bas_cand(bn_cl, rep(sp_k, length(idx_cl)), df, idx_cl) & is.finite(zn_cl) & (zn_cl <= 2.5)
+    cand_bs <- unique(c(bm_cl[hm_m], bn_cl[hm_n]))
+    if (length(cand_bs) > 0L) {
+      b_sc <- vapply(cand_bs, function(bn) {
+        im <- hm_m & (tolower(bm_cl) == tolower(bn)); inn_b <- hm_n & (tolower(bn_cl) == tolower(bn))
+        if ((sum(im | inn_b) / length(idx_cl)) < 0.50) return(-1.0)
+        2.0 * sum(im & inn_b) + 1.05 * sum(im) + sum(inn_b)
+      }, numeric(1))
+      if (max(b_sc) > 0.0) cluster_resurrect_bas_map[[mk]] <- cand_bs[which.max(b_sc)]
     }
     cryptic_non_clinal_map[[mk]] <- isTRUE(non_clinal_ok); clinal_r2_map[[mk]] <- r2_cl; cryptic_cluster_pass_map[[mk]] <- isTRUE(pass_events && pass_osr && pass_div && non_clinal_ok)
   }

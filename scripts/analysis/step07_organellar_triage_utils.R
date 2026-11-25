@@ -1,13 +1,7 @@
-# ==============================================================================
-# Module: scripts/analysis/step07_organellar_triage_utils.R
-# Project: Packera Species Delimitation & Morphometrics Pipeline
-# Affiliation: University of North Carolina at Chapel Hill Herbarium (NCU)
-#
-# Description:
-#   Quality-gated organellar reference placement hydration, small-batch
-#   reference cytonuclear capture flagging, confirmed Stage 2 hybrid maternal
-#   cpDNA polarity annotation, and non-mutating out-of-panel ITS + waxy cues.
-# ==============================================================================
+if (grDevices::dev.cur() == 1L) grDevices::pdf(NULL)
+# Module: scripts/analysis/step07_organellar_triage_utils.R (NCU Herbarium)
+# Quality-gated organellar placement hydration, small-batch reference cytonuclear
+# capture flagging, Stage 2 maternal cpDNA polarity, and non-mutating OOP cues.
 
 .organellar_safe_bool <- function(x) {
   if (exists(".safe_bool_vec_r", mode = "function")) return(.safe_bool_vec_r(x))
@@ -143,12 +137,20 @@ evaluate_step07_organellar_and_oop_signals <- function(df) {
   }
   nms <- names(df)
   chr_col <- function(cands) {
-    for (cn in cands) if (cn %in% nms) return(trimws(as.character(df[[cn]])))
-    rep(NA_character_, n)
+    out <- rep(NA_character_, n)
+    for (cn in cands) if (cn %in% nms) {
+      v <- trimws(as.character(df[[cn]])); fill <- (is.na(out) | !nzchar(out)) & !is.na(v) & nzchar(v)
+      if (any(fill)) out[fill] <- v[fill]
+    }
+    out
   }
   num_col <- function(cands) {
-    for (cn in cands) if (cn %in% nms) return(suppressWarnings(as.numeric(df[[cn]])))
-    rep(NA_real_, n)
+    out <- rep(NA_real_, n)
+    for (cn in cands) if (cn %in% nms) {
+      v <- suppressWarnings(as.numeric(df[[cn]])); fill <- !is.finite(out) & is.finite(v)
+      if (any(fill)) out[fill] <- v[fill]
+    }
+    out
   }
   given_sp <- chr_col(c("species_standardized"))
   geno_pred <- chr_col(c("geno_predicted_taxon"))
@@ -176,7 +178,7 @@ evaluate_step07_organellar_and_oop_signals <- function(df) {
   is_adm <- if ("is_geno_admixed" %in% nms) .organellar_safe_bool(df$is_geno_admixed) else rep(FALSE, n)
   is_qry <- if ("is_putative_novel_or_hybrid_query" %in% nms) .organellar_safe_bool(df$is_putative_novel_or_hybrid_query) else rep(FALSE, n)
   qc_ok <- if ("geno_quality_pass" %in% nms) .organellar_safe_bool(df$geno_quality_pass) else rep(TRUE, n)
-  tier_col <- if ("geno_linkage_tier" %in% nms) trimws(as.character(df$geno_linkage_tier)) else if ("linkage_tier" %in% nms) trimws(as.character(df$linkage_tier)) else rep("G1_Direct_Voucher", n)
+  tier_col <- if (any(c("geno_linkage_tier", "linkage_tier") %in% nms)) chr_col(c("geno_linkage_tier", "linkage_tier")) else rep("G1_Direct_Voucher", n)
   active_tier <- tier_col %in% c("G1_Direct_Voucher", "G1_Exsiccatae_Isoduplicate", "G2_Population_Voucher_Proxy")
 
   cp_hq <- .is_valid_packera_name_r(cp_tx) & is.finite(cp_cont) & (cp_cont >= 0.80) & is.finite(cp_k11) & (cp_k11 >= 80)

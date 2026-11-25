@@ -20,8 +20,10 @@ if (grDevices::dev.cur() == 1L) grDevices::pdf(NULL)
         } else if (nzchar(sc_ci) && nzchar(bg_ctx$state_cnty_geo[cj]) && sc_ci == bg_ctx$state_cnty_geo[cj]) local_peers <- c(local_peers, cj)
       }
       n_dm_v <- length(unique(mv$cat_sheet_vec[local_peers]))
-      raw_ci <- if (!is.na(mv$raw_sp_dv[ci])) mv$raw_sp_dv[ci] else ""
-      has_x <- grepl("(^|[[:space:]])[x×][[:space:]]+[a-z]", raw_ci, ignore.case = TRUE)
+      hyb_lbl_ci <- paste(stats::na.omit(c(mv$raw_sp_dv[ci], mv$verb_conc_dv[ci])), collapse = " | ")
+      has_x <- grepl("[A-Z][a-z]*\\.?[[:space:]]+[a-z][a-z-]+([[:space:]]*×[[:space:]]*|[[:space:]]+[xX][[:space:]]+)([A-Z][a-z]*\\.?[[:space:]]+)?[a-z][a-z-]+", hyb_lbl_ci) ||
+        grepl("(^|[[:space:]])[x×][[:space:]]+[a-z]", hyb_lbl_ci, ignore.case = TRUE) ||
+        (!is.na(mv$conc_syn_dv[ci]) && trimws(mv$conc_syn_dv[ci]) == "Hybrid_Formula")
       geno_adm_ci <- mv$has_geno_dv[ci] && !mv$geno_divergent_nonhybrid_v[ci] && !mv$geno_ancient_introg_v[ci] &&
         (mv$geno_adm_dv[ci] || mv$geno_contemp_hybrid_v[ci]) && identical(mv$geno_tier_dv[ci], "G1_Direct_Voucher")
       if (n_dm_v >= 2L || has_x || geno_adm_ci) {

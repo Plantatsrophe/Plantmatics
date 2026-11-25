@@ -228,10 +228,11 @@ def _stage_is_complete(ws: Path, run_id: str) -> bool:
 def _build_genus_commands(run_script: Path, g1_eff: str, g2: str, g3: str, args: argparse.Namespace) -> List[Tuple[str, str, List[str]]]:
     tail = [*(["--db", str(args.db)] if args.db is not None else []), *(["--threads", str(args.threads)] if args.threads and args.threads > 0 else [])]
     gpu = ["--gpu-batch-size", str(args.gpu_batch_size)] if args.gpu_batch_size and args.gpu_batch_size > 0 else []
+    gold = ["--gold-only"] if bool(getattr(args, "gold_only", False)) else []
     cmds: List[Tuple[str, str, List[str]]] = []
     if not args.skip_discovery:
-        cmds.append(("Genus_Stage_1_Discovery", g1_eff, ["bash", str(run_script), "--run-id", g1_eff, *(["--skip-harvest"] if args.skip_harvest else []), "--geographic-scope", args.geographic_scope, *tail, *gpu]))
-    cmds.append(("Genus_Stage_2_Purified", g2, ["bash", str(run_script), "--run-id", g2, "--skip-harvest", "--geographic-scope", args.geographic_scope, "--exclude-misidentified", "--triage-source", g1_eff, "--gold-anchors", str(args.gold_anchors), *tail, *gpu]))
+        cmds.append(("Genus_Stage_1_Discovery", g1_eff, ["bash", str(run_script), "--run-id", g1_eff, *(["--skip-harvest"] if args.skip_harvest else []), "--geographic-scope", args.geographic_scope, *gold, *tail, *gpu]))
+    cmds.append(("Genus_Stage_2_Purified", g2, ["bash", str(run_script), "--run-id", g2, "--skip-harvest", "--geographic-scope", args.geographic_scope, "--exclude-misidentified", "--triage-source", g1_eff, "--gold-anchors", str(args.gold_anchors), *gold, *tail, *gpu]))
     cmds.append(("Genus_Stage_3_Gold_Thin", g3, ["bash", str(run_script), "--run-id", g3, "--start-step", "3", "--geographic-scope", args.geographic_scope, "--exclude-misidentified", "--triage-source", g1_eff, "--spatial-thin-km", f"{args.spatial_thin_km:g}", "--gold-only", *tail]))
     return cmds
 
@@ -240,7 +241,7 @@ def _species_commands(run_script: Path, sp: str, sp_prefix: str, g1_eff: str, ar
         run_script=run_script, focal_taxon=sp, prefix=sp_prefix, discovery_run_id=g1_eff, geographic_scope=args.geographic_scope,
         gold_anchors=args.gold_anchors, spatial_thin_km=args.spatial_thin_km,
         threads=(args.threads if threads_override is None else threads_override), gpu_batch_size=args.gpu_batch_size,
-        db_path=args.db, skip_discovery=True, skip_harvest=True,
+        db_path=args.db, skip_discovery=True, skip_harvest=True, gold_only=bool(getattr(args, "gold_only", False)),
     )
 
 def _compile_genus_summary(ws: Path, genus_dir: Path, g1_eff: str, g2: str, g3: str, conn: Optional[sqlite3.Connection]) -> Tuple[Path, Path]:
@@ -348,7 +349,7 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument(flag, type=Path, default=None)
     p.add_argument("--only-taxa", action="append", nargs="+", default=[])
     p.add_argument("--exclude-taxon", action="append", default=[])
-    for flag in ("--resume", "--skip-harvest", "--skip-discovery", "--skip-intraspecific-sweep", "--force", "--summarize-only", "--dry-run"):
+    for flag in ("--resume", "--gold-only", "--skip-harvest", "--skip-discovery", "--skip-intraspecific-sweep", "--force", "--summarize-only", "--dry-run"):
         p.add_argument(flag, action="store_true", default=False)
     return p
 

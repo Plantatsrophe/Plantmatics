@@ -10,6 +10,8 @@ Warm-R contract tests for Step 07 four-tier genomic propagation (`Scenarios a-e`
 
 from __future__ import annotations
 
+import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -19,18 +21,23 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from scripts.tests._r_session import rscript_available, run_warm_r_cmd
+from scripts.tests._r_session import run_warm_r_cmd
+
+SKIP_R_COND = (
+    os.environ.get("PLANTMATICS_FAST_AUDIT") == "1"
+    or os.environ.get("PACKERA_FAST_AUDIT") == "1"
+    or shutil.which("Rscript") is None
+)
 
 
+@unittest.skipIf(SKIP_R_COND, "Skipping warm-R genomic propagation contract under fast audit or missing Rscript.")
 class TestStep07GenomicPropagationContract(unittest.TestCase):
     """Comprehensive Warm-R verification of the 4-tier Step 07 genomic propagation contract."""
 
     def test_batched_step07_genomic_propagation_four_tiers_and_invariance(self) -> None:
         """Warm-R batched contract test covering Scenarios (a) through (e) of Step 07 genomic propagation."""
-        if not rscript_available():
-            self.skipTest("Rscript not installed.")
-
         r_code = """
+        if (grDevices::dev.cur() == 1L) grDevices::pdf(NULL)
         source("scripts/analysis/07_triage_dashboard_synthesis.R")
         if (!exists("run_step07_genomic_propagation", mode = "function")) {
           source("scripts/analysis/step07_genomic_propagation.R")
@@ -159,13 +166,26 @@ class TestStep07GenomicPropagationContract(unittest.TestCase):
           geno_predicted_taxon = c(rep("Packera serpenticola", 4L), rep("Packera dubia", 4L), rep("Packera anonyma", 4L), "Packera serpenticola", "Packera dubia", rep(NA_character_, 3L)),
           geno_posterior_prob = c(rep(0.96, 13L), 0.55, rep(NA_real_, 3L)),
           geno_margin = c(rep(0.88, 13L), 0.10, rep(NA_real_, 3L)),
-          interclass_het_Q12 = c(rep(0.02, 13L), 0.72, rep(NA_real_, 3L)), stringsAsFactors = FALSE
+          interspecific_ancestry_q12 = c(rep(0.02, 13L), 0.72, rep(NA_real_, 3L)), stringsAsFactors = FALSE
         )
         t0_res <- resolve_tier0_anchor_overrides(df_t0)
         i_mg <- which(df_t0$catalogNumber == "MISID_GOLD_EVICT")
         i_f1 <- which(df_t0$catalogNumber == "F1_ADMIX_EVICT")
         stopifnot(isTRUE(t0_res$evict_from_given_anchor[i_mg]) && isTRUE(t0_res$is_tier0_dna_anchor[i_mg]) && t0_res$tier0_weight[i_mg] == 4.0)
         stopifnot(isTRUE(t0_res$evict_from_given_anchor[i_f1]) && !isTRUE(t0_res$is_tier0_dna_anchor[i_f1]) && is.na(t0_res$tier0_weight[i_f1]))
+        # Passive heterotypic type exclusion from Tier_0 DNA anchor override
+        df_t0_het <- df_t0[1L, , drop = FALSE]
+        df_t0_het$catalogNumber <- "HET_TYPE_G1"; df_t0_het$is_type_specimen <- TRUE; df_t0_het$type_status <- "HOLOTYPE"
+        df_t0_het$anchor_tier_source <- "Passive_Heterotypic_Type_Audit"; df_t0_het$concept_synonymy_status <- "Heterotypic_Synonym"
+        t0_het <- resolve_tier0_anchor_overrides(df_t0_het)
+        stopifnot(!isTRUE(t0_het$is_tier0_dna_anchor[1L]), !isTRUE(t0_het$evict_from_given_anchor[1L]))
+        # G1_Exsiccatae_Isoduplicate chains into conditional deme hull propagation
+        df_chain <- df_deme[1:14, , drop = FALSE]
+        df_chain$geno_linkage_tier[df_chain$catalogNumber == "SERP_SITE1_ANC"] <- "G1_Exsiccatae_Isoduplicate"
+        res_chain <- propagate_conditional_deme_priors(df_chain)
+        ic_ok <- which(res_chain$catalogNumber == "DEME_MATCH_OK")
+        stopifnot(identical(res_chain$genomic_propagation_tier[ic_ok], "G2_Conditional_Deme_Hull"),
+                  identical(res_chain$geno_predicted_taxon[ic_ok], "Packera serpenticola"))
 
         proj_c <- fit_tier0_calibrated_projection(df_t0)
         iu_s <- which(proj_c$catalogNumber == "UNSEQ_SERP")

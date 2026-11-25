@@ -115,7 +115,7 @@ class TestCodeHygiene(unittest.TestCase):
                 self.assertLess(line_count, ceiling, f"{mod_path.relative_to(PROJECT_ROOT)} exceeds {ceiling}-line ceiling ({line_count} lines)")
 
     def test_step01_and_step06_split_posix_and_mmrr_hygiene(self):
-        """Assert Step 01, Step 02, and Step 06 test monolith removals, pure POSIX regexes in Step 06 R files, and zero abs(lat) IBE forgery."""
+        """Assert Step 01, Step 02, Step 06, and Step 07 test monolith removals, pure POSIX regexes in Step 06/07 R files, and zero abs(lat) IBE forgery."""
         self.assertFalse(
             (PROJECT_ROOT / "scripts" / "tests" / "test_voucher_harvester.py").exists(),
             "Legacy 3,930-line scripts/tests/test_voucher_harvester.py must remain deleted",
@@ -128,18 +128,32 @@ class TestCodeHygiene(unittest.TestCase):
             (PROJECT_ROOT / "scripts" / "tests" / "test_genomic_integration.py").exists(),
             "Legacy 2,426-line scripts/tests/test_genomic_integration.py must remain deleted",
         )
-        perl_re = re.compile(r"\\\\[sdwb]|\(\?:")
-        step06_r_files = sorted((PROJECT_ROOT / "scripts" / "analysis").glob("*06*.R")) + sorted(
-            (PROJECT_ROOT / "scripts" / "figures").glob("*06*.R")
+        self.assertFalse(
+            (PROJECT_ROOT / "scripts" / "tests" / "test_triage_dashboard_synthesis.py").exists(),
+            "Legacy 2,849-line scripts/tests/test_triage_dashboard_synthesis.py must remain deleted",
         )
-        self.assertTrue(step06_r_files, "Expected Step 06 R files to audit")
+        perl_re = re.compile(r"\\\\[sdwb]|\(\?:")
+        analysis_dir = PROJECT_ROOT / "scripts" / "analysis"
+        figures_dir = PROJECT_ROOT / "scripts" / "figures"
+        step06_07_r_files = sorted(
+            {
+                *analysis_dir.glob("*06*.R"),
+                *figures_dir.glob("*06*.R"),
+                *analysis_dir.glob("*07*.R"),
+                *figures_dir.glob("*07*.R"),
+                analysis_dir / "genomic_triage_utils.R",
+                analysis_dir / "taxon_complex_discovery_utils.R",
+                analysis_dir / "edaphic_geochem_wetland_utils.R",
+            }
+        )
+        self.assertTrue(step06_07_r_files, "Expected Step 06 and Step 07 R files to audit")
         perl_hits: List[str] = []
-        for r_path in step06_r_files:
+        for r_path in step06_07_r_files:
             rel = r_path.relative_to(PROJECT_ROOT)
             for lineno, line in enumerate(r_path.read_text(encoding="utf-8").splitlines(), start=1):
                 if perl_re.search(line):
                     perl_hits.append(f"{rel}:{lineno}: {line.strip()}")
-        self.assertEqual(perl_hits, [], "Step 06 R files must use pure POSIX ERE instead of Perl escapes:\n" + "\n".join(perl_hits))
+        self.assertEqual(perl_hits, [], "Step 06 and Step 07 R files must use pure POSIX ERE instead of Perl escapes:\n" + "\n".join(perl_hits))
         mmrr_text = (PROJECT_ROOT / "scripts" / "analysis" / "step06_spatial_landscape_genomics.R").read_text(encoding="utf-8")
         self.assertNotIn("abs(lat", mmrr_text, "step06_spatial_landscape_genomics.R must never substitute abs(lat into eco_mat")
 

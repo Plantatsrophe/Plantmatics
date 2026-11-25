@@ -54,7 +54,7 @@ render_step07b_complex_network_png <- function(
       top_demes <- names(d_tab[d_tab >= 2L])
       if (length(top_demes) < 3L) top_demes <- names(d_tab)
       top_demes <- utils::head(top_demes, 12L)
-      m_cols <- intersect(c("PC1", "PC2", "PC3", "ECT_PC1", "AR_inv", "solidity", "can1", "can2"), names(vdf_d))
+      m_cols <- intersect(c("PC1", "PC2", "PC3", "ECT_PC1", "ECT_PC2", "AR_inv", "solidity", "can1", "can2"), names(vdf_d))
       m_cols <- m_cols[vapply(m_cols, function(cl) sum(is.finite(suppressWarnings(as.numeric(vdf_d[[cl]])))) >= 4L, logical(1))]
       if (length(top_demes) >= 3L && length(m_cols) >= 1L) {
         vdf_d <- vdf_d[vdf_d$.deme_lbl %in% top_demes, , drop = FALSE]

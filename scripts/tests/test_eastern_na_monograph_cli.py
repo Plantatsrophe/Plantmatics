@@ -252,6 +252,41 @@ class TestEasternNAMonographCLI(unittest.TestCase):
             md_txt = md_path.read_text(encoding="utf-8")
             self.assertIn("DUB_MIS2", md_txt); self.assertIn("NY00232445", md_txt); self.assertIn("P-MICH", md_txt); self.assertNotIn("\u2013", md_txt); self.assertNotIn("\u2014", md_txt)
 
+    def test_focal_complex_three_module_reexports_and_gold_only_stage4(self) -> None:
+        from scripts.pipeline import resolve_focal_species_complex as rfsc
+        expected_exports = (
+            "slugify_taxon",
+            "default_prefix_for_taxon",
+            "_stage_run_ids",
+            "build_four_stage_commands",
+            "_read_csv_rows",
+            "_fetch_triage_rows_for_run",
+            "_fetch_complex_rows_for_run",
+            "_extract_stage_metrics",
+            "compile_complex_resolution_summary",
+            "build_parser",
+            "main",
+        )
+        for sym in expected_exports:
+            self.assertTrue(hasattr(rfsc, sym) and callable(getattr(rfsc, sym)), f"Missing callable re-export: {sym}")
+        self.assertEqual(rfsc.default_prefix_for_taxon("Packera dubia"), "dubia")
+        stages = rfsc.build_four_stage_commands(
+            run_script=PROJECT_ROOT / "run_pipeline.sh",
+            focal_taxon="Packera dubia",
+            prefix="dubia",
+            geographic_scope="eastern_na",
+            spatial_thin_km=12.5,
+        )
+        self.assertEqual(len(stages), 4)
+        _, s4_run_id, s4_cmd = stages[3]
+        self.assertEqual(s4_run_id, "dubia_04_gold_thin_audit")
+        self.assertIn("--gold-only", s4_cmd)
+        self.assertIn("--spatial-thin-km", s4_cmd)
+        self.assertIn("12.5", s4_cmd)
+        for _, _, cmd in stages:
+            self.assertIn("--geographic-scope", cmd)
+            self.assertEqual(cmd[cmd.index("--geographic-scope") + 1], "eastern_na")
+
 
 if __name__ == "__main__":
     unittest.main()

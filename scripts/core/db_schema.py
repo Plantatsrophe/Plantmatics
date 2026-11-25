@@ -427,7 +427,7 @@ def _build_master_view_ddl() -> str:
         ct.probabilistic_consensus_conflict AS probabilistic_consensus_conflict,
         ct.probabilistic_consensus_score AS probabilistic_consensus_score,
         COALESCE(srf.hopkins_adjusted_doy, ct.hopkins_adjusted_doy) AS hopkins_adjusted_doy,
-        ct.delta_doy_resid AS delta_doy_resid,
+        COALESCE(ct.delta_doy_resid, srf.hopkins_adjusted_doy_resid) AS delta_doy_resid,
         ct.taxonomic_status_call AS taxonomic_status_call,
         ct.recommended_determination AS recommended_determination,
         ct.taxonomic_treatment_broad AS taxonomic_treatment_broad,
@@ -457,6 +457,14 @@ def _build_master_view_ddl() -> str:
         ct.hydro_edaphic_niche_regime AS hydro_edaphic_niche_regime,
         ct.wetland_fidelity_concordance AS wetland_fidelity_concordance,
         ct.basionym_synonymy_type AS basionym_synonymy_type,
+        ct.w_morph_simplex AS w_morph_simplex,
+        ct.w_edaphic_simplex AS w_edaphic_simplex,
+        ct.w_pheno_simplex AS w_pheno_simplex,
+        ct.w_geno_simplex AS w_geno_simplex,
+        ct.geno_deme_weight_scale AS geno_deme_weight_scale,
+        ct.portal_metadata_lag_flag AS portal_metadata_lag_flag,
+        ct.portal_lag_trigger_gate AS portal_lag_trigger_gate,
+        ct.is_marginal_range_extension AS is_marginal_range_extension,
         -- Tier A Taxonomic Backbone & NWPL Wetland Indicator
         tbp.basionym_name AS backbone_basionym_name,
         tbp.protologue_url AS protologue_url,
@@ -1414,6 +1422,14 @@ def _build_schema_ddl() -> str:
         hydro_edaphic_niche_regime TEXT,
         wetland_fidelity_concordance REAL,
         basionym_synonymy_type TEXT,
+        w_morph_simplex REAL,
+        w_edaphic_simplex REAL,
+        w_pheno_simplex REAL,
+        w_geno_simplex REAL,
+        geno_deme_weight_scale REAL,
+        portal_metadata_lag_flag INTEGER,
+        portal_lag_trigger_gate TEXT,
+        is_marginal_range_extension INTEGER,
         PRIMARY KEY (run_id, catalogNumber, plant_individual_id),
         FOREIGN KEY (run_id) REFERENCES pipeline_runs(run_id) ON DELETE CASCADE
     );
@@ -1748,6 +1764,14 @@ _DYNAMIC_TABLE_MIGRATION_SPECS: Dict[str, Tuple[Tuple[str, str], ...]] = {
         ("hydro_edaphic_niche_regime", "TEXT"),
         ("wetland_fidelity_concordance", "REAL"),
         ("basionym_synonymy_type", "TEXT"),
+        ("w_morph_simplex", "REAL"),
+        ("w_edaphic_simplex", "REAL"),
+        ("w_pheno_simplex", "REAL"),
+        ("w_geno_simplex", "REAL"),
+        ("geno_deme_weight_scale", "REAL"),
+        ("portal_metadata_lag_flag", "INTEGER"),
+        ("portal_lag_trigger_gate", "TEXT"),
+        ("is_marginal_range_extension", "INTEGER"),
     ),
     "taxon_backbone_profiles": (
         ("target_genus", "TEXT NOT NULL DEFAULT 'Packera'"),
@@ -2339,7 +2363,10 @@ def _migrate_dynamic_schema_columns(
             "voucher_ploidy_level", "taxon_reported_cytotypes",
             "is_multi_cytotype_taxon", "cytotype_reproductive_barrier_pass",
             "hydro_edaphic_niche_regime", "wetland_fidelity_concordance",
-            "basionym_synonymy_type",
+            "basionym_synonymy_type", "w_morph_simplex", "w_edaphic_simplex",
+            "w_pheno_simplex", "w_geno_simplex", "geno_deme_weight_scale",
+            "portal_metadata_lag_flag", "portal_lag_trigger_gate",
+            "is_marginal_range_extension",
         )
         if ct_cols_now and (
             ct_cols_now != set(canon_ct_cols) or cur_uv < PLANTMATICS_SCHEMA_USER_VERSION
@@ -2393,6 +2420,14 @@ def _migrate_dynamic_schema_columns(
                     hydro_edaphic_niche_regime TEXT,
                     wetland_fidelity_concordance REAL,
                     basionym_synonymy_type TEXT,
+                    w_morph_simplex REAL,
+                    w_edaphic_simplex REAL,
+                    w_pheno_simplex REAL,
+                    w_geno_simplex REAL,
+                    geno_deme_weight_scale REAL,
+                    portal_metadata_lag_flag INTEGER,
+                    portal_lag_trigger_gate TEXT,
+                    is_marginal_range_extension INTEGER,
                     PRIMARY KEY (run_id, catalogNumber, plant_individual_id),
                     FOREIGN KEY (run_id) REFERENCES pipeline_runs(run_id) ON DELETE CASCADE
                 );
@@ -2468,8 +2503,9 @@ def init_db_schema(conn: sqlite3.Connection) -> None:
             ec_cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(environmental_cache);").fetchall()}
             srf_cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(spatial_rf_predictions);").fetchall()}
             gs_cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(genomic_samples);").fetchall()}
+            ct_cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(curation_triage);").fetchall()}
             mv_cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(v_integrative_triage_master);").fetchall()}
-            req_mv_cols = {"is_passive", "scale_source", "AR_inv_std", "log1p_capitulum_count", "corymb_head_count_est", "radiate_head_fraction", "blade_cie_l_norm", "blade_cie_l_sheet_delta", "blade_cie_a_delta", "blade_cie_b_delta", "basal_cordate_index", "blade_cie_l_q85_sheet_delta", "abaxial_leaf_fraction", "nearest_type_basionym", "reproductive_trait_status", "ecoregion_can1", "ecoregion_can2", "hybrid_zone_cohesion_pass", "hybrid_parent_1", "hybrid_parent_2", "cda_oof_posterior_prob", "self_morph_mahal_d2", "open_set_df", "cryptic_non_clinal_pass", "resurrection_basionym", "w_geno_kappa", "geno_predicted_taxon", "geno_linkage_tier", "is_geno_admixed", "coalescent_gdi", "hybrid_generation_class", "cytonuclear_discordant", "public_plastome_match", "public_its_match", "waxy_lineage_match", "public_backbone_clade", "public_phytop_ils_index", "public_phytop_ih_index", "genomic_propagation_tier", "cluster_propagated_gdi", "cytology_linkage_tier", "voucher_sporophytic_2n", "voucher_ploidy_level", "taxon_reported_cytotypes", "is_multi_cytotype_taxon", "cytotype_reproductive_barrier_pass", "soil_ca_mg_molar_ratio", "soil_ultramafic_ni_cr_index", "soil_carbonate_c_pct", "is_nwi_wetland", "nwi_wetland_system", "nwi_wetland_dist_m", "hydro_edaphic_niche_regime", "wetland_fidelity_concordance", "basionym_synonymy_type", "backbone_basionym_name", "protologue_url", "natureserve_global_rank", "nwpl_indicator_code", "nwpl_wetland_score", "is_centroid_or_inst_coord", "coord_quarantine_reason", "typified_basionym", "verbatim_taxon_concept", "concept_synonymy_status", "identification_year", "is_open_or_hybrid_concept", "env_mahal_d2", "env_mcd_outlier_flag", "ssurgo_lithic_series_pct", "ecotype_regime", "lithic_outcrop_index", "summer_moisture_deficit_idx", "maritime_continentality_idx", "hopkins_adjusted_doy", "hopkins_adjusted_doy_resid", "anthesis_dominance_weight", "allochronic_bimodality_delta_bic", "nearest_type_niche_basionym", "nearest_type_basionym_edaphic_z"}
+            req_mv_cols = {"is_passive", "scale_source", "AR_inv_std", "log1p_capitulum_count", "corymb_head_count_est", "radiate_head_fraction", "blade_cie_l_norm", "blade_cie_l_sheet_delta", "blade_cie_a_delta", "blade_cie_b_delta", "basal_cordate_index", "blade_cie_l_q85_sheet_delta", "abaxial_leaf_fraction", "nearest_type_basionym", "reproductive_trait_status", "ecoregion_can1", "ecoregion_can2", "hybrid_zone_cohesion_pass", "hybrid_parent_1", "hybrid_parent_2", "cda_oof_posterior_prob", "self_morph_mahal_d2", "open_set_df", "cryptic_non_clinal_pass", "resurrection_basionym", "w_geno_kappa", "geno_predicted_taxon", "geno_linkage_tier", "is_geno_admixed", "coalescent_gdi", "hybrid_generation_class", "cytonuclear_discordant", "public_plastome_match", "public_its_match", "waxy_lineage_match", "public_backbone_clade", "public_phytop_ils_index", "public_phytop_ih_index", "genomic_propagation_tier", "cluster_propagated_gdi", "cytology_linkage_tier", "voucher_sporophytic_2n", "voucher_ploidy_level", "taxon_reported_cytotypes", "is_multi_cytotype_taxon", "cytotype_reproductive_barrier_pass", "soil_ca_mg_molar_ratio", "soil_ultramafic_ni_cr_index", "soil_carbonate_c_pct", "is_nwi_wetland", "nwi_wetland_system", "nwi_wetland_dist_m", "hydro_edaphic_niche_regime", "wetland_fidelity_concordance", "basionym_synonymy_type", "w_morph_simplex", "w_edaphic_simplex", "w_pheno_simplex", "w_geno_simplex", "geno_deme_weight_scale", "portal_metadata_lag_flag", "portal_lag_trigger_gate", "is_marginal_range_extension", "backbone_basionym_name", "protologue_url", "natureserve_global_rank", "nwpl_indicator_code", "nwpl_wetland_score", "is_centroid_or_inst_coord", "coord_quarantine_reason", "typified_basionym", "verbatim_taxon_concept", "concept_synonymy_status", "identification_year", "is_open_or_hybrid_concept", "env_mahal_d2", "env_mcd_outlier_flag", "ssurgo_lithic_series_pct", "ecotype_regime", "lithic_outcrop_index", "summer_moisture_deficit_idx", "maritime_continentality_idx", "hopkins_adjusted_doy", "hopkins_adjusted_doy_resid", "anthesis_dominance_weight", "allochronic_bimodality_delta_bic", "nearest_type_niche_basionym", "nearest_type_basionym_edaphic_z"}
             if (
                 "leaf_zone" not in el_cols
                 or "area_mm2" not in el_cols
@@ -2521,6 +2557,14 @@ def init_db_schema(conn: sqlite3.Connection) -> None:
                 or "typified_basionym" not in gs_cols
                 or "concept_synonymy_status" not in gs_cols
                 or "is_open_or_hybrid_concept" not in gs_cols
+                or "w_morph_simplex" not in ct_cols
+                or "w_edaphic_simplex" not in ct_cols
+                or "w_pheno_simplex" not in ct_cols
+                or "w_geno_simplex" not in ct_cols
+                or "geno_deme_weight_scale" not in ct_cols
+                or "portal_metadata_lag_flag" not in ct_cols
+                or "portal_lag_trigger_gate" not in ct_cols
+                or "is_marginal_range_extension" not in ct_cols
                 or not req_mv_cols.issubset(mv_cols)
             ):
                 _migrate_dynamic_schema_columns(conn, recreate_view=True)

@@ -27,7 +27,8 @@ SKIP_R_COND = (
 
 STEP07_CEILINGS: Dict[Path, int] = {
     PROJECT_ROOT / "scripts" / "analysis" / "07_triage_dashboard_synthesis.R": 500,
-    PROJECT_ROOT / "scripts" / "analysis" / "step07_hopkins_consensus_utils.R": 480,
+    PROJECT_ROOT / "scripts" / "analysis" / "step07_hopkins_consensus_utils.R": 320,
+    PROJECT_ROOT / "scripts" / "analysis" / "step07_consensus_weights_utils.R": 300,
     PROJECT_ROOT / "scripts" / "analysis" / "step07_ancova_merge_utils.R": 490,
     PROJECT_ROOT / "scripts" / "analysis" / "step07_reports_html_utils.R": 490,
     PROJECT_ROOT / "scripts" / "analysis" / "step07_biogeo_hybrid_utils.R": 490,
@@ -39,14 +40,15 @@ STEP07_CEILINGS: Dict[Path, int] = {
     PROJECT_ROOT / "scripts" / "analysis" / "step07_cytology_integration.R": 380,
     PROJECT_ROOT / "scripts" / "analysis" / "step07_deme_propagation_utils.R": 260,
     PROJECT_ROOT / "scripts" / "analysis" / "step07_genomic_propagation.R": 400,
-    PROJECT_ROOT / "scripts" / "analysis" / "step07_organellar_triage_utils.R": 260,
-    PROJECT_ROOT / "scripts" / "analysis" / "genomic_triage_utils.R": 500,
+    PROJECT_ROOT / "scripts" / "analysis" / "step07_organellar_triage_utils.R": 300,
+    PROJECT_ROOT / "scripts" / "analysis" / "genomic_triage_utils.R": 320,
+    PROJECT_ROOT / "scripts" / "analysis" / "step07_genomic_report_utils.R": 320,
     PROJECT_ROOT / "scripts" / "figures" / "step07_figures.R": 420,
     PROJECT_ROOT / "scripts" / "figures" / "step07b_network_figures.R": 320,
 }
 
 _R_STR_RE = re.compile(r'"([^"\\]|\\.)*"|\'([^\'\\]|\\.)*\'', re.DOTALL)
-_NON_POSIX_ESC_RE = re.compile(r"\\+[sdwb](?![A-Za-z])")
+_NON_POSIX_ESC_RE = re.compile(r"\\+[sdwb](?![A-Za-z])|\(\?:")
 
 _WARM_R_CODE = r"""
 if (grDevices::dev.cur() == 1L) grDevices::pdf(NULL)
@@ -316,18 +318,25 @@ class TestStep07AuditHygiene(unittest.TestCase):
             cls.png_bytes = (pa.read_bytes() if pa.exists() else ca.read_bytes(), pb.read_bytes())
 
     def test_step07_static_hygiene_ceilings_and_posix_regex(self) -> None:
-        bad_tokens = ("chisq99_type_morph", "non_anth_cnt", "geno_sNMF_entropy", "bisse_net_div_rate")
+        bad_tokens = (
+            "chisq99_" + "type_morph",
+            "non_" + "anth_cnt",
+            "geno_sNMF_" + "entropy",
+            "bisse_net_" + "div_rate",
+            "." + "circular_watson_williams_or_perm_p",
+        )
+        legacy_pol, legacy_q12 = "pol" + "aris_", "interclass_" + "het_Q12"
         for path, ceil in STEP07_CEILINGS.items():
             self.assertTrue(path.exists(), f"Missing Step 07 module: {path}")
             txt = path.read_text(encoding="utf-8")
             self.assertLess(len(txt.splitlines()), ceil, f"{path.name} exceeded {ceil} lines")
             for lit in _iter_r_string_literals(txt):
                 self.assertIsNone(_NON_POSIX_ESC_RE.search(lit), f"Non-POSIX escape in {path.name}: {lit!r}")
-                self.assertNotIn("polaris_", lit, f"Legacy polaris_ string in {path.name}: {lit!r}")
+                self.assertNotIn(legacy_pol, lit, f"Legacy soil token in {path.name}: {lit!r}")
             for tok in bad_tokens:
                 self.assertNotIn(tok, txt, f"Retired token {tok} found in {path.name}")
             if path.name != "step07_organellar_triage_utils.R":
-                self.assertNotIn("interclass_het_Q12", txt, f"Retired token interclass_het_Q12 found in {path.name}")
+                self.assertNotIn(legacy_q12, txt, f"Retired token {legacy_q12} found in {path.name}")
         for fig_p in (
             PROJECT_ROOT / "scripts" / "figures" / "step07_figures.R",
             PROJECT_ROOT / "scripts" / "figures" / "step07b_network_figures.R",

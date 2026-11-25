@@ -165,6 +165,20 @@ def _run_warm_r_suite() -> Dict[str, Any]:
         s4_extra$geno_posterior_prob <- ifelse(is.na(s4_extra$geno_linkage_tier), NA_real_, 0.95)
         res_s4 <- propagate_conditional_deme_priors(rbind(bg, s4_extra))
 
+        # Scenario 5: G1_Exsiccatae_Isoduplicate chains as a valid <= 2 km deme donor
+        s5_extra <- bg[1:3, ]
+        s5_extra$catalogNumber <- c("S5_EXS_DONOR", "S5_REC_EXS", "S5_REC_FAR")
+        s5_extra$determiner_tier <- c("Tier_1_Gold", "Tier_3_Bronze", "Tier_3_Bronze")
+        s5_extra$decimalLatitude <- c(37.400, 37.405, 37.550)
+        s5_extra$decimalLongitude <- c(-81.200, -81.200, -81.200)
+        s5_extra$PC1 <- c(1.50, 1.52, 1.52)
+        s5_extra$PC2 <- c(0.00, 0.02, 0.02)
+        s5_extra$geno_linkage_tier <- c("G1_Exsiccatae_Isoduplicate", NA_character_, NA_character_)
+        s5_extra$geno_quality_pass <- c(TRUE, NA, NA)
+        s5_extra$geno_predicted_taxon <- c("Packera dubia", NA_character_, NA_character_)
+        s5_extra$geno_posterior_prob <- c(0.94, NA_real_, NA_real_)
+        res_s5 <- propagate_conditional_deme_priors(rbind(bg, s5_extra))
+
         pick_row <- function(tbl, cid) {
           k <- which(tbl$catalogNumber == cid)
           list(
@@ -200,6 +214,10 @@ def _run_warm_r_suite() -> Dict[str, Any]:
             rec_a_bronze = pick_row(res_s4, "S4_REC_A"),
             rec_b_g1 = pick_row(res_s4, "S4_REC_B"),
             rec_c_gold = pick_row(res_s4, "S4_REC_C")
+          ),
+          s5 = list(
+            rec_exs = pick_row(res_s5, "S5_REC_EXS"),
+            rec_far = pick_row(res_s5, "S5_REC_FAR")
           )
         )
         cat("<<<JSON_START>>>\n", jsonlite::toJSON(out, auto_unbox = TRUE, null = "null"), "\n<<<JSON_END>>>\n", sep = "")
@@ -259,6 +277,11 @@ class TestStep07DemePropagation(unittest.TestCase):
         self.assertEqual(s4["rec_a_bronze"]["tier"], "G2_Conditional_Deme_Hull")
         self.assertIsNone(s4["rec_b_g1"]["tier"])
         self.assertIsNone(s4["rec_c_gold"]["tier"])
+
+    def test_exsiccatae_isoduplicate_chains_into_conditional_deme_hull(self) -> None:
+        s5 = self.payload["s5"]
+        self.assertEqual(s5["rec_exs"]["tier"], "G2_Conditional_Deme_Hull")
+        self.assertIsNone(s5["rec_far"]["tier"])
 
 
 if __name__ == "__main__":

@@ -38,6 +38,7 @@ def _run_warm_r_organellar_suite() -> Dict[str, Any]:
                 if (grDevices::dev.cur() == 1L) grDevices::pdf(NULL)
                 suppressPackageStartupMessages({{
                   source("scripts/analysis/genomic_triage_utils.R")
+                  if (file.exists("scripts/analysis/step07_genomic_report_utils.R")) source("scripts/analysis/step07_genomic_report_utils.R")
                   source("scripts/analysis/step07_organellar_triage_utils.R")
                   source("scripts/analysis/07_triage_dashboard_synthesis.R")
                 }})

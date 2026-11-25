@@ -112,9 +112,11 @@ resolve_step07_complex_eco_predictors <- function(df) {
   excl <- c(
     "edaphic_z_score", "climatic_z_score", "type_edaphic_z_score", "edaphic_schoener_d", "schoener_d", "edaphic_niche_overlap_d",
     "sgmc_lithology_class", "Dominant_Lithology_Class", "edaphic_best_fit_taxon",
-    "rf_predicted_taxon", "primary_env_predictors", "primary_clim_predictors", "primary_edaph_predictors")
+    "rf_predicted_taxon", "primary_env_predictors", "primary_clim_predictors", "primary_edaph_predictors",
+    "ssurgo_rock_outcrop_pct", "ssurgo_aws_0_50cm", "ssurgo_lithic_series_pct", "ultramafic_calcareous_gradient")
   ok_env <- function(cands) {
     cands <- setdiff(unique(cands), excl)
+    cands <- cands[!grepl("_buffer", cands, ignore.case = TRUE)]
     cands[vapply(cands, function(cc) {
       if (!(cc %in% names(df)) || is.logical(df[[cc]]) || is.character(df[[cc]])) return(FALSE)
       v <- suppressWarnings(as.numeric(df[[cc]])); v <- v[is.finite(v)]; length(v) >= 4L && is.finite(stats::sd(v)) && stats::sd(v) > 1e-8
@@ -125,7 +127,10 @@ resolve_step07_complex_eco_predictors <- function(df) {
     .parse_step07_complex_semicolon(df, "primary_clim_predictors")
   ))
   if (length(meta_cols) > 0L) return(meta_cols)
-  cands <- ok_env(grep("^(bio[0-9]+_|fine_|ilr_texture_|ssurgo_|solus_|topo_)", names(df), value = TRUE))
+  cands <- ok_env(c(
+    grep("^(bio[0-9]+_|fine_|ilr_texture_|ssurgo_|solus_|topo_)", names(df), value = TRUE),
+    intersect(c("lithic_outcrop_index", "wetland_seepage_index", "summer_moisture_deficit_idx", "maritime_continentality_idx"), names(df))
+  ))
   if (!any(grepl("^fine_", cands))) cands <- unique(c(cands, ok_env(grep("^soil_", names(df), value = TRUE))))
   if (length(cands) <= 1L) return(cands)
   E <- as.matrix(df[, cands, drop = FALSE]); storage.mode(E) <- "double"
@@ -349,38 +354,60 @@ compute_hopkins_phenological_affinity <- function(morph_df, taxa, anchor_mask = 
       delta_doy_resid[idx_all_tx] <- diff_rad * (365.25 / (2.0 * pi))
     }
   }
-  .circular_watson_williams_or_perm_p <- function(th1, th2) {
-    th1 <- th1[is.finite(th1)]; th2 <- th2[is.finite(th2)]; n1 <- length(th1); n2 <- length(th2); N <- n1 + n2
-    if (n1 < 2L || n2 < 2L) return(1.0)
-    R1 <- sqrt(sum(sin(th1))^2 + sum(cos(th1))^2); R2 <- sqrt(sum(sin(th2))^2 + sum(cos(th2))^2); th_all <- c(th1, th2)
-    R_tot <- sqrt(sum(sin(th_all))^2 + sum(cos(th_all))^2); rbar <- (R1 + R2) / N; denom_ww <- max(N - R1 - R2, 1e-8)
-    num_ww <- max(0.0, R1 + R2 - R_tot); k_corr <- if (rbar < 0.95) (1.0 + 3.0 / max(8.0 * max(rbar, 0.15), 1.0)) else 1.0
-    F_obs <- k_corr * (N - 2.0) * num_ww / denom_ww; p_ww <- stats::pf(F_obs, df1 = 1.0, df2 = max(1.0, N - 2.0), lower.tail = FALSE)
-    if (N <= 60L) {
-      return(.with_preserved_rng_seed(42L + N, function() {
-        B_perm <- 199L; s_all <- sin(th_all); c_all <- cos(th_all); ge_cnt <- 0L
-        for (b in seq_len(B_perm)) {
-          idx1 <- sample.int(N, size = n1, replace = FALSE); R1_b <- sqrt(sum(s_all[idx1])^2 + sum(c_all[idx1])^2)
-          R2_b <- sqrt(sum(s_all[-idx1])^2 + sum(c_all[-idx1])^2)
-          if ((R1_b + R2_b - R_tot) >= (num_ww - 1e-12)) ge_cnt <- ge_cnt + 1L
-        }
-        (ge_cnt + 1.0) / (B_perm + 1.0)
-      }))
-    }
-    pmin(1.0, pmax(0.0, as.numeric(p_ww)))
-  }
-  pair_ij <- list()
   for (i in seq_len(n_taxa)) for (j in seq_len(n_taxa)) if (i != j && has_tx_pheno[[taxa[i]]] && has_tx_pheno[[taxa[j]]]) {
     arc_rad <- abs(atan2(sin(mu_theta[i] - mu_theta[j]), cos(mu_theta[i] - mu_theta[j]))); delta_circ <- arc_rad * (365.25 / (2.0 * pi))
     S_pheno[i, j] <- exp(-(delta_circ^2) / (2.0 * (21.0^2)))
-    if (i < j) pair_ij[[length(pair_ij) + 1L]] <- c(i, j)
   }
-  eval_ph_p <- function(ij) {
-    .circular_watson_williams_or_perm_p(theta_adj[morph_df$species_standardized == taxa[ij[1L]] & anthesis_mask & !noise_m],
-                                        theta_adj[morph_df$species_standardized == taxa[ij[2L]] & anthesis_mask & !noise_m])
+  list(S_pheno = S_pheno, has_pheno = sum(has_tx_pheno) >= 2L, delta_doy_resid = delta_doy_resid, pheno_fdr_p = numeric(0), alpha_eb = alpha_eb)
+}
+
+compute_genomic_complex_affinity <- function(morph_df, taxa, anchor_mask = NULL) {
+  morph_df <- as.data.frame(morph_df, stringsAsFactors = FALSE); n <- nrow(morph_df); taxa <- as.character(taxa); n_taxa <- length(taxa)
+  if (n == 0L || n_taxa < 2L || !("species_standardized" %in% names(morph_df))) return(list(available = FALSE, mat = NULL, n_taxa = 0L))
+  bfn <- function(v) if (is.logical(v)) !is.na(v) & v else if (is.numeric(v) || is.integer(v)) !is.na(v) & (v != 0) else tolower(trimws(as.character(v))) %in% c("1", "true", "t", "yes", "y")
+  c_clean <- function(col_nm) {
+    if (!(col_nm %in% names(morph_df))) return(rep("", n))
+    v <- trimws(as.character(morph_df[[col_nm]])); v[is.na(v) | tolower(v) %in% c("na", "nan", "null", "none", "unknown", "unresolved")] <- ""; v
   }
-  nw_ph <- if (length(pair_ij) >= 2L && exists("packera_mclapply", mode = "function") && exists("resolve_packera_workers", mode = "function")) resolve_packera_workers(64L, length(pair_ij)) else 1L
-  raw_p <- if (length(pair_ij) > 0L) unlist(if (nw_ph > 1L) packera_mclapply(pair_ij, eval_ph_p, mc.cores = nw_ph) else lapply(pair_ij, eval_ph_p), use.names = FALSE) else numeric(0)
-  pheno_fdr_p <- if (length(raw_p) > 0L) stats::p.adjust(raw_p, method = "BH") else numeric(0)
-  list(S_pheno = S_pheno, has_pheno = sum(has_tx_pheno) >= 2L, delta_doy_resid = delta_doy_resid, pheno_fdr_p = pheno_fdr_p, alpha_eb = alpha_eb)
+  sp <- trimws(as.character(morph_df$species_standardized)); sp[is.na(sp)] <- ""
+  base_sp <- if ("base_species" %in% names(morph_df)) trimws(as.character(morph_df$base_species)) else sp; base_sp[is.na(base_sp)] <- ""
+  qc <- if ("geno_quality_pass" %in% names(morph_df)) bfn(morph_df$geno_quality_pass) else rep(TRUE, n)
+  g_pred <- c_clean("geno_predicted_taxon"); coanc <- c_clean("coancestry_cluster"); clade <- c_clean("public_backbone_clade")
+  gdi <- if ("coalescent_gdi" %in% names(morph_df)) suppressWarnings(as.numeric(morph_df$coalescent_gdi)) else rep(NA_real_, n)
+  base_g <- (sp %in% taxa) & qc & (nzchar(g_pred) | nzchar(coanc) | nzchar(clade) | is.finite(gdi))
+  use_g <- base_g
+  if (is.logical(anchor_mask) && length(anchor_mask) == n) {
+    anc_g <- base_g & !is.na(anchor_mask) & anchor_mask
+    if (length(unique(sp[anc_g])) >= 2L) use_g <- anc_g
+  }
+  active_g_taxa <- intersect(taxa, unique(sp[use_g]))
+  if (length(active_g_taxa) < 2L) return(list(available = FALSE, mat = NULL, n_taxa = 0L))
+  A_geno <- matrix(NA_real_, nrow = n_taxa, ncol = n_taxa, dimnames = list(taxa, taxa)); diag(A_geno) <- 1.0
+  for (i in seq_len(n_taxa - 1L)) {
+    ia <- which(use_g & sp == taxa[i]); if (length(ia) == 0L) next
+    pa <- g_pred[ia]; pa <- pa[nzchar(pa)]; ca <- coanc[ia]; ca <- ca[nzchar(ca)]
+    ba <- clade[ia]; ba <- ba[nzchar(ba)]; ga <- gdi[ia]; ga <- ga[is.finite(ga)]
+    a_match <- unique(c(taxa[i], base_sp[ia[1L]])); a_match <- a_match[nzchar(a_match)]
+    for (j in (i + 1L):n_taxa) {
+      ib <- which(use_g & sp == taxa[j]); if (length(ib) == 0L) next
+      pb <- g_pred[ib]; pb <- pb[nzchar(pb)]; cb <- coanc[ib]; cb <- cb[nzchar(cb)]
+      bb <- clade[ib]; bb <- bb[nzchar(bb)]; gb <- gdi[ib]; gb <- gb[is.finite(gb)]
+      b_match <- unique(c(taxa[j], base_sp[ib[1L]])); b_match <- b_match[nzchar(b_match)]
+      comps <- numeric(0)
+      if (length(pa) > 0L && length(pb) > 0L) comps <- c(comps, min(1.0, max(0.0, 0.5 * (mean(pa %in% b_match) + mean(pb %in% a_match)))))
+      if (length(ca) > 0L && length(cb) > 0L) {
+        u_cl <- union(ca, cb)
+        fa <- vapply(u_cl, function(k) mean(ca == k), numeric(1)); fb <- vapply(u_cl, function(k) mean(cb == k), numeric(1))
+        comps <- c(comps, min(1.0, max(0.0, sum(pmin(fa, fb)))))
+      }
+      if (length(ba) > 0L && length(bb) > 0L) {
+        ma <- names(sort(table(ba), decreasing = TRUE))[1L]; mb <- names(sort(table(bb), decreasing = TRUE))[1L]
+        comps <- c(comps, if (identical(ma, mb)) 1.0 else 0.0)
+      }
+      if (length(ga) > 0L && length(gb) > 0L) comps <- c(comps, min(1.0, max(0.0, 1.0 - 0.5 * (stats::median(ga) + stats::median(gb)))))
+      if (length(comps) > 0L) { val <- round(min(1.0, max(0.0, mean(comps))), 6); A_geno[i, j] <- val; A_geno[j, i] <- val }
+    }
+  }
+  if (!any(is.finite(A_geno[upper.tri(A_geno)]))) return(list(available = FALSE, mat = NULL, n_taxa = 0L))
+  list(available = TRUE, mat = A_geno, n_taxa = length(active_g_taxa))
 }
