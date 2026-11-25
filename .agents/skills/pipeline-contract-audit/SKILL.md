@@ -18,18 +18,18 @@ Every CV, extraction, and morphometrics module in `scripts/vision/`, `scripts/pi
   $$\text{coord}_{\text{native}} = \frac{\text{coord}_{\text{work}}}{\text{work\_scale}}$$
 * Columns with suffix `_px` (e.g., `petiole_length_px`, `plant_height_px`, contour vertices) must strictly represent coordinates on the original unscaled image.
 
-### 2. 3-Class Organ Mask Handling and UNet++ v9 Rachis Bridging
+### 2. Read-Only 3-Class LeafMachine3 Organ Masks and Multi-Island Topology
 * Module 8 instance segmentation (`lm3_leaf_segmenter__yolo26x_seg_1024`) outputs 3 semantic classes: `Leaf` (lamina, class 0), `Petiole` (class 1), and `Hole` (sinuses or perforations, class 2).
-* Hole pixels falling within lamina polygons must be subtracted from the blade mask.
-* In deeply dissected or pinnatifid leaves where narrow rachis segments experience minor breaks, Module 4 UNet++ v9 `specimen_paper_cleaned_mask` (`LLR_Hyst_KeepBlobs: true` color likelihood) acts as an anatomical bridge constraint (`bridge_dissected_rachis_components`), reconnecting genuine pinnae without bridging across mounting paper.
+* All `Leaf`/`Petiole`/`Hole` masks emitted by Module 8 remain strictly read-only and uncut with zero post-hoc mask mutation; `Hole` subtraction occurs solely inside LeafMachine3's native segmentation output.
+* Deeply dissected or pinnatifid rosettes that yield multi-island or enclosed-void masks (`non_jordan_mask` in Step 03) bypass EFA harmonic fitting and are retained via 1-OTU = 1-vote `ECT_PC1..3` topology rather than synthetic mask bridging.
 
-### 3. Tip-Up Clockwise `lamina_base`-Anchored Contour Geometry
-* Normalized 120-vertex contours in `extracted_leaves.contour_xy_json` must be oriented vertically with apex pointing upward ($y$-axis toward apex) and starting homologously at the anatomical lamina-petiole junction (`lamina_base` anchor $p_{\text{base}}$), traversing clockwise around the perimeter.
-* Because coordinates are standardized and homologized in Step 02, `Momocs::efourier` in Step 03 must be executed with `norm = FALSE` and `start = FALSE`:
+### 3. Homologous `k = 1` Contour Geometry (`lamina_base -> lamina_tip`)
+* Step 02 exports 120-vertex tip-up contours in `extracted_leaves.contour_xy_json` oriented along `lamina_base -> lamina_tip` in an upright frame with vertex 1 anchored at the anatomical lamina-petiole junction (`lamina_base`).
+* Step 03 maps upright contours onto the horizontal axis via `align_contour_horizontal_xax()`, enforces vertex-1-preserving clockwise (CW) contour ordering via `ensure_clockwise_keep_start_r()`, applies centroid centering and isotropic scaling (`coo_center() %>% coo_scale()`), and executes `Momocs::efourier` with `norm = FALSE` and `start = FALSE`:
   ```r
   Momocs::efourier(out_obj, nb.h = H_opt, norm = FALSE, start = FALSE)
   ```
-  preserving biologically meaningful absolute orientation, rotation, and starting-point homology.
+  This protocol preserves `k = 1` homologous orientation, rotation, and starting-point homology without first-harmonic ellipse rotation.
 
 ### 4. Strict Active vs. Passive Determiner Authority Split
 * **Active Reference Anchors (`Tier_1_Gold`, `Tier_2_Silver`, promoted `Tier_3_Bronze`, `Tier_0_Type`):** Used exclusively for model fitting, Mahalanobis scatter estimation, CDA discriminant axes, and Spatial RF training.
@@ -103,17 +103,35 @@ if missing:
     print(f"[FAIL] Missing pipeline scripts: {missing}")
     sys.exit(1)
 
-s_db = Path("scripts/core/db.py").read_text() + Path("scripts/core/db_schema.py").read_text()
-s_db_r = Path("scripts/core/db_utils.R").read_text()
-s_harv = Path("scripts/core/harvester.py").read_text() + Path("scripts/core/taxonomy_authority.py").read_text()
-s02 = Path("scripts/pipeline/02_segment_and_extract.py").read_text() + Path("scripts/vision/organ_crown_metrics.py").read_text()
-s03 = Path("scripts/morphometrics/03_fourier_extractor.R").read_text() + Path("scripts/morphometrics/dissected_leaf_utils.R").read_text()
-s04 = Path("scripts/morphometrics/04_gmm_morphotools.R").read_text()
-s_auth = Path("scripts/morphometrics/authority_weighting_utils.R").read_text()
-s05 = Path("scripts/analysis/05_multimodal_spatial_rf.R").read_text() + Path("scripts/analysis/edaphic_fine_grain_utils.R").read_text() + Path("scripts/analysis/step05_phenology_ecotypes.R").read_text()
-s06 = Path("scripts/analysis/06_genomic_phylogenomics.R").read_text() + Path("scripts/analysis/step06_public_backbone.R").read_text() + Path("scripts/analysis/step06_reticulation_coancestry.R").read_text() + Path("scripts/analysis/step06_coalescent_delimitation.py").read_text() + Path("scripts/data_prep/06_ingest_genetic_data.py").read_text()
-s07 = Path("scripts/analysis/07_triage_dashboard_synthesis.R").read_text()
-s_comp = Path("scripts/analysis/taxon_complex_discovery_utils.R").read_text()
+def read_globs(*patterns):
+    seen, chunks = set(), []
+    for pat in patterns:
+        for p in sorted(Path(".").glob(pat)):
+            if p.is_file() and p.suffix in {".py", ".R"} and p not in seen:
+                seen.add(p)
+                chunks.append(p.read_text(encoding="utf-8", errors="ignore"))
+    return "\n".join(chunks)
+
+s_db = read_globs("scripts/core/db*.py")
+s_db_r = read_globs("scripts/core/db*.R")
+s_harv = read_globs("scripts/core/harvester.py", "scripts/core/taxonomy_authority.py", "scripts/core/step01_*.py")
+s02 = read_globs("scripts/pipeline/02_segment_and_extract.py", "scripts/vision/*.py")
+s03 = read_globs(
+    "scripts/morphometrics/03_fourier_extractor.R", "scripts/morphometrics/step03_*.R",
+    "scripts/morphometrics/dissected_leaf_utils.R", "scripts/morphometrics/dissect_*.R",
+    "scripts/morphometrics/fourier_parallel_utils.R",
+    "scripts/morphometrics/authority_weighting_utils.R", "scripts/morphometrics/auth_*.R",
+)
+s04 = read_globs(
+    "scripts/morphometrics/04_gmm_morphotools.R", "scripts/morphometrics/step04_*.R",
+    "scripts/morphometrics/gmm_icl_bootstrap_utils.R", "scripts/morphometrics/plasticity_mitigation_utils.R",
+    "scripts/morphometrics/pub_*.R", "scripts/morphometrics/ecoregion_*.R",
+)
+s_auth = read_globs("scripts/morphometrics/authority_weighting_utils.R", "scripts/morphometrics/auth_*.R")
+s05 = read_globs("scripts/analysis/*05*.R", "scripts/analysis/edaphic_*.R")
+s06 = read_globs("scripts/analysis/*06*", "scripts/data_prep/*06*")
+s07 = read_globs("scripts/analysis/*07*.R", "scripts/analysis/genomic_triage_utils.R")
+s_comp = read_globs("scripts/analysis/taxon_complex_discovery_utils.R", "scripts/analysis/step07_complex_affinity_utils.R")
 
 checks = [
     ("db.py defines schema, WAL mode, tables, and master view", "v_integrative_triage_master" in s_db and "PRAGMA journal_mode = WAL" in s_db),
@@ -158,7 +176,7 @@ Always execute the verification gate to confirm zero regressions:
 
 ```bash
 # Verify zero em/en dashes across repository documentation
-grep -rnP "[\x{2013}\x{2014}]" README.md docs/TAXONOMIC_SOP.md AGENTS.md && exit 1 || echo "PASS: Zero em/en dashes found"
+grep -rnP "[\x{2013}\x{2014}]" README.md docs/TAXONOMIC_SOP.md AGENTS.md .agents/skills/pipeline-contract-audit/SKILL.md && exit 1 || echo "PASS: Zero em/en dashes found"
 
 # Verify positive present-state documentation across repository documentation
 python3 -c '

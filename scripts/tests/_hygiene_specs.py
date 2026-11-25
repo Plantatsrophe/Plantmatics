@@ -79,7 +79,7 @@ FORBIDDEN_OBSOLETE_SAM2_AND_PRUNED_HELPER_TOKENS: Tuple[str, ...] = (
     # Retired Step 02 mask-mutating & duplicated helper tokens
     "_subtract_interior_mounting_paper_pockets", "_build_native_lm3_crop_masks",
     "harmonize_upright_mask_sinus_bridges", "open_hairline_sinus_bridges_and_measure_voids",
-    "bridge_already_opened", "compute_eroded_blade_cie_l_metrics",
+    "bridge_already_opened", "compute_eroded_blade_cie_l_metrics", "bridge_dissected_rachis_components",
     # Retired Step 03 dead & duplicated helper tokens
     "summarize_otu_dissection_metrics", "strip_deprecated_step03_cli_args",
     "compute_polygon_solidity",
@@ -225,6 +225,44 @@ RAW_STRICT_LINE_CEILINGS: Tuple[Tuple[str, int], ...] = (
     ("scripts/tests/test_step07_sqlite_and_reports.py", 440), ("scripts/tests/test_step07_deme_propagation.py", 300),
     ("scripts/tests/test_step07_organellar_triage.py", 280), ("scripts/tests/test_step07_genomic_propagation_contract.py", 460),
     ("scripts/tests/test_step07_audit_hygiene.py", 400), ("scripts/tests/test_parallel_thread_scaling.py", 300),
+    # Shared morphometrics & figure theme facades + siblings (Bucket 1)
+    ("scripts/morphometrics/authority_weighting_utils.R", 140), ("scripts/morphometrics/auth_concept_type_masks.R", 440), ("scripts/morphometrics/auth_subspace_mcd_cov.R", 440),
+    ("scripts/morphometrics/auth_anchor_pool_helpers.R", 360), ("scripts/morphometrics/auth_adaptive_anchors.R", 360), ("scripts/morphometrics/auth_deme_ledoit_cov.R", 440),
+    ("scripts/morphometrics/auth_shrinkage_cda.R", 440), ("scripts/morphometrics/auth_eb_likelihoods.R", 440), ("scripts/morphometrics/auth_eb_weights_helpers.R", 360),
+    ("scripts/morphometrics/auth_eb_weights.R", 360), ("scripts/morphometrics/auth_gmm_mclust_fit.R", 440), ("scripts/morphometrics/auth_type_basionym_utils.R", 440),
+    ("scripts/morphometrics/auth_type_shared_subspace.R", 380), ("scripts/morphometrics/auth_type_morph_control.R", 440), ("scripts/morphometrics/auth_osr_metrics.R", 440),
+    ("scripts/morphometrics/auth_oof_cda_audit.R", 440), ("scripts/morphometrics/dissected_leaf_utils.R", 100), ("scripts/morphometrics/dissect_zone_and_harmonics.R", 440),
+    ("scripts/morphometrics/dissect_mcd_and_ect.R", 440), ("scripts/morphometrics/dissect_cauline_track.R", 440), ("scripts/morphometrics/dissect_scalars_permanova.R", 440),
+    ("scripts/morphometrics/pub_ecoregion_manova_utils.R", 100), ("scripts/morphometrics/ecoregion_epa_spatial.R", 420), ("scripts/morphometrics/ecoregion_supervised_cda.R", 420),
+    ("scripts/morphometrics/ecoregion_manova_stats.R", 400), ("scripts/morphometrics/ecoregion_manova_plot.R", 400), ("scripts/morphometrics/pub_figures_utils.R", 420),
+    ("scripts/morphometrics/pub_taxon_label_utils.R", 420), ("scripts/figures/theme_packera_pub.R", 400), ("scripts/figures/basemap_exemplar_utils.R", 240),
+    # Core SQLite Python/R bridges, config, CLI, shell, & Warm-R session (Buckets 3 & 4)
+    ("scripts/core/db_schema.py", 240), ("scripts/core/db_schema_env_cols.py", 450), ("scripts/core/db_schema_master_view_a.py", 360),
+    ("scripts/core/db_schema_master_view_b.py", 360), ("scripts/core/db_schema_ddl_tier_a.py", 440), ("scripts/core/db_schema_ddl_tier_b.py", 440),
+    ("scripts/core/db_schema_migration_specs.py", 440), ("scripts/core/db_schema_step02_rebuild.py", 360), ("scripts/core/db_schema_migrations.py", 360),
+    ("scripts/core/db.py", 250), ("scripts/core/db_column_constants.py", 450), ("scripts/core/db_conn_pragmas.py", 450),
+    ("scripts/core/db_vouchers_synonyms.py", 450), ("scripts/core/db_step02_leaf_rows.py", 350), ("scripts/core/db_step02_contours_tx.py", 350),
+    ("scripts/core/db_step02_loader.py", 450), ("scripts/core/db_cohort_consolidation.py", 450), ("scripts/core/db_cohort_and_env_cache.py", 450),
+    ("scripts/core/db_morph_and_rf_persist.py", 440), ("scripts/core/db_run_tables_ingest.py", 450), ("scripts/core/db_genomics_cytology_persist.py", 450),
+    ("scripts/core/db_csv_ingest_sync.py", 450), ("scripts/core/db_purge_maintenance.py", 450), ("scripts/core/db_utils.R", 150),
+    ("scripts/core/db_r_env_parallel.R", 360), ("scripts/core/db_r_schema_specs_a.R", 280), ("scripts/core/db_r_schema_specs_b.R", 280),
+    ("scripts/core/db_r_path_conn.R", 410), ("scripts/core/db_r_upsert_utils.R", 240), ("scripts/core/db_r_step03_qc_fetch.R", 440),
+    ("scripts/core/db_r_step03_contour_io.R", 440), ("scripts/core/db_r_step03_persist.R", 450), ("scripts/core/db_r_step04_restore_a.R", 320),
+    ("scripts/core/db_r_step04_restore_b.R", 320), ("scripts/core/db_r_step04_persist.R", 320), ("scripts/core/db_r_step05_env_cache.R", 260),
+    ("scripts/core/db_r_step06_07_master.R", 400), ("scripts/core/config.py", 240), ("scripts/core/config_run_context.py", 440),
+    ("scripts/core/config_dataclasses.py", 440), ("scripts/core/config_pipeline_cls.py", 440), ("scripts/core/config_resolvers.py", 440),
+    ("main.py", 360), ("scripts/pipeline/cli_run_context.py", 440), ("scripts/pipeline/cli_env_doctor.py", 440),
+    ("scripts/pipeline/cli_stage_harvest_seg.py", 440), ("scripts/pipeline/cli_stage_morph_layers.py", 440), ("scripts/pipeline/cli_stage_genomics_dl.py", 440),
+    ("scripts/pipeline/cli_stage_synthesis.py", 440), ("scripts/pipeline/cli_parser_subcommands_a.py", 360), ("scripts/pipeline/cli_parser_subcommands_b.py", 360),
+    ("run_pipeline.sh", 460), ("scripts/pipeline/sh/pipe_cli_args.sh", 440), ("scripts/pipeline/sh/pipe_env_purge.sh", 440),
+    ("scripts/pipeline/sh/pipe_preflight_cohort_a.sh", 440), ("scripts/pipeline/sh/pipe_preflight_cohort_b.sh", 440), ("scripts/pipeline/sh/pipe_steps_01_04.sh", 440),
+    ("scripts/tests/_r_session.py", 320), ("scripts/tests/_r_session_preload.py", 260),
+    # Decomposed Step 03, Step 04, CLI, & SQLite test suites (Bucket 4)
+    ("scripts/tests/test_step03_efa_anchors_and_harmonics.py", 430), ("scripts/tests/test_step03_basal_cauline_and_ect.py", 430), ("scripts/tests/test_step03_void_qc_and_sqlite.py", 430),
+    ("scripts/tests/test_step04_allometry_and_ecoregion_cda.py", 430), ("scripts/tests/test_step04_bronze_and_manova_audit.py", 430), ("scripts/tests/test_step04_anchors_subspace_and_demes.py", 430),
+    ("scripts/tests/test_step04_type_controls_and_basionyms.py", 430), ("scripts/tests/test_step04_plasticity_osr_and_traits.py", 430), ("scripts/tests/test_cli_parser_and_env_doctor.py", 440),
+    ("scripts/tests/test_cli_run_pipeline_preflight.py", 440), ("scripts/tests/test_cli_purge_and_compute_flags.py", 440), ("scripts/tests/test_sql_ddl_wal_and_contours.py", 440),
+    ("scripts/tests/test_sql_multiplant_and_master_view.py", 440), ("scripts/tests/test_sql_consolidation_and_migration.py", 440), ("scripts/tests/test_sql_schema_20261127_roundtrip.py", 440),
 )
 
 EXTRA_500_LINE_BOUNDED_MODULES: Tuple[str, ...] = (

@@ -24,7 +24,9 @@ class TestStep1SynonymUnificationAndCisDisjunct(unittest.TestCase):
         project_root = Path(__file__).resolve().parents[2]
         harv_src = (project_root / "scripts/core/harvester.py").read_text(encoding="utf-8")
         usda_src = (project_root / "scripts/core/usda_plants_ranges.py").read_text(encoding="utf-8")
-        aw_r_src = (project_root / "scripts/morphometrics/authority_weighting_utils.R").read_text(encoding="utf-8")
+        morph_dir = project_root / "scripts" / "morphometrics"
+        aw_r_paths = [morph_dir / "authority_weighting_utils.R", *sorted(morph_dir.glob("auth_*.R"))]
+        aw_r_src = "\n".join(p.read_text(encoding="utf-8") for p in aw_r_paths if p.is_file())
         self.assertNotIn('"packera tomentosa"', harv_src.lower())
         self.assertNotIn('"senecio tomentosus"', harv_src.lower())
         self.assertNotIn("fallback_map", usda_src)

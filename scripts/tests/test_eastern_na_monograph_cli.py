@@ -203,8 +203,16 @@ class TestEasternNAMonographCLI(unittest.TestCase):
     def test_focal_taxon_eastern_gate_and_triage_source_auto_neighbors(self) -> None:
         import pandas as pd
         from scripts.core.db import get_db_connection, upsert_vouchers_records
-        sh_src = (PROJECT_ROOT / "run_pipeline.sh").read_text(encoding="utf-8")
-        fn_body = sh_src[sh_src.index("run_preflight_subset_filter() {"):sh_src.index("\nrun_preflight_subset_filter\n")]
+        sh_dir = PROJECT_ROOT / "scripts" / "pipeline" / "sh"
+        sh_parts = [p for p in (sh_dir / "pipe_preflight_cohort_b.sh", sh_dir / "pipe_preflight_cohort_a.sh") if p.is_file()]
+        if sh_parts:
+            fn_body = "\n".join(
+                re.sub(r"(?m)^\s*(?:source|\.)\s+.*pipe_preflight_cohort_[ab]\.sh.*\n?", "", p.read_text(encoding="utf-8"))
+                for p in sh_parts
+            )
+        else:
+            sh_src = (PROJECT_ROOT / "run_pipeline.sh").read_text(encoding="utf-8")
+            fn_body = sh_src[sh_src.index("run_preflight_subset_filter() {"):sh_src.index("\nrun_preflight_subset_filter\n")]
         with tempfile.TemporaryDirectory() as tmp:
             root_data, runs_root = Path(tmp).resolve() / "root_data", Path(tmp).resolve() / "runs"
             run_dir = runs_root / "paupercula_02_complex_triage"; (tables_dir := run_dir / "data" / "tables").mkdir(parents=True, exist_ok=True); (root_data / "cropped_patches" / "capitula").mkdir(parents=True, exist_ok=True)

@@ -93,3 +93,39 @@ references:
     publisher:
       name: "University of North Carolina Herbarium (NCU), North Carolina Botanical Garden"
       city: "Chapel Hill"
+  - type: dataset
+    title: "Soil Landscapes of the United States 100-meter (SOLUS100) soil property maps"
+    authors:
+      - family-names: "Nauman"
+        given-names: "Travis W."
+      - family-names: "Kienast-Brown"
+        given-names: "Suzann"
+      - family-names: "Roecker"
+        given-names: "Stephen M."
+      - family-names: "Brungard"
+        given-names: "Colby W."
+      - family-names: "White"
+        given-names: "Dan"
+      - family-names: "Philippe"
+        given-names: "Jason"
+      - family-names: "Thompson"
+        given-names: "James A."
+    year: 2024
+    publisher:
+      name: "Ag Data Commons, USDA-NRCS"
+    doi: "10.15482/USDA.ADC/25033856"
+    url: "https://storage.googleapis.com/solus100pub"
+  - type: article
+    title: "Compositae-ParaLoss-1272: A complementary sunflower-specific probe set reduces paralogs in phylogenomic analyses of complex systems"
+    authors:
+      - family-names: "Moore-Pollard"
+        given-names: "Erika R."
+      - family-names: "Jones"
+        given-names: "Daniel S."
+      - family-names: "Mandel"
+        given-names: "Jennifer R."
+    year: 2024
+    journal: "Applications in Plant Sciences"
+    volume: 12
+    issue: 1
+    doi: "10.1002/aps3.11568"

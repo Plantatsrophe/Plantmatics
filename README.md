@@ -254,12 +254,14 @@ Central defaults live in [`config/config.yaml`](config/config.yaml) and load thr
 | `--resegment`, `--force-segment` | *(flag)* | `false` | Clears cached segmentation artifacts for the active cohort and re-runs Step 02 ONNX inference. |
 | `--purge-runs-only`, `--purge-run-outputs` | *(flag)* | `false` | Wipes `runs/`, `outputs/`, non-Step-01/02 CSVs, and Tier B SQLite tables (including `genetic_lineage_assignments`) while preserving Step 01 `vouchers`, Tier A `genomic_samples`, `data/genomics/`, and Step 02 masks, contours, and ECT arrays (resets `min_bedrock_depth_buffer_cm` for clean buffered re-extraction). |
 | `--purge-segments`, `--purge-old-data` | *(flag)* | `false` | Wipes Step 02 to 07 masks, contours, ECT files, organ crops, `runs/`, and SQLite Step 02 to 07 rows (`VACUUM`) while preserving Step 01 `vouchers`, `raw_vouchers/`, `genomic_samples`, `data/genomics/`, and `environmental_cache`. |
-| `-j`, `--threads`, `--workers` | `<INT>` | Auto-detected | Sets CPU worker thread count across Python and R stages (`PACKERA_MAX_WORKERS`). |
-| `--gpu-batch-size`, `--batch-size` | `<N>` | Auto-detected | Sets Step 02 LeafMachine3 ONNX inference batch size (`PACKERA_GPU_BATCH_SIZE`). |
+| `-j`, `--threads`, `--workers` | `<INT>` | Auto-detected | Sets CPU worker thread count across Python and R stages (`PLANTMATICS_MAX_WORKERS` with `PACKERA_MAX_WORKERS` fallback). |
+| `--gpu-batch-size`, `--batch-size` | `<N>` | Auto-detected | Sets Step 02 LeafMachine3 ONNX inference batch size (`PLANTMATICS_GPU_BATCH_SIZE` with `PACKERA_GPU_BATCH_SIZE` fallback). |
 | `--wave-size` | `<N>` | `16` | Sets herbarium sheets processed per asynchronous 3-stage GPU wave in Step 02. |
 | `--prefetch-workers` / `--prep-workers` / `--post-workers` | `<N>` | Auto-detected | Overrides Step 02 Stage A disk prefetch, Stage B crop prep, or Stage C contour/ECT worker pools. |
 | `--limit` | `<N>` | None | Caps the number of vouchers segmented in Step 02 for smoke testing. |
-| `--demo` | *(flag)* | `false` | Enables isolated demo mode (`PACKERA_DEMO_MODE=1`) inside `demo_ephemeral.sqlite` without modifying canonical `data/` stores. |
+| `--demo` | *(flag)* | `false` | Enables isolated demo mode (`PLANTMATICS_DEMO_MODE=1` with `PACKERA_DEMO_MODE=1` fallback) inside `demo_ephemeral.sqlite` without modifying canonical `data/` stores. |
+| `--skip-nwi-network` | *(flag)* | `false` | Skips live USFWS NWI FeatureServer lookups during environmental provisioning (`PLANTMATICS_SKIP_NWI_NETWORK=1`). |
+| `--harvest-full-continental-range` / `--no-harvest-full-continental-range` | *(flag)* | Config default | Forces or disables continent-wide harvesting of transcontinental eastern residents during Step 01. |
 | `--taxon`, `--taxa` | `"<Sp1>" ...` | Genus-wide | Restricts harvesting and downstream analysis strictly to the named *Packera* taxa. |
 | `--focal-taxon` | `"<Binomial>"` | None | Sets focal taxon for cascading outgroup anchor selection, complex neighbor discovery, and report naming. |
 | `--exclude-taxon` | `"<Binomial>" ...` | None | Excludes specified taxa from the active run cohort during preflight. |
@@ -295,13 +297,13 @@ Public cytology preflight toggles for `./run_pipeline.sh` auto-stage `data/cytol
 | `download-taxonomic-backbone` | `scripts/data_prep/download_taxonomic_backbone.py` | Harvests Catalogue of Life WCVP `2232` synonymy alongside BHL API v3 protologue links and NatureServe Explorer global/subnational range records into flat `data/taxonomy/` files and SQLite `taxon_backbone_profiles` plus `natureserve_subnational_ranges`. |
 | `purge-runs-only` (`purge-run-outputs`) | `scripts/core/db.py` | Non-destructively wipes `runs/`, `outputs/`, non-Step-01/02 CSVs, and Tier B SQLite tables (including `genetic_lineage_assignments`) while preserving Step 01 vouchers, Tier A `genomic_samples`, `data/genomics/`, and Step 02 masks, contours, and ECT arrays (also available via `--purge-runs-only`). |
 | `purge-segments` (`purge-old-data`) | `scripts/core/db.py` | Resets Step 02 to 07 masks, contours, ECT matrices, `runs/`, and Tier B / Step 02 SQLite tables while preserving Step 01 scans, `vouchers`, and `genomic_samples`. |
-| `harvest` | `scripts/data_prep/01_voucher_harvester.py` | Runs Step 01 GBIF/iDigBio harvesting, synonym resolution, authority stratification, USDA county range tagging, and WebP downloads. |
+| `harvest` | `scripts/data_prep/01_voucher_harvester.py` | Runs Step 01 GBIF/iDigBio harvesting and synonym resolution alongside authority stratification plus USDA county range tagging and WebP downloads (accepts `--gold-only` and `--determiner-tier` alongside `--exclude-misidentified` plus `--triage-source` and `--auto-neighbors` parity flags). |
 | `segment` | `scripts/pipeline/02_segment_and_extract.py` | Runs Step 02 read-only LeafMachine3 ONNX segmentation, DBSCAN plant clustering, 4-case `leaf_zone` scoring, $32 \times 360$ ECT export, and `fig02a`/`fig02b` generation. |
 | `morphometrics` | `03_fourier_extractor.R` + `04_gmm_morphotools.R` | Runs Step 03 EFA + ECT decomposition (`fig03a`, `fig03b`) followed by Step 04 allometry, GMM, shrinkage CDA, OSR, and batch/ecoregion audits (`fig04a`, `fig04b`, `fig04c`). |
 | `genomics` | `06_ingest_genetic_data.py` + `step06_public_cohort_ingestor.py` + `step06_public_tree_qc_utils.py` + `06_genomic_phylogenomics.R` + `step06_organellar_containment.R` + `step06_dynamic_tier_engine.R` + `step06_tier_figures.R` | Executes dynamic 4-tier Step 06 routing (`Tier_1_NextRAD_PopGen` -> `Tier_2_Public_HybSeq` -> `Tier_3_Public_MultiLocus` -> `Tier_4_Cytology_Gap` via `--genomic-tier auto` paired with `--vouchers`, `--focal-taxon`, `--intraspecific-mode`, and `genomic_tier_manifest.json`), outgroup-exempt unique-tip Newick MAD screening, stabilized nothospecies resolution (*Packera ×memmingeri*) alongside Step 01 concept/quarantine propagation (`8` `genomic_samples` columns) and open/hybrid plus heterotypic-type holdout, polyploid `FORMAT/DS` and row-wise mixed-ploidy dosage scaling, diploid-anchored `HDplot` paralog filtering with `0.65` `Compositae-ParaLoss-1272` polyploid rescue and 1:1 `locus_weights.tsv` (`1.5`/`1.0`/`0.5`), companion VCF depth alignment, Weiß et al. (2018) EM/BIC cytotypes paired with taxon-stratified EB `polyRAD` dosages (`2x` fallback), vouchered and unvouchered coordinate quarantine, `>= 0.80` / `>= 80` 11-mer organellar containment gating persisted via `persist_step06_to_sqlite()`, `ParaLoss-1272`-weighted distances and 5-fold 1-SE masked cross-entropy `sNMF` (`K = 1..k_max`) alongside leak-free out-of-sample Gower LORO-CV `DAPC`, 7-model `AICc` plus BH-LRT $(h, Q_{12})$ hybrid classes, `fineRADstructure` coancestry, public-backbone-polarized $f_b$ plus continuous-dosage 16-quartet G-test gated `SNPs2CF` reticulation, 4-state IUPAC heterozygote BIC/`+G4`/`+ASC` coalescent `SVDquartets` (dual-allele pooled, 200-replicate bootstraps) and multi-block gametic-mismatch $\widehat{gdi}$, plus honest `%.5f_%.5f` smooth-index `MMRR` (`IBD_only` when covariates are absent) and leave-one-node-out `FEEMS` CV (`fig06a` to `fig06c`); legacy calls lacking `--vouchers` and `--focal-taxon` skip cleanly (`skipped_empty`) when no nextRAD sample payload sits inside `data/genomics/` subdirectories. |
 | `skim-organellar` | `scripts/data_prep/skim_offtarget_organellar.py` | Optional offline companion tool that harvests paired-end or zipped FASTQ reads, runs pure-Python 17-mer cpDNA, nrITS, and nuclear `waxy` consensus skimming on `public_packera_*` references alongside empirical-nuclear discordance calling, and writes `skimmed_waxy_consensus.fasta` plus organelle/ITS files into `data/genomics/public_organellar_and_loci/`. |
-| `synthesis` (`analyze`) | `05_multimodal_spatial_rf.R` + `06_genomic_phylogenomics.R` + `07_triage_dashboard_synthesis.R` + `step07_cytology_integration.R` | Ensures cached environmental layers via `download_environmental_layers.py` (unless `--skip-env-download`), runs morphometric- and genomic-independent Step 05 Spatial RF, `ecotype_regime` discovery, MaxEnt SDMs, and Hopkins phenology (`fig05a` to `fig05c`), runs standalone Step 06 phylogenomics whenever `data/genomics/` holds genetic files (`fig06a`, `fig06b`), and executes Step 07 cytotaxonomic integration plus joint consensus synthesis (`fig07a`, `fig07b`). |
-| `run-all` | `main.py` | Executes `harvest` $\to$ `segment` $\to$ `morphometrics` $\to$ `genomics` (when staged) $\to$ `synthesis` end to end inside a run-scoped directory. |
+| `synthesis` (`analyze`) | `05_multimodal_spatial_rf.R` + `06_genomic_phylogenomics.R` + `07_triage_dashboard_synthesis.R` + `step07_cytology_integration.R` | Ensures cached environmental layers via `download_environmental_layers.py` (unless `--skip-env-download`, forwarding `--skip-nwi-network`), runs morphometric- and genomic-independent Step 05 Spatial RF and `ecotype_regime` discovery alongside MaxEnt SDMs and Hopkins phenology (`fig05a` to `fig05c`), runs standalone Step 06 phylogenomics whenever `data/genomics/` holds genetic files (`fig06a` and `fig06b`), and executes Step 07 cytotaxonomic integration plus joint consensus synthesis (`fig07a` and `fig07b`) with full curation parity flags (`--gold-only` and `--determiner-tier` alongside `--exclude-misidentified` plus `--triage-source` and `--auto-neighbors`). |
+| `run-all` | `main.py` (`scripts/pipeline/cli_*.py`) | Executes `harvest` $\to$ `segment` $\to$ `morphometrics` $\to$ `genomics` (when staged) $\to$ `synthesis` end to end inside a run-scoped directory with full flag and `PLANTMATICS_*`/`PACKERA_*` env parity. |
 
 ### Eastern North American Monograph and Complex Orchestrators (`./resolve_eastern_na_packera.sh` & `./resolve_packera_dubia_complex.sh`)
 
@@ -433,16 +435,16 @@ Plantmatics/
 ├── README.md                                        # Operational architecture, installation, CLI, and output reference
 ├── requirements.txt                                 # Primary Python (.venv) orchestration dependencies
 ├── setup_leafmachine3.sh                            # Automated uv + LeafMachine3 ONNX installer and doctor check
-├── run_pipeline.sh                                  # Master run-scoped shell orchestrator (Steps 01 to 07)
+├── run_pipeline.sh                                  # Master run-scoped shell orchestrator (<460 lines; sources scripts/pipeline/sh/pipe_*.sh)
 ├── resolve_eastern_na_packera.sh                    # Automated Eastern NA genus-wide and per-species monograph wrapper
 ├── resolve_packera_dubia_complex.sh                 # Automated 4-stage Packera dubia complex-resolution wrapper
-├── main.py                                          # Unified Python CLI runner and preflight checker
+├── main.py                                          # Unified Python CLI facade (<360 lines; backed by scripts/pipeline/cli_*.py)
 └── scripts/
     ├── core/
-    │   ├── config.py                                # Typed PipelineConfig loader, TaxaConfig genus/family resolvers, and thread/batch resolvers
-    │   ├── db.py                                    # Transactional SQLite WAL and DuckDB operations + atomic legacy migration
-    │   ├── db_schema.py                             # Schema 20261127 DDL, migrations, and v_integrative_triage_master view
-    │   ├── db_utils.R                               # R SQLite/DuckDB batch reader, dynamic column sync, and atomic writers
+    │   ├── config.py                                # Typed PipelineConfig facade (<240 lines) backed by four <440-line config_*.py context, dataclass, and resolver modules
+    │   ├── db.py                                    # Transactional SQLite WAL facade (<250 lines) backed by thirteen <450-line db_*.py persistence and purge modules
+    │   ├── db_schema.py                             # Schema 20261127 facade (<240 lines) backed by eight <440-line db_schema_*.py DDL and migration modules
+    │   ├── db_utils.R                               # R SQLite/DuckDB auto-sourcing facade (<150 lines) backed by thirteen <450-line db_r_*.R bridge modules
     │   ├── harvester.py                             # Step 01 public harvester facade (<450 lines) delegating across nine step01_harvester_*.py submodules
     │   ├── step01_harvester_*.py                    # Nine <450-line Step 01 harvester helpers (filters, synonyms, taxon_std, prescreen, media, webp_rescue, export, record_ingest, pagination)
     │   ├── coord_hygiene_utils.py                   # Herbarium rooftop & county-centroid coordinate quarantine classifier (<260 lines)
@@ -500,6 +502,8 @@ Plantmatics/
     ├── pipeline/
     │   ├── 01_voucher_harvester.py                  # Step 01 pipeline module alias
     │   ├── 02_segment_and_extract.py                # Step 02 read-only LM3 adapter facade (<470 lines) delegating across nine step02_pipe_*.py stage and wave modules
+    │   ├── cli_*.py                                 # Eight <440-line main.py CLI helpers covering run context, env doctor, stage dispatchers, and subcommand parsers
+    │   ├── sh/pipe_*.sh                             # Five <440-line run_pipeline.sh shell helpers covering CLI args, purge/env setup, preflight cohorts, and Steps 01 to 04
     │   ├── resolve_eastern_na_packera.py            # Hierarchical Eastern NA monograph runner (<500 lines) propagating --geographic-scope and --gold-only plus 25-column synthesis compiler
     │   ├── resolve_focal_species_complex.py         # 4-stage focal species-complex CLI facade (<340 lines) re-exporting all 11 cohort and stage-runner helpers
     │   ├── step07_focal_cohort_utils.py             # Focal complex taxon slugs, run-ID builders, SQLite triage/complex fetchers, and stage metric extractors (<450 lines)
@@ -512,15 +516,15 @@ Plantmatics/
     │   ├── step04_allometry_merger_utils.R          # Step 04 YAML loader (<380 lines), scale gating, Step 02 architecture/photometry/radiate merges, Kish-N_eff BIC, and ANCOVA
     │   ├── step04_trait_projection_utils.R          # Step 04 uncalibrated mm masking (<360 lines), orthogonal gmm_cols vs expanded cda_cols, shared-subspace projection, and open/hybrid overrides
     │   ├── gmm_icl_bootstrap_utils.R                # Step 04 Delta_ICL[K=2] profiling (<280 lines) and covariance-locked sequential B = 199 bootstrap LRT returning stepped z_eval_mat
-    │   ├── authority_weighting_utils.R              # Stratified pool cap, homotypic immunity vs heterotypic type audit, shared-subspace type/OSR control, and fold-internal deme CV
-    │   ├── dissected_leaf_utils.R                   # Harmonic calibration, shape-free zones, type-immune MCD screening, biological variance filters, and tier-priority collinearity pruning
+    │   ├── authority_weighting_utils.R              # Auto-sourcing authority facade (<140 lines) backed by fifteen <440-line pure-POSIX auth_*.R anchor, EB, GMM, type-control, and OSR modules
+    │   ├── dissected_leaf_utils.R                   # Auto-sourcing dissection facade (<100 lines) backed by four <440-line dissect_*.R harmonic, MCD/ECT, cauline, and PERMANOVA modules
     │   ├── fourier_parallel_utils.R                 # Parallel contour alignment, Step 02 trait delegation, calibrated OTU medians (<500 lines), and harmonic workers
     │   ├── plasticity_mitigation_utils.R            # 10 km spatial demes, homogeneous anthesis-referenced phenophase adjustment, centroid-quarantined centering (<470 lines), and ridgeline merging
-    │   ├── pub_figures_utils.R                      # Taxon standardization, homologous t=0 outline reconstruction, dynamic palettes, and single-pass figure dispatchers
-    │   ├── pub_ecoregion_manova_utils.R             # Centroid-quarantined supervised EPA Level III Ecoregion CDA and Pillai/Hotelling MANOVA suite supporting all-ECT_PC cohorts
+    │   ├── pub_figures_utils.R                      # Core figure dispatcher (<420 lines) auto-sourcing pure-POSIX pub_taxon_label_utils.R (<420 lines; (0-1) lithic_outcrop_index label)
+    │   ├── pub_ecoregion_manova_utils.R             # Auto-sourcing ecoregion facade (<100 lines) backed by four <420-line pure-POSIX ecoregion_*.R spatial, CDA, MANOVA, and plot modules
     │   └── pub_synthesis_plates.R                   # Step 07 figure dispatch wrappers (<120 lines) sourcing Step 04 EM and trait-merger helpers
     ├── figures/
-    │   ├── theme_packera_pub.R                      # Shared 300-DPI PNG saver, POSIX regex hygiene, 60-taxon hollow symbol/palette engine, Step 02-03 trait dictionary, and EPSG:5070 basemap
+    │   ├── theme_packera_pub.R                      # Shared 300-DPI PNG theme facade (<400 lines) auto-sourcing basemap_exemplar_utils.R (<240 lines; EPSG:5070 basemaps and trait labels)
     │   ├── step03_figures.R                         # Renders fig03a_efa_morphospace_and_harmonics.png and fig03b_topological_ect_and_heteroblasty.png
     │   ├── step04_figures.R                         # Renders fig04a to fig04c (<500 lines) with dICL/boot-p subtitles, double-ringed type diamonds, ANOVA-F top-4 traits, and ecoregion CV
     │   ├── step05_figures.R                         # Renders fig05a and fig05b (<500 lines) and sources step05_sdm_figures.R without unlink() or POLARIS strings
@@ -579,7 +583,7 @@ Plantmatics/
     │   ├── step07_genomic_report_utils.R            # Step 07 Stage 0 genomic_field_triage.csv exporter, cytology summary builder, and Markdown synthesis generator (<320 lines)
     │   ├── genomic_triage_utils.R                   # Step 07 genomic joiner (<320 lines) with G1_Exsiccatae_Isoduplicate replicate ranking, F1 hybrid/gdi helpers, and report auto-sourcing
     │   └── taxon_complex_discovery_utils.R          # Step 07 POSIX-clean LOO phenology kappa and 3- or 4-stream Leiden/Ward.D2 species-complex delimitation (<480 lines)
-    └── tests/                                       # Automated QA suite (70 test_*.py modules covering Step 01 to Step 07 hygiene and taxonomic clarity alongside split Step 01/02/06/07 suites plus _hygiene_specs.py and run_audit.py harnesses)
+    └── tests/                                       # Automated QA suite (81 <500-line test_*.py modules covering Steps 01 to 07, CLI, SQLite, universal <500-line and pure POSIX R hygiene via _hygiene_specs.py, plus _r_session.py/_r_session_preload.py and run_audit.py)
 ```
 
 ## Verification, Reproducibility, and Troubleshooting

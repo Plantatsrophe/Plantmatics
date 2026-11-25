@@ -14,28 +14,32 @@ To keep compiled geospatial C++ libraries (`GDAL`, `GEOS`, `PROJ`) from conflict
 
 Never modify, patch, or commit changes inside `LeafMachine3/`. All `Packera`-specific computer vision adaptations belong in our read-only adapter layer under `scripts/vision/` and `scripts/pipeline/02_segment_and_extract.py`, and all working-frame coordinates (`coord_work`) must divide by `work_scale` before entering SQLite or CSV outputs.
 
-## 2. Module Ownership and Script Line Budgets
+## 2. Module Ownership and Universal `< 500`-Line POSIX Hygiene
 
 Keep functions cohesive within their designated directories (`scripts/core/`, `scripts/data_prep/`, `scripts/vision/`, `scripts/pipeline/`, `scripts/morphometrics/`, `scripts/figures/`, and `scripts/analysis/`), and never import or `source()` anything from `_archive` folders.
 
-Core R analytical entrypoints and public genomics modules enforce hard line-count ceilings verified automatically by the test suite so statistical and ingestion logic stays modular:
+Every active Python and R module alongside every shell script obeys a universal `< 500`-line ceiling enforced automatically by `scripts/tests/test_code_hygiene.py`, paired with tighter per-module budgets in `scripts/tests/_hygiene_specs.py` and a repository-wide pure POSIX Extended Regular Expression gate across 100% of active `.R` files (zero Perl escapes such as `\s`, `\d`, `\w`, `\b`, or `(?:`):
 
-| Script Path | Maximum Line Budget | Companion Helper / Figure Modules |
+| Entrypoint / Facade | Facade Ceiling | Modular Companion Files (All `< 500` Lines) |
 | :--- | :---: | :--- |
-| `scripts/morphometrics/03_fourier_extractor.R` | `< 500` lines | `step03_config_scale_utils.R` (`< 240`), `dissected_leaf_utils.R`, `fourier_parallel_utils.R` (`< 500`), `scripts/figures/step03_figures.R` (`< 385`) |
-| `scripts/morphometrics/04_gmm_morphotools.R` | `<= 650` lines | `authority_weighting_utils.R`, `plasticity_mitigation_utils.R` (`< 470`), `pub_ecoregion_manova_utils.R`, `scripts/figures/step04_figures.R` |
-| `scripts/analysis/07_triage_dashboard_synthesis.R` | `< 500` lines | `step07_ancova_merge_utils.R` (`< 490`), `step07_hopkins_consensus_utils.R` (`< 320`), `step07_consensus_weights_utils.R` (`< 300`), `step07_biogeo_hybrid_utils.R` (`< 490`), `step07_cluster_cohesion_utils.R` (`< 460`), `step07_decision_stages_utils.R` (`< 490`), `step07_postprocess_guards_utils.R` (`< 460`), `step07_reports_html_utils.R` (`< 490`), `step07_cytology_integration.R` (`< 380`), `step07_genomic_propagation.R` (`< 400`), `step07_deme_propagation_utils.R` (`< 260`), `step07_organellar_triage_utils.R` (`< 300`), `genomic_triage_utils.R` (`< 320`), `step07_genomic_report_utils.R` (`< 320`) |
-| `scripts/analysis/taxon_complex_discovery_utils.R` | `< 480` lines | `step07_complex_affinity_utils.R` (`< 450`), `scripts/figures/step07_figures.R` (`< 420`), `scripts/figures/step07b_network_figures.R` (`< 320`) |
+| `main.py` | `< 360` lines | `scripts/pipeline/cli_*.py` (`cli_run_context.py`, `cli_env_doctor.py`, `cli_stage_*.py`, `cli_parser_subcommands_*.py`) |
+| `run_pipeline.sh` | `< 460` lines | `scripts/pipeline/sh/pipe_*.sh` (`pipe_cli_args.sh`, `pipe_env_purge.sh`, `pipe_preflight_cohort_*.sh`, `pipe_steps_01_04.sh`) |
+| `scripts/core/config.py` | `< 240` lines | `config_run_context.py`, `config_dataclasses.py`, `config_pipeline_cls.py`, `config_resolvers.py` |
+| `scripts/core/db_schema.py` & `db.py` | `< 240` / `< 250` lines | Eight `db_schema_*.py` DDL/migration modules paired with thirteen `db_*.py` persistence/purge modules |
+| `scripts/core/db_utils.R` | `< 150` lines | Thirteen auto-sourced `db_r_*.R` SQLite/DuckDB and stage-persistence modules |
+| `scripts/morphometrics/03_fourier_extractor.R` | `< 500` lines | `step03_config_scale_utils.R`, `step03_ect_traits_utils.R`, `dissected_leaf_utils.R` (`dissect_*.R`), `fourier_parallel_utils.R`, `scripts/figures/step03_figures.R` |
+| `scripts/morphometrics/04_gmm_morphotools.R` | `< 500` lines | `step04_allometry_merger_utils.R`, `step04_trait_projection_utils.R`, `gmm_icl_bootstrap_utils.R`, `authority_weighting_utils.R` (`auth_*.R`), `plasticity_mitigation_utils.R`, `pub_ecoregion_manova_utils.R` (`ecoregion_*.R`), `pub_figures_utils.R` (`pub_taxon_label_utils.R`), `scripts/figures/step04_figures.R` |
+| `scripts/figures/theme_packera_pub.R` | `< 400` lines | `scripts/figures/basemap_exemplar_utils.R` (`< 240`), `scripts/figures/step03_figures.R` to `step07b_network_figures.R` |
+| `scripts/analysis/05_multimodal_spatial_rf.R` | `< 500` lines | `step05_*_utils.R`, `edaphic_*_utils.R`, `step05_sdm_maxent.R`, `scripts/figures/step05*_figures.R` |
+| `scripts/analysis/06_genomic_phylogenomics.R` | `< 500` lines | `step06_*.R`, `step06_coalescent_*.py`, `scripts/data_prep/06_ingest_genetic_data.py`, `scripts/data_prep/step06_*.py`, `scripts/figures/step06*_figures.R` |
+| `scripts/analysis/07_triage_dashboard_synthesis.R` | `< 500` lines | `step07_*_utils.R`, `step07_cytology_integration.R`, `step07_genomic_propagation.R`, `genomic_triage_utils.R`, `taxon_complex_discovery_utils.R`, `scripts/figures/step07*_figures.R` |
 | `scripts/pipeline/resolve_focal_species_complex.py` | `< 340` lines | `step07_focal_cohort_utils.py` (`< 450`), `step07_focal_stage_runners.py` (`< 450`), `resolve_eastern_na_packera.py` (`< 500`) |
-| `scripts/data_prep/download_public_packera_sequences.py` | `< 500` lines | `06_ingest_genetic_data.py`, `skim_offtarget_organellar.py` |
-| `scripts/data_prep/skim_offtarget_organellar.py` | `< 500` lines | `06_ingest_genetic_data.py`, `download_public_packera_sequences.py` |
-| `scripts/analysis/step06_public_backbone.R` | `< 500` lines | `06_genomic_phylogenomics.R`, `step06_reticulation_coancestry.R` |
 
-When adding new morphometric diagnostics or plots, place shared plotting logic in `scripts/figures/theme_packera_pub.R` or `scripts/figures/step0X_figures.R` rather than expanding the core modeling entrypoints past their line budgets.
+When adding new morphometric diagnostics or plots, place shared plotting logic in `scripts/figures/theme_packera_pub.R` paired with `scripts/figures/basemap_exemplar_utils.R` or inside `scripts/figures/step0X_figures.R` so core entrypoints stay under their line budgets.
 
 ## 3. SQLite Schema (`20261127`), Composite Keys, and Demo Isolation
 
-1. **Synchronized DDL Across Python and R:** Whenever you add or rename a table column or modify `v_integrative_triage_master`, update `scripts/core/db_schema.py`, `scripts/core/db_utils.R`, and [`docs/DATA_DICTIONARY.md`](docs/DATA_DICTIONARY.md) in the same commit, and increment `PLANTMATICS_SCHEMA_USER_VERSION` (preserving `PACKERA_SCHEMA_USER_VERSION` alias compatibility) if breaking migrations are required.
+1. **Synchronized DDL Across Python and R:** Whenever you add or rename a table column or modify `v_integrative_triage_master`, update `scripts/core/db_schema_*.py` (re-exported by `db_schema.py`) alongside `scripts/core/db_*.py` (re-exported by `db.py`) plus `scripts/core/db_r_*.R` (auto-sourced by `db_utils.R`) and [`docs/DATA_DICTIONARY.md`](docs/DATA_DICTIONARY.md) in the same commit, and increment `PLANTMATICS_SCHEMA_USER_VERSION` (preserving `PACKERA_SCHEMA_USER_VERSION` alias compatibility) if breaking migrations are required.
 2. **Composite Individual Keys:** Group and join all specimen-level data on `(catalogNumber, plant_individual_id)` (plus `run_id` in Tier B tables). Never deduplicate by `catalogNumber` alone in Steps 02 through 07, as multi-plant herbarium sheets carry distinct DBSCAN individuals (`plant_individual_id = 1, 2, ...`).
 3. **Atomic Writes and Honest Missingness:** Write CSV, HTML, Markdown, and GeoTIFF deliverables to process-unique `.tmp` or `.part` files first and `rename()` atomically upon completion. Outside explicit `--demo` runs (`PLANTMATICS_DEMO_MODE=1`, with `PACKERA_DEMO_MODE=1` compatibility, which isolates writes inside `demo_ephemeral.sqlite`), never synthesize mock coordinates, random embeddings, or fabricated raster values when external layers are absent; return `NA` / `NULL` cleanly.
 4. **RNG State Hygiene in R:** Any stochastic call inside helper routines (`igraph::cluster_leiden`, `kmeans`, bootstrap/permutation loops) must preserve and restore the caller's `.Random.seed` via `on.exit` (see `.with_preserved_rng_seed()` in `taxon_complex_discovery_utils.R`).
@@ -66,12 +70,15 @@ Before opening a pull request or generating a patch, run the full verification g
 # 1b. Optional rapid Python-only pre-check during active iteration (~25s)
 .venv/bin/python scripts/tests/run_audit.py --fast
 
-# 2. Verify zero em/en dashes across all Markdown and citation files
-grep -rnP "[\x{2013}\x{2014}]" README.md AGENTS.md CONTRIBUTING.md CHANGELOG.md CITATION.cff docs/*.md && exit 1 || echo "PASS: Zero em/en dashes"
+# 2. Verify shell syntax across all orchestrator and setup scripts
+bash -n run_pipeline.sh scripts/pipeline/sh/*.sh setup_leafmachine3.sh resolve_packera_dubia_complex.sh resolve_eastern_na_packera.sh
 
-# 3. Verify R script line-count budgets
-wc -l scripts/morphometrics/03_fourier_extractor.R scripts/morphometrics/04_gmm_morphotools.R scripts/analysis/07_triage_dashboard_synthesis.R scripts/analysis/taxon_complex_discovery_utils.R
+# 3. Verify zero em/en dashes across all Markdown files alongside skill and citation files
+grep -rnP "[\x{2013}\x{2014}]" README.md AGENTS.md CONTRIBUTING.md CHANGELOG.md CITATION.cff .agents/skills/pipeline-contract-audit/SKILL.md docs/*.md && exit 1 || echo "PASS: Zero em/en dashes"
 
-# 4. Verify git whitespace cleanliness
+# 4. Verify universal <500-line ceiling and pure POSIX R hygiene explicitly
+.venv/bin/python -m unittest scripts/tests/test_code_hygiene.py -v
+
+# 5. Verify git whitespace cleanliness
 git diff --check
 ```
