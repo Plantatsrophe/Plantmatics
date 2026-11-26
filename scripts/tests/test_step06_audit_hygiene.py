@@ -221,6 +221,11 @@ class TestStep06AuditHygiene(unittest.TestCase):
                 upsert_genomic_samples(conn, [{"genetic_sample_id": "S_PART", "plastid_clade": None, "hq_reads": None, "inferred_cytotype": "4x"}])
                 row = conn.execute("SELECT plastid_clade, hq_reads, inferred_cytotype FROM genomic_samples WHERE genetic_sample_id='S_PART';").fetchone()
                 self.assertEqual(tuple(row), ("cp_Clade_1", 250000, "4x"))
+
+                upsert_genomic_samples(conn, [{"genetic_sample_id": "PACTOMSCG1M", "catalogNumber": "SALK0001014", "exsiccatae_key": "kilpatrick_sn", "eventDate": "2019-03-12", "concept_synonymy_status": "Homotypic_Synonym", "decimalLatitude": 32.87696, "decimalLongitude": -80.77915, "stateProvince": "South Carolina", "county": "Colleton", "coordinateUncertainty": 5000.0, "linkage_tier": "G2_Population_Voucher_Proxy"}])
+                upsert_genomic_samples(conn, [{"genetic_sample_id": "PACTOMSCG1M", "catalogNumber": None, "exsiccatae_key": None, "eventDate": None, "concept_synonymy_status": None, "decimalLatitude": 34.668968, "decimalLongitude": -80.527318, "stateProvince": "South Carolina", "county": "Lancaster", "coordinateUncertainty": 200.0, "linkage_tier": "G3_Georeferenced_Unvouchered"}])
+                scg_row = conn.execute("SELECT catalogNumber, exsiccatae_key, eventDate, concept_synonymy_status, county, decimalLatitude, decimalLongitude, coordinateUncertainty, linkage_tier FROM genomic_samples WHERE genetic_sample_id='PACTOMSCG1M';").fetchone()
+                self.assertEqual(tuple(scg_row), (None, None, None, None, "Lancaster", 34.668968, -80.527318, 200.0, "G3_Georeferenced_Unvouchered"))
             finally:
                 conn.close()
 

@@ -421,6 +421,23 @@ def stratify_duplicates(
         scored_candidates.sort(key=lambda x: x[0], reverse=True)
         primary_idx = scored_candidates[0][1]
         is_primary_list[idx_to_pos[primary_idx]] = True
+        if not has_conflict and "_sn_" not in str(key) and "decimalLatitude" in df.columns and "decimalLongitude" in df.columns:
+            donors = [
+                j for _, j in scored_candidates
+                if has_coords[idx_to_pos[j]] and not _as_bool_flag(df.at[j, "is_centroid_or_inst_coord"] if "is_centroid_or_inst_coord" in df.columns else False)
+            ]
+            if donors:
+                d0 = min(donors, key=lambda j: float(df.at[j, "coordinateUncertainty"]) if ("coordinateUncertainty" in df.columns and pd.notna(df.at[j, "coordinateUncertainty"])) else 99999.0)
+                d_st = str(df.at[d0, "stateProvince"] if "stateProvince" in df.columns and pd.notna(df.at[d0, "stateProvince"]) else "").strip().lower()
+                for idx in indices:
+                    if not has_coords[idx_to_pos[idx]]:
+                        r_st = str(df.at[idx, "stateProvince"] if "stateProvince" in df.columns and pd.notna(df.at[idx, "stateProvince"]) else "").strip().lower()
+                        if not r_st or not d_st or r_st == d_st:
+                            df.at[idx, "decimalLatitude"], df.at[idx, "decimalLongitude"] = lats[idx_to_pos[d0]], lons[idx_to_pos[d0]]
+                            if "coordinateUncertainty" in df.columns and pd.isna(df.at[idx, "coordinateUncertainty"]) and pd.notna(df.at[d0, "coordinateUncertainty"]):
+                                df.at[idx, "coordinateUncertainty"] = df.at[d0, "coordinateUncertainty"]
+                            if "regional_group" in df.columns and (pd.isna(df.at[idx, "regional_group"]) or str(df.at[idx, "regional_group"]).strip() in {"", "NA", "Unknown"}) and pd.notna(df.at[d0, "regional_group"]):
+                                df.at[idx, "regional_group"] = df.at[d0, "regional_group"]
 
     df["is_primary_duplicate"] = is_primary_list
     df["exsiccatae_taxonomic_conflict"] = conflict_list

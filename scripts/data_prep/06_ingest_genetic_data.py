@@ -349,6 +349,8 @@ def run_genomic_ingestion(
         for sid in all_sample_ids:
             rec, fb_pl = _resolve_sample_record(sid, vouchers, exsiccatae_index, field_rows, direct_user_meta, stats_map, organellar_map, db_priors, ex_prior_lc, dosage_mat, ref_depth_mat, alt_depth_mat, sample_idx_map, n_loci_raw, marker_platform, min_hq_reads, max_missing_rate, cyto_ctx_out=cyto_ctx_by_sid, ref_holdout_out=ref_holdout_sids)
             records.append(rec); fallback_ploidy_by_sid[sid] = fb_pl
+        if unvouch_sids := [r["genetic_sample_id"] for r in records if not r.get("catalogNumber")]:
+            logger.warning("Sequenced sample(s) lack herbarium voucher accession (%d unvouchered; deposit voucher to upgrade from G3/G4): %s", len(unvouch_sids), ", ".join(unvouch_sids))
         paraloss_catalog = _load_paraloss1272_catalog(genomics_dir)
         hd_df, weights_df = None, None
         if dosage_samples and n_loci_raw > 0:

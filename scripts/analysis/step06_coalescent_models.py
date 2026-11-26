@@ -290,12 +290,15 @@ def compute_model_corrected_divergence_blocks(
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Compute BIC-model-corrected per-block pairwise & within-sample divergence counts."""
     n_samp, n_blk = a1.shape[0], len(block_slices)
+    ok_all = a1 >= 0
+    ncall_site = np.sum(ok_all, axis=0)
+    non_paralog = ~((ncall_site >= 4) & (np.sum(ok_all & (a1 != a2), axis=0) > 0.60 * ncall_site))
     diff_blk, call_blk = np.zeros((n_blk, n_samp, n_samp)), np.zeros((n_blk, n_samp, n_samp))
     w_het, w_call = np.zeros((n_blk, n_samp)), np.zeros((n_blk, n_samp))
     def _do_blk(item: Tuple[int, Tuple[int, int]]) -> None:
         bi, (st, en) = item
         x1, x2 = a1[:, st:en], a2[:, st:en]
-        ok = x1 >= 0
+        ok = (x1 >= 0) & non_paralog[None, st:en]
         wc = np.sum(ok, axis=1).astype(np.float64)
         w_call[bi], xd = wc, np.where(ok, x1 ^ x2, 0)
         w_het[bi] = np.where(wc > 0, _apply_evo_distance(np.sum(ok & (xd == 2) & ((x1 & 1) == 0), axis=1) / np.maximum(1.0, wc), np.sum(ok & (xd == 2) & ((x1 & 1) == 1), axis=1) / np.maximum(1.0, wc), np.sum(ok & ((xd & 1) == 1), axis=1) / np.maximum(1.0, wc), model_spec) * wc, 0.0)

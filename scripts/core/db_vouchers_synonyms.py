@@ -128,7 +128,7 @@ def upsert_vouchers_records(
             "type_status": _to_str(rec.get("type_status")),
             "county": _to_str(rec.get("county")),
             "stateProvince": _to_str(rec.get("stateProvince")),
-            "locality": _to_str(rec.get("locality")),
+            "locality": _to_str(rec.get("locality")) or _to_str(" ; ".join(x for x in (str(rec.get("_raw_locality") or "").strip(), str(rec.get("habitat") or rec.get("_raw_habitat") or "").strip()) if x)),
             "decimalLatitude": dec_lat,
             "decimalLongitude": dec_lon,
             "coordinateUncertainty": _to_float(rec.get("coordinateUncertainty")),

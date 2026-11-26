@@ -122,19 +122,25 @@ tc_hom <- compute_type_locality_ecological_control(df_base, primary_env_vars = e
 tc_het <- compute_type_locality_ecological_control(df_het, primary_env_vars = ev_c1, primary_edaph_vars = c("fine_soil_ph", "fine_bedrock_depth_cm"))
 df_het$is_heterotypic_type_audit <- tc_het$is_heterotypic_type_audit; rf_het <- compute_spatial_rf_mems(df_het, ev_c1, n_trees = 25L)
 cons_het <- execute_crossmodal_consensus(df_het, rf_res = rf_het, primary_env_vars = ev_c1, primary_edaph_vars = c("fine_soil_ph", "fine_bedrock_depth_cm"), primary_clim_vars = c("bio1_temp_mean", "bio12_precip_annual"))
-df_no_homo <- df_het[14:25, , drop = FALSE]; df_no_homo$stateProvince <- c(rep("South Carolina", 4L), rep("Georgia", 7L), "Alabama")
-df_no_homo$county <- c(rep("Kershaw County", 4L), rep("Bibb", 7L), "Houston"); df_no_homo$regional_group <- "Southeastern_Plains"
-df_no_homo$decimalLatitude[1:4] <- 34.45; df_no_homo$decimalLongitude[1:4] <- -80.58; df_no_homo$latitude[1:4] <- 34.45; df_no_homo$longitude[1:4] <- -80.58
-df_no_homo$decimalLatitude[5:11] <- 32.80; df_no_homo$decimalLongitude[5:11] <- -83.63; df_no_homo$latitude[5:11] <- 32.80; df_no_homo$longitude[5:11] <- -83.63
+df_no_homo <- df_het[14:25, , drop = FALSE]; df_no_homo$stateProvince <- c(rep("South Carolina", 4L), rep("South Carolina", 7L), "Alabama")
+df_no_homo$county <- c(rep("Lancaster", 4L), rep("Colleton", 7L), "Houston"); df_no_homo$regional_group <- "Southeastern_Plains"
+df_no_homo$locus_classicus_text <- "Forty Acre Rock (Flat Rock), Lancaster County and Kershaw County, South Carolina"
+df_no_homo$decimalLatitude[1:4] <- 34.67; df_no_homo$decimalLongitude[1:4] <- -80.53; df_no_homo$latitude[1:4] <- 34.67; df_no_homo$longitude[1:4] <- -80.53
+df_no_homo$decimalLatitude[5:11] <- 32.80; df_no_homo$decimalLongitude[5:11] <- -80.78; df_no_homo$latitude[5:11] <- 32.80; df_no_homo$longitude[5:11] <- -80.78
 df_no_homo$fine_soil_ph[1:4] <- c(4.8, 4.9, 5.0, 4.9); df_no_homo$fine_soil_ph[5:11] <- 6.4
+df_no_homo$fine_bedrock_depth_cm[1:4] <- c(22.0, 25.0, 19.0, 24.0); df_no_homo$fine_bedrock_depth_cm[5:12] <- 198.0
 tc_nh <- compute_type_locality_ecological_control(df_no_homo, primary_env_vars = ev_c1, primary_edaph_vars = c("fine_soil_ph", "fine_bedrock_depth_cm"))
+df_nh_sub <- df_no_homo; df_nh_sub$analysis_group <- c(rep("Ecotype_2_lithic_outcrop_index_High", 4L), rep("Ecotype_1_lithic_outcrop_index_Low", 8L))
+tc_nh_sub <- compute_type_locality_ecological_control(df_nh_sub, primary_env_vars = ev_c1, primary_edaph_vars = c("fine_soil_ph", "fine_bedrock_depth_cm"), intraspecific_mode = TRUE)
 res$c2 <- list(
   hom_z_shift = max(abs(tc_hom$type_edaphic_z_score[13:24] - tc_het$type_edaphic_z_score[13:24]), na.rm = TRUE), hom_holo_z = as.numeric(tc_het$type_edaphic_z_score[13L]),
   het_vs_hom_z = as.numeric(tc_het$type_edaphic_z_score[25L]), tc_het_st = as.character(tc_het$type_niche_status[25L]), tc_het_hint = as.character(tc_het$rf_prediction_source_hint[25L]),
   het_rf_src = as.character(rf_het$rf_prediction_source[25L]), het_audit_flag = isTRUE(tc_het$is_heterotypic_type_audit[25L]), het_conf_flag = isTRUE(cons_het$multimodal_conflict_flag[25L]),
   bas_hom_a = as.character(cons_het$nearest_type_niche_basionym[1L]), bas_hom_d = as.character(cons_het$nearest_type_niche_basionym[13L]), bas_het = as.character(cons_het$nearest_type_niche_basionym[25L]),
   bas_z_het = as.numeric(cons_het$nearest_type_basionym_edaphic_z[25L]), bas_z_hom = as.numeric(cons_het$nearest_type_basionym_edaphic_z[13L]),
-  nh_topo_ph = as.numeric(tc_nh$type_niche_profiles[["Packera dubia"]]$mu[["fine_soil_ph"]]), nh_het_st = as.character(tc_nh$type_niche_status[12L])
+  nh_topo_ph = as.numeric(tc_nh$type_niche_profiles[["Packera dubia"]]$mu[["fine_soil_ph"]]), nh_het_st = as.character(tc_nh$type_niche_status[12L]),
+  nh_sub_het_st = as.character(tc_nh_sub$type_niche_status[12L]), nh_sub_no_eco_bas = !any(grepl("^Ecotype_", names(tc_nh_sub$basionym_niche_profiles))),
+  nh_sub_has_sp_bas = all(c("Packera dubia", "Senecio alabamensis") %in% names(tc_nh_sub$basionym_niche_profiles))
 )
 
 # 3. Pedology, hardpan ignore, smooth indices, point-mass screening, & coastal/Canadian NA cache
@@ -303,6 +309,8 @@ class TestStep05TaxonomicClarity(unittest.TestCase):
         self.assertEqual((str(c2["bas_hom_a"]), str(c2["bas_hom_d"]), str(c2["bas_het"])), ("Senecio aureus", "Cineraria dubia", "Senecio alabamensis"))
         self.assertTrue(_is_finite(c2["bas_z_het"]) and float(c2["bas_z_het"]) < 1.0 and _is_finite(c2["bas_z_hom"]))
         self.assertTrue(float(c2["nh_topo_ph"]) < 5.3 and str(c2["nh_het_st"]) == "Type_Synonymy_Candidate")
+        self.assertEqual(str(c2["nh_sub_het_st"]), "Type_Synonymy_Candidate")
+        self.assertTrue(bool(c2["nh_sub_no_eco_bas"]) and bool(c2["nh_sub_has_sp_bas"]))
 
     @unittest.skipIf(SKIP_R_COND, SKIP_R_REASON)
     def test_03_pedology_layer_hygiene_smooth_indices_point_mass_and_cache(self) -> None:

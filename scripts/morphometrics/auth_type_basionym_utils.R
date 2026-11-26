@@ -110,6 +110,11 @@ if (grDevices::dev.cur() == 1L) grDevices::pdf(NULL)
 
 .resolve_locus_classicus_topotype_rows <- function(df, cand_rows, tx_k) {
   if (is.null(df) || length(cand_rows) == 0L || is.na(tx_k) || !nzchar(tx_k)) return(integer(0))
+  sp_lookup <- as.character(tx_k)
+  if (grepl("^(Ecotype|Morphotype|Cluster|Geno_Cluster|Subcluster|Complex)_[0-9]+", sp_lookup, ignore.case = TRUE) && "species_standardized" %in% names(df)) {
+    sv <- stats::na.omit(trimws(as.character(df$species_standardized[cand_rows]))); sv <- sv[nzchar(sv) & sv != "Unknown"]
+    if (length(sv) > 0L) sp_lookup <- names(sort(table(sv), decreasing = TRUE))[1L]
+  }
   lc_txt <- ""
   if ("locus_classicus_text" %in% names(df)) {
     v_lc <- trimws(as.character(df$locus_classicus_text[cand_rows]))
@@ -122,29 +127,34 @@ if (grDevices::dev.cur() == 1L) grDevices::pdf(NULL)
     if (!is.null(conn_lc)) {
       on.exit(if (exists("disconnect_packera_db", mode = "function")) disconnect_packera_db(conn_lc) else tryCatch(DBI::dbDisconnect(conn_lc), error = function(e) NULL), add = TRUE)
       if (isTRUE(tryCatch(DBI::dbExistsTable(conn_lc, "taxon_backbone_profiles"), error = function(e) FALSE))) {
-        q_lc <- tryCatch(DBI::dbGetQuery(conn_lc, "SELECT locus_classicus_text FROM taxon_backbone_profiles WHERE species_standardized = $1 LIMIT 1;", params = list(tx_k)), error = function(e) NULL)
+        q_lc <- tryCatch(DBI::dbGetQuery(conn_lc, "SELECT locus_classicus_text FROM taxon_backbone_profiles WHERE species_standardized = $1 LIMIT 1;", params = list(sp_lookup)), error = function(e) NULL)
         if (!is.null(q_lc) && nrow(q_lc) > 0L && !is.na(q_lc$locus_classicus_text[1L])) lc_txt <- trimws(as.character(q_lc$locus_classicus_text[1L]))
       }
     }
   }
-  if (!nzchar(lc_txt) && identical(tx_k, "Packera dubia")) lc_txt <- "Flat Rock, Kershaw County, South Carolina"
+  if (!nzchar(lc_txt) && identical(sp_lookup, "Packera dubia")) lc_txt <- "Forty Acre Rock (Flat Rock), Lancaster County and Kershaw County, South Carolina"
   if (!nzchar(lc_txt) || !("stateProvince" %in% names(df))) return(integer(0))
   lc_low <- tolower(gsub("[[:space:]]+", " ", lc_txt))
   lc_st <- ""
   for (snm in names(.US_LC_STATE_MAP)) if (grepl(paste0("(^|[^[:alpha:]])", snm, "($|[^[:alpha:]])"), lc_low)) { lc_st <- .US_LC_STATE_MAP[[snm]]; break }
-  mc <- regmatches(lc_low, regexpr("[a-z][a-z.-]*[[:space:]]+(county|parish)", lc_low))
-  lc_cnty <- if (length(mc) > 0L && nzchar(mc[1L])) sub("[[:space:]]+(county|parish)$", "", mc[1L]) else ""
+  mh <- regmatches(lc_low, gregexpr("[a-z][a-z.-]*([[:space:]]+(and[[:space:]]+)?[a-z][a-z.-]*)*[[:space:]]+(county|counties|parish|parishes)", lc_low))[[1L]]
+  lc_cnties <- if (length(mh) > 0L) {
+    cs <- unlist(lapply(mh, function(h) trimws(unlist(strsplit(sub("[[:space:]]+(county|counties|parish|parishes)$", "", h), "[[:space:]]+and[[:space:]]+|,")))))
+    cs <- sub("[[:space:]]+(county|counties|parish|parishes)$", "", cs)
+    cs <- gsub("^((in|near|at|from|of|around|between|the)[[:space:]]+)+", "", cs); unique(cs[nzchar(cs)])
+  } else character(0)
   st_raw <- tolower(trimws(as.character(df$stateProvince[cand_rows]))); st_raw[is.na(st_raw)] <- ""
   st_norm <- ifelse(nchar(st_raw) == 2L, st_raw, ifelse(st_raw %in% names(.US_LC_STATE_MAP), .US_LC_STATE_MAP[st_raw], st_raw))
   cnt_raw <- if ("county" %in% names(df)) tolower(trimws(as.character(df$county[cand_rows]))) else rep("", length(cand_rows))
-  cnt_raw[is.na(cnt_raw)] <- ""; cnt_norm <- sub("[[:space:]]+(county|parish|co\\.?)$", "", cnt_raw)
+  cnt_raw[is.na(cnt_raw)] <- ""; cnt_norm <- sub("[[:space:]]+(county|counties|parish|parishes|co\\.?)$", "", cnt_raw)
   quar_c <- if ("is_centroid_or_inst_coord" %in% names(df)) { qv <- df$is_centroid_or_inst_coord[cand_rows]; if (is.logical(qv)) !is.na(qv) & qv else tolower(trimws(as.character(qv))) %in% c("1", "true", "t", "yes") } else rep(FALSE, length(cand_rows))
   st_ok <- !quar_c & (if (nzchar(lc_st)) st_norm == lc_st else rep(FALSE, length(cand_rows)))
   if (!any(st_ok)) return(integer(0))
-  cnt_hits <- if (nzchar(lc_cnty)) cand_rows[st_ok & (cnt_norm == lc_cnty)] else integer(0)
+  cnt_hits <- if (length(lc_cnties) > 0L) cand_rows[st_ok & (cnt_norm %in% lc_cnties)] else integer(0)
   if (length(cnt_hits) >= 2L) return(cnt_hits)
-  loc_raw <- if ("locality" %in% names(df)) tolower(as.character(df$locality[cand_rows])) else rep("", length(cand_rows)); loc_raw[is.na(loc_raw)] <- ""
-  hab_hits <- if (grepl("flat[[:space:]]*rock", lc_low)) cand_rows[st_ok & grepl("flat[[:space:]]*rock|granit|outcrop|forty[[:space:]-]*acre", loc_raw)] else integer(0)
+  loc_raw <- paste(if ("locality" %in% names(df)) as.character(df$locality[cand_rows]) else "", if ("habitat" %in% names(df)) as.character(df$habitat[cand_rows]) else "")
+  loc_raw <- tolower(gsub("(^NA[[:space:]]*|[[:space:]]*NA$)", "", loc_raw))
+  hab_hits <- if (grepl("flat[[:space:]]*rock|forty[[:space:]-]*acre", lc_low)) cand_rows[st_ok & grepl("flat[[:space:]]*rock|granit|outcrop|forty[[:space:]-]*acre", loc_raw)] else integer(0)
   comb <- unique(c(cnt_hits, hab_hits))
   if (length(comb) >= 2L) return(comb)
   st_hits <- cand_rows[st_ok]

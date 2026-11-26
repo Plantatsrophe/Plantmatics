@@ -51,20 +51,24 @@ if (grDevices::dev.cur() == 1L) grDevices::pdf(NULL)
 
 .fallback_topotype_rows_s05 <- function(df, cand_rows, tx_k) {
   if (is.null(df) || length(cand_rows) == 0L || !("stateProvince" %in% names(df))) return(integer(0))
+  sp_lk <- as.character(tx_k)
+  if (grepl("^(Ecotype|Morphotype|Cluster|Geno_Cluster|Subcluster|Complex)_[0-9]+", sp_lk, ignore.case = TRUE) && "species_standardized" %in% names(df)) {
+    sv <- stats::na.omit(trimws(as.character(df$species_standardized[cand_rows]))); sv <- sv[nzchar(sv) & sv != "Unknown"]; if (length(sv) > 0L) sp_lk <- names(sort(table(sv), decreasing = TRUE))[1L]
+  }
   lc <- if ("locus_classicus_text" %in% names(df)) { v <- trimws(as.character(df$locus_classicus_text[cand_rows])); v <- v[!is.na(v) & nzchar(v)]; if (length(v) > 0L) v[1L] else "" } else ""
-  if (!nzchar(lc) && identical(tx_k, "Packera dubia")) lc <- "Flat Rock, Kershaw County, South Carolina"
+  if (!nzchar(lc) && identical(sp_lk, "Packera dubia")) lc <- "Forty Acre Rock (Flat Rock), Lancaster County and Kershaw County, South Carolina"
   if (!nzchar(lc)) return(integer(0))
   st_map <- c("alabama"="al","arkansas"="ar","florida"="fl","georgia"="ga","kentucky"="ky","louisiana"="la","maryland"="md","mississippi"="ms","north carolina"="nc","south carolina"="sc","tennessee"="tn","texas"="tx","virginia"="va","west virginia"="wv")
   lc_l <- tolower(gsub("[[:space:]]+", " ", lc)); lc_st <- ""
   for (sn in names(st_map)) if (grepl(paste0("(^|[^[:alpha:]])", sn, "($|[^[:alpha:]])"), lc_l)) { lc_st <- st_map[[sn]]; break }
-  mc <- regmatches(lc_l, regexpr("[a-z][a-z.-]*[[:space:]]+(county|parish)", lc_l))
-  lc_c <- if (length(mc) > 0L && nzchar(mc[1L])) sub("[[:space:]]+(county|parish)$", "", mc[1L]) else ""
+  mh <- regmatches(lc_l, gregexpr("[a-z][a-z.-]*([[:space:]]+(and[[:space:]]+)?[a-z][a-z.-]*)*[[:space:]]+(county|counties|parish|parishes)", lc_l))[[1L]]
+  lc_cs <- if (length(mh) > 0L) { cs <- sub("[[:space:]]+(county|counties|parish|parishes)$", "", unlist(lapply(mh, function(h) trimws(unlist(strsplit(sub("[[:space:]]+(county|counties|parish|parishes)$", "", h), "[[:space:]]+and[[:space:]]+|,")))))); unique(gsub("^((in|near|at|from|of|around|between|the)[[:space:]]+)+", "", cs)) } else character(0)
   sr <- tolower(trimws(as.character(df$stateProvince[cand_rows]))); sr[is.na(sr)] <- ""
   sn_v <- ifelse(nchar(sr) == 2L, sr, ifelse(sr %in% names(st_map), st_map[sr], sr))
-  cr <- if ("county" %in% names(df)) sub("[[:space:]]+(county|parish|co\\.?)$", "", tolower(trimws(as.character(df$county[cand_rows])))) else rep("", length(cand_rows))
+  cr <- if ("county" %in% names(df)) sub("[[:space:]]+(county|counties|parish|parishes|co\\.?)$", "", tolower(trimws(as.character(df$county[cand_rows])))) else rep("", length(cand_rows))
   cr[is.na(cr)] <- ""; qv <- if ("is_centroid_or_inst_coord" %in% names(df)) .to_bool_s05(df$is_centroid_or_inst_coord[cand_rows]) else rep(FALSE, length(cand_rows))
   ok_s <- !qv & nzchar(lc_st) & (sn_v == lc_st); if (!any(ok_s)) return(integer(0))
-  ch <- if (nzchar(lc_c)) cand_rows[ok_s & (cr == lc_c)] else integer(0)
+  ch <- if (length(lc_cs) > 0L) cand_rows[ok_s & (cr %in% lc_cs)] else integer(0)
   if (length(ch) >= 2L) ch else if (sum(ok_s) >= 2L) cand_rows[ok_s] else ch
 }
 
@@ -394,13 +398,22 @@ compute_type_locality_ecological_control <- function(df, primary_env_vars = NULL
   type_profiles <- list()
   audit_vars <- if (length(edaph_v) > 0L) edaph_v else env_v
   audit_wts <- if (length(edaph_v) > 0L) w_ed else w_en
+  is_syn_tx <- function(x) grepl("^(Ecotype|Morphotype|Cluster|Geno_Cluster|Subcluster|Complex)_[0-9]+", as.character(x), ignore.case = TRUE)
+  canon_sp <- if ("species_standardized" %in% names(df)) { sv <- stats::na.omit(trimws(as.character(df$species_standardized))); sv <- sv[nzchar(sv) & sv != "Unknown"]; if (length(sv) > 0L) names(sort(table(sv), decreasing = TRUE))[1L] else "" } else ""
+  pr_sp_ss <- NULL
+  if (is_intra && any(is_syn_tx(active_taxa)) && nzchar(canon_sp)) {
+    elig_sp <- which(is_type_georef_ok); homo_sp <- elig_sp[is_homo_all[elig_sp]]; excl_sp <- c(which(is_quar_type), elig_sp[!is_homo_all[elig_sp]])
+    clean_sp <- setdiff(which(is_anc_v), c(elig_sp, which(is_quar_type)))
+    topo_sp <- if (length(homo_sp) == 0L && length(clean_sp) >= 2L) (if (exists(".resolve_locus_classicus_topotype_rows", mode = "function")) .resolve_locus_classicus_topotype_rows(df, clean_sp, canon_sp) else .fallback_topotype_rows_s05(df, clean_sp, canon_sp)) else integer(0)
+    pr_sp_ss <- if (length(homo_sp) > 0L) build_profile(seq_len(n), homo_sp, excl_rows = excl_sp) else if (length(topo_sp) >= 2L) { p0 <- build_profile(seq_len(n), topo_sp, excl_rows = excl_sp); p0$anchor_type_rows <- integer(0); p0 } else NULL
+  }
 
   for (tx in active_taxa) {
     tx_rows <- which(grp_vec == tx); elig_t <- tx_rows[is_type_georef_ok[tx_rows]]
     homo_t <- elig_t[is_homo_all[elig_t]]; het_t <- elig_t[!is_homo_all[elig_t]]
     q_tx <- tx_rows[is_quar_type[tx_rows]]; excl_ss <- c(q_tx, het_t)
     clean_nt <- setdiff(tx_rows[is_anc_v[tx_rows]], c(elig_t, q_tx))
-    topo_t <- if (length(homo_t) == 0L && length(clean_nt) >= 2L) {
+    topo_t <- if (length(homo_t) == 0L && length(clean_nt) >= 2L && !is_syn_tx(tx)) {
       if (exists(".resolve_locus_classicus_topotype_rows", mode = "function")) .resolve_locus_classicus_topotype_rows(df, clean_nt, tx) else .fallback_topotype_rows_s05(df, clean_nt, tx)
     } else integer(0)
     if (length(homo_t) > 0L) {
@@ -412,9 +425,10 @@ compute_type_locality_ecological_control <- function(df, primary_env_vars = NULL
       pr_ss <- if (length(clean_nt) >= 2L) build_profile(tx_rows, integer(0), excl_rows = excl_ss) else build_profile(tx_rows, het_t, excl_rows = q_tx)
     } else pr_ss <- build_profile(tx_rows, integer(0), excl_rows = q_tx)
 
+    ref_het_pr <- if (!is.null(pr_sp_ss)) pr_sp_ss else pr_ss
     if (length(het_t) > 0L) {
       for (hi in het_t) {
-        ev_h <- eval_prof(hi, pr_ss, audit_vars, audit_wts); pe <- ev_h$p_eff
+        ev_h <- eval_prof(hi, ref_het_pr, audit_vars, audit_wts); pe <- ev_h$p_eff
         if (pe >= 1L) {
           c_chi <- stats::qchisq(0.99, df = pe); c_rms <- sqrt(c_chi / pe)
           if ((is.finite(ev_h$z_rms) && ev_h$z_rms > c_rms) || (is.finite(ev_h$sum_z2) && ev_h$sum_z2 > c_chi)) {
@@ -431,12 +445,14 @@ compute_type_locality_ecological_control <- function(df, primary_env_vars = NULL
 
   basionym_profiles <- list(); elig_type_all <- which(is_type_georef_ok)
   for (bn in unique(bas_all[elig_type_all])) {
-    if (is.na(bn) || !nzchar(bn)) next
+    if (is.na(bn) || !nzchar(bn) || is_syn_tx(bn)) next
     b_rows <- elig_type_all[bas_all[elig_type_all] == bn]; tx_bn <- grp_vec[b_rows[1L]]; tx_r <- which(grp_vec == tx_bn)
+    ref_sd <- if (!is.null(pr_sp_ss)) pr_sp_ss$sd else if (!is.null(type_profiles[[tx_bn]])) type_profiles[[tx_bn]]$sd else NULL
     basionym_profiles[[bn]] <- if (all(is_homo_all[b_rows])) build_profile(tx_r, b_rows, excl_rows = tx_r[is_quar_type[tx_r] | (is_type_georef_ok[tx_r] & !is_homo_all[tx_r])])
-      else build_profile(b_rows, b_rows, excl_rows = integer(0), fixed_sd = if (!is.null(type_profiles[[tx_bn]])) type_profiles[[tx_bn]]$sd else NULL)
+      else build_profile(b_rows, b_rows, excl_rows = integer(0), fixed_sd = ref_sd)
   }
-  for (tx in active_taxa) if (!any(grp_vec[elig_type_all] == tx) && !(tx %in% names(basionym_profiles))) basionym_profiles[[tx]] <- type_profiles[[tx]]
+  for (tx in active_taxa) if (!is_syn_tx(tx) && !any(grp_vec[elig_type_all] == tx) && !(tx %in% names(basionym_profiles))) basionym_profiles[[tx]] <- type_profiles[[tx]]
+  if (!is.null(pr_sp_ss) && nzchar(canon_sp) && !(canon_sp %in% names(basionym_profiles))) basionym_profiles[[canon_sp]] <- pr_sp_ss
   bas_names <- names(basionym_profiles)
 
   type_edaphic_z <- numeric(n); nearest_type_niche <- character(n); matches_lith <- rep(TRUE, n)

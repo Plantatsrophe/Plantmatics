@@ -417,6 +417,7 @@ def ingest_gbif_occurrence_record(
         "type_status": type_status,
         "county": rec.get("county") or "",
         "stateProvince": state_prov or "",
+        "locality": " ; ".join(x for x in (str(raw_loc_val or "").strip(), str(raw_hab_val or "").strip()) if x),
         "decimalLatitude": lat_val,
         "decimalLongitude": lon_val,
         "coordinateUncertainty": uncertainty_val,

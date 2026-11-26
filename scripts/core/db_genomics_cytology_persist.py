@@ -65,13 +65,38 @@ def upsert_genomic_samples(
             item[col] = _to_float(raw.get(col))
         norm_rows.append(item)
 
-    return upsert_rows_generic(
+    written = upsert_rows_generic(
         conn,
         "genomic_samples",
         norm_rows,
         ("genetic_sample_id",),
         preserve_existing_on_null=preserve_existing_on_null,
     )
+    if preserve_existing_on_null:
+        unvouchered = [
+            (
+                r["exsiccatae_key"],
+                r["eventDate"],
+                r["typified_basionym"],
+                r["concept_synonymy_status"],
+                r["coordinateUncertainty"],
+                r["genetic_sample_id"],
+            )
+            for r in norm_rows
+            if r.get("catalogNumber") is None and str(r.get("linkage_tier") or "").startswith(("G3_", "G4_"))
+        ]
+        if unvouchered:
+            conn.executemany(
+                """
+                UPDATE genomic_samples
+                SET catalogNumber = NULL, exsiccatae_key = ?, eventDate = ?,
+                    typified_basionym = ?, concept_synonymy_status = ?, coordinateUncertainty = ?
+                WHERE genetic_sample_id = ?;
+                """,
+                unvouchered,
+            )
+            conn.commit()
+    return written
 
 def upsert_cytological_records(
     conn: sqlite3.Connection,

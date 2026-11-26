@@ -266,12 +266,16 @@ class TestStep01TaxonomicClarity(unittest.TestCase):
             {"catalogNumber": "S_DT2", "institutionCode": "US", "recordedBy": "J. Doe", "recordNumber": "s.n.", "eventDate": "1965-00-00", "year": 1965, "decimalLatitude": 36.1001, "decimalLongitude": -79.1000, "scientificName": "Packera dubia", "species_standardized": "Packera dubia", "determiner_tier": "Tier_3_Bronze"},
             {"catalogNumber": "S_CEN1", "institutionCode": "NCU", "recordedBy": "R. Roe", "recordNumber": "s.n.", "eventDate": "1972-04-12", "year": 1972, "decimalLatitude": 36.2000, "decimalLongitude": -79.2000, "is_centroid_or_inst_coord": True, "scientificName": "Packera dubia", "species_standardized": "Packera dubia", "determiner_tier": "Tier_3_Bronze"},
             {"catalogNumber": "S_CEN2", "institutionCode": "US", "recordedBy": "R. Roe", "recordNumber": "s.n.", "eventDate": "1972-04-12", "year": 1972, "decimalLatitude": 36.2001, "decimalLongitude": -79.2000, "is_centroid_or_inst_coord": True, "scientificName": "Packera dubia", "species_standardized": "Packera dubia", "determiner_tier": "Tier_3_Bronze"},
+            {"catalogNumber": "EX_NCU_UNG", "institutionCode": "NCU", "recordedBy": "C. Chapman", "recordNumber": "29", "eventDate": "1969-04-20", "year": 1969, "stateProvince": "South Carolina", "decimalLatitude": None, "decimalLongitude": None, "coordinateUncertainty": None, "scientificName": "Packera dubia", "species_standardized": "Packera dubia", "determiner_tier": "Tier_1_Gold"},
+            {"catalogNumber": "EX_GA_GEO", "institutionCode": "GA", "recordedBy": "C. Chapman", "recordNumber": "29", "eventDate": "1969-04-20", "year": 1969, "stateProvince": "South Carolina", "decimalLatitude": 34.6712, "decimalLongitude": -80.5540, "coordinateUncertainty": 800.0, "scientificName": "Packera dubia", "species_standardized": "Packera dubia", "determiner_tier": "Tier_1_Gold"},
         ])
         strat = ta.stratify_duplicates(df_dups).set_index("catalogNumber")
         self.assertTrue(bool(strat.loc["D1_GOLD_OOR", "is_primary_duplicate"]))
         self.assertFalse(bool(strat.loc["D1_BRONZE_IN", "is_primary_duplicate"]))
         self.assertTrue(bool(strat.loc["D2_GOLD_IN", "is_primary_duplicate"]))
         self.assertFalse(bool(strat.loc["D2_GOLD_OOR", "is_primary_duplicate"]))
+        self.assertAlmostEqual(float(strat.loc["EX_NCU_UNG", "decimalLatitude"]), 34.6712, places=4)
+        self.assertAlmostEqual(float(strat.loc["EX_NCU_UNG", "coordinateUncertainty"]), 800.0, places=1)
         for sing in ("S_UNK1", "S_UNK2", "S_DT1", "S_DT2", "S_CEN1", "S_CEN2"):
             self.assertTrue(bool(strat.loc[sing, "is_primary_duplicate"]), f"Singleton {sing} must stay unmerged")
         self.assertEqual(strat.loc[["S_UNK1", "S_UNK2", "S_DT1", "S_DT2", "S_CEN1", "S_CEN2"], "exsiccatae_key"].nunique(), 6)
@@ -309,7 +313,7 @@ class TestStep01TaxonomicClarity(unittest.TestCase):
                 bf_res = backfill_sqlite_voucher_concepts(conn, [csv_p])
                 self.assertEqual((bf_res["vouchers_updated"], bf_res["locus_classicus_updated"], bf_res["csvs_updated"]), (1, 1, 1))
                 ny_row = conn.execute("SELECT typified_basionym, concept_synonymy_status, locus_classicus_text FROM vouchers v JOIN taxon_backbone_profiles t USING(species_standardized) WHERE v.catalogNumber='NY00232445';").fetchone()
-                self.assertEqual((ny_row[0], ny_row[1], ny_row[2]), ("Senecio alabamensis", "Heterotypic_Synonym", "Flat Rock, Kershaw County, South Carolina"))
+                self.assertEqual((ny_row[0], ny_row[1], ny_row[2]), ("Senecio alabamensis", "Heterotypic_Synonym", "Forty Acre Rock (Flat Rock), Lancaster County and Kershaw County, South Carolina"))
                 self.assertEqual(pd.read_csv(csv_p).loc[0, "concept_synonymy_status"], "Heterotypic_Synonym")
                 self.assertEqual(backfill_sqlite_voucher_concepts(conn, [csv_p])["vouchers_updated"], 0)
                 upsert_rows_generic(conn, "plant_individuals", [{"catalogNumber": "RDB_01", "plant_individual_id": 1}], pk_cols=("catalogNumber", "plant_individual_id"))
@@ -363,7 +367,7 @@ class TestStep01TaxonomicClarity(unittest.TestCase):
                 "ctrl_res <- compute_type_specimen_morph_control(df_ctrl, X_mat = X_ctrl)\n"
                 "stopifnot(all(ctrl_res$has_empirical_type_anchor), abs(ctrl_res$type_centroids['Packera dubia', 1L]) < 0.5)\n"
                 "X_nh <- rbind(cbind(rnorm(4, 0, 0.04), rnorm(4, 0, 0.04)), cbind(rnorm(6, 3.0, 0.1), rnorm(6, 3.0, 0.1)), c(8.5, 8.5))\n"
-                "df_nh <- data.frame(catalogNumber = sprintf('NH%d', 1:11), species_standardized = rep('Packera dubia', 11L), determiner_tier = rep('Tier_1_Gold', 11L), stateProvince = c(rep('South Carolina', 4L), rep('Georgia', 6L), 'Alabama'), county = c(rep('Kershaw County', 4L), rep('Bibb', 6L), 'Houston'), locus_classicus_text = rep('Flat Rock, Kershaw County, South Carolina', 11L), type_status = c(rep('', 10L), 'Holotype'), typified_basionym = c(rep('', 10L), 'Senecio alabamensis'), concept_synonymy_status = c(rep('Accepted_Sensu_Stricto', 10L), 'Heterotypic_Synonym'), EFA_PC1 = X_nh[, 1L], EFA_PC2 = X_nh[, 2L], stringsAsFactors = FALSE)\n"
+                "df_nh <- data.frame(catalogNumber = sprintf('NH%d', 1:11), species_standardized = rep('Packera dubia', 11L), determiner_tier = rep('Tier_1_Gold', 11L), stateProvince = c(rep('South Carolina', 4L), rep('South Carolina', 6L), 'Alabama'), county = c(rep('Lancaster', 4L), rep('Pickens', 6L), 'Houston'), locus_classicus_text = rep('Forty Acre Rock (Flat Rock), Lancaster County and Kershaw County, South Carolina', 11L), type_status = c(rep('', 10L), 'Holotype'), typified_basionym = c(rep('', 10L), 'Senecio alabamensis'), concept_synonymy_status = c(rep('Accepted_Sensu_Stricto', 10L), 'Heterotypic_Synonym'), EFA_PC1 = X_nh[, 1L], EFA_PC2 = X_nh[, 2L], stringsAsFactors = FALSE)\n"
                 "nh_res <- compute_type_specimen_morph_control(df_nh, X_mat = X_nh, reasons = rep('Verified', 11L), triage = rep('CLEAN', 11L), flags = rep(FALSE, 11L))\n"
                 "stopifnot(!any(nh_res$has_empirical_type_anchor), abs(nh_res$type_centroids['Packera dubia', 1L]) < 0.35, grepl('^Heterotypic_Type_Divergence_Senecio_alabamensis', nh_res$reasons[11L]))\n"
                 "req_v_specs <- c('typified_basionym', 'verbatim_taxon_concept', 'concept_synonymy_status', 'identification_year', 'is_open_or_hybrid_concept')\n"

@@ -114,7 +114,7 @@ if (grDevices::dev.cur() == 1L) grDevices::pdf(NULL)
 
 .is_het_bas_cand <- function(bas_v, sp_v, df_all, rows_idx) {
   m <- length(bas_v); out <- rep(FALSE, m)
-  ok <- !is.na(bas_v) & nzchar(trimws(bas_v))
+  ok <- !is.na(bas_v) & nzchar(trimws(bas_v)) & !grepl("^(Ecotype|Morphotype|Cluster|Geno_Cluster|Subcluster|Complex)_[0-9]+", trimws(bas_v), ignore.case = TRUE)
   if (!any(ok)) return(out)
   if (!exists(".is_homotypic_sensu_stricto_basionym", mode = "function")) { out[ok] <- TRUE; return(out) }
   df_sub <- df_all[rows_idx[ok], , drop = FALSE]

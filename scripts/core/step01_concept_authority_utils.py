@@ -64,7 +64,7 @@ _TYPE_OF_RE = re.compile(r"\b(?:holo|iso|lecto|neo|epi|syn|isolecto|isoneo|isosy
 _OPEN_QUAL_RE = re.compile(r"(?:\b(?:cf|aff|vel\s+aff)\b\.?|\?|\bs\.?\s*l\.(?!\s+[A-Z][a-z])|\bsensu\s+lato\b)", re.IGNORECASE)
 _HYBRID_REMARK_RE = re.compile(r"\b(?:putative\s+hybrid|hybrid\s+with|hybrid\s+between|intermediate\s+(?:between|toward)|intergrade\s+with|likely\s+hybrid)\b", re.IGNORECASE)
 _KNOWN_HOMOTYPIC_PAIRS: FrozenSet[Tuple[str, str]] = frozenset({("senecio tomentosus", "packera dubia"), ("packera tomentosa", "packera dubia"), ("cineraria dubia", "packera dubia"), ("senecio dubius", "packera dubia")})
-CURATED_LOCUS_CLASSICUS_BY_TAXON: Dict[str, str] = {"Packera dubia": "Flat Rock, Kershaw County, South Carolina"}
+CURATED_LOCUS_CLASSICUS_BY_TAXON: Dict[str, str] = {"Packera dubia": "Forty Acre Rock (Flat Rock), Lancaster County and Kershaw County, South Carolina"}
 _FALLBACK_POST1980_SEGREGATES: Dict[str, Tuple[int, Set[str], Set[str]]] = {"Packera serpenticola": (2014, {"NC"}, {"burke"}), "Packera insulae-regalis": (2011, {"MI"}, {"keweenaw"})}
 _US_STATE_TO_ABBR: Dict[str, str] = {
     "ALABAMA": "AL", "ARKANSAS": "AR", "CONNECTICUT": "CT", "DELAWARE": "DE", "DISTRICT OF COLUMBIA": "DC",
@@ -335,7 +335,7 @@ def backfill_sqlite_voucher_concepts(db_or_conn: Union[str, Path, sqlite3.Connec
         n_lc = n_up = n_csv = 0
         if "taxon_backbone_profiles" in tbls:
             for sp, lc_txt in CURATED_LOCUS_CLASSICUS_BY_TAXON.items():
-                n_lc += max(0, conn.execute("UPDATE taxon_backbone_profiles SET locus_classicus_text = ? WHERE species_standardized = ? AND (locus_classicus_text IS NULL OR TRIM(locus_classicus_text) = '');", (lc_txt, sp)).rowcount)
+                n_lc += max(0, conn.execute("UPDATE taxon_backbone_profiles SET locus_classicus_text = ? WHERE species_standardized = ? AND (locus_classicus_text IS NULL OR TRIM(locus_classicus_text) = '' OR TRIM(locus_classicus_text) = 'Flat Rock, Kershaw County, South Carolina');", (lc_txt, sp)).rowcount)
             bb_map = {str(r["species_standardized"]): dict(r) for r in conn.execute("SELECT * FROM taxon_backbone_profiles;").fetchall() if r["species_standardized"]}
         updated_by_cat: Dict[str, Dict[str, Any]] = {}
         if "vouchers" in tbls and {"catalogNumber", "concept_synonymy_status", "typified_basionym"}.issubset({r[1] for r in conn.execute("PRAGMA table_info(vouchers);").fetchall()}):

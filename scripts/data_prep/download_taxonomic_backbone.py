@@ -379,7 +379,8 @@ def sync_backbone_csvs_to_db(taxonomy_dir: Path, db_path: Union[str, Path], demo
         return {"taxon_backbone_profiles": 0, "natureserve_subnational_ranges": 0}
     prof_rows, range_rows = _read_csv_safe(taxonomy_dir / PROFILE_CSV_NAME), _read_csv_safe(taxonomy_dir / RANGE_CSV_NAME)
     for pr in prof_rows:
-        if not str(pr.get("locus_classicus_text") or "").strip() and pr.get("species_standardized") in CURATED_LOCUS_CLASSICUS_BY_TAXON:
+        cur_lc = str(pr.get("locus_classicus_text") or "").strip()
+        if (not cur_lc or cur_lc == "Flat Rock, Kershaw County, South Carolina") and pr.get("species_standardized") in CURATED_LOCUS_CLASSICUS_BY_TAXON:
             pr["locus_classicus_text"] = CURATED_LOCUS_CLASSICUS_BY_TAXON[pr["species_standardized"]]
     conn = get_db_connection(db_path=db_path, init_schema=True, workspace_root=PROJECT_ROOT)
     try:
