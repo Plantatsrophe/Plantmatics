@@ -144,6 +144,33 @@ png_p <- opts_c$output_complex_plot
 png_magic_ok <- file.exists(png_p) && identical(as.integer(readBin(png_p, "raw", 4L)), c(137L, 80L, 78L, 71L))
 pdf_files <- list.files(c_dir, pattern = "\\.pdf$", recursive = TRUE, ignore.case = TRUE)
 
+# 6. Single-taxon ungeoreferenced NA ecotype_regime must NEVER create a phantom 3rd subcluster,
+#    complete-linkage ridgeline prevents 3-component domino collapse, & MST disjunction detects >=250 km barrier
+df_1sp_ug <- rows8[rows8$species_standardized == "Packera dubia", , drop = FALSE]
+df_1sp_ug <- rbind(df_1sp_ug, df_1sp_ug)
+df_1sp_ug$gmm_cluster <- 1L
+df_1sp_ug$ecotype_regime <- c(rep("Ecotype_1_lithic_Low", 8L), rep("Ecotype_2_lithic_High", 8L), rep(NA_character_, nrow(df_1sp_ug) - 16L))
+sub_ug <- build_taxon_morphotype_subclusters(df_1sp_ug, min_vouchers = 5L)
+ug_sub_taxa <- sort(unique(as.character(sub_ug$morph_df$species_standardized)))
+
+source("scripts/morphometrics/plasticity_mitigation_utils.R")
+set.seed(303L)
+X_dom <- rbind(cbind(rnorm(40L, -3.2, 0.7), rnorm(40L, 0, 0.7)), cbind(rnorm(30L, -1.6, 0.9), rnorm(30L, 0, 0.7)), cbind(rnorm(40L, 2.2, 0.7), rnorm(40L, 0, 0.7)))
+P_dom <- exp(-0.5 * cbind((X_dom[, 1L] + 3.2)^2 / 0.49, (X_dom[, 1L] + 1.6)^2 / 0.81, (X_dom[, 1L] - 2.2)^2 / 0.49))
+P_dom <- sweep(P_dom, 1L, rowSums(P_dom), "/")
+dom_mrg <- merge_plastic_gmm_components_ridgeline(X_dom, X_dom, P_dom, P_dom, intraspecific_mode = TRUE)
+
+source("scripts/analysis/step05_config_geo_utils.R")
+source("scripts/analysis/step05_phenology_ecotypes.R")
+df_disj <- data.frame(
+  catalogNumber = sprintf("DJ_%02d", 1:22), species_standardized = "Packera dubia", determiner_tier = "Tier_1_Gold",
+  is_type_specimen = FALSE, is_centroid_or_inst_coord = FALSE, is_confident_label_noise = FALSE,
+  decimalLatitude = c(seq(33.5, 35.5, length.out = 14L), seq(31.2, 32.6, length.out = 6L), NA_real_, NA_real_),
+  decimalLongitude = c(seq(-81.5, -78.5, length.out = 14L), seq(-95.2, -93.8, length.out = 6L), NA_real_, NA_real_),
+  stateProvince = c(rep("SC", 14L), rep("TX", 6L), "TX", "SC"), stringsAsFactors = FALSE
+)
+dj_out <- compute_geographic_disjunction_audit(df_disj)
+
 write_json(list(
   rng_preserved = rng_preserved,
   mix_labels = as.character(part_mix$complexes_df$complex_label),
@@ -165,7 +192,13 @@ write_json(list(
   w4_w_geno = as.numeric(attr(W_4_yes, "w_geno")),
   eco_hyg_cols = eco_hyg_cols,
   png_magic_ok = png_magic_ok,
-  n_pdfs = length(pdf_files)
+  n_pdfs = length(pdf_files),
+  ug_sub_active = isTRUE(sub_ug$subcluster_mode),
+  ug_sub_taxa = ug_sub_taxa,
+  dom_best_k = as.integer(dom_mrg$best_k),
+  dj_has = isTRUE(dj_out$summary_df$Has_Major_Disjunction[1L]),
+  dj_sec_tx = as.character(dj_out$sector_vec[21L]),
+  dj_sec_sc_na = is.na(dj_out$sector_vec[22L])
 ), out_json, auto_unbox = TRUE, na = "null")
 """
 
@@ -275,6 +308,12 @@ class TestStep07ComplexDiscovery(unittest.TestCase):
         )
         self.assertTrue(bool(r["png_magic_ok"]))
         self.assertEqual(int(r["n_pdfs"]), 0)
+        self.assertTrue(bool(r["ug_sub_active"]))
+        self.assertEqual(r["ug_sub_taxa"], ["Ecotype_1_lithic_Low", "Ecotype_2_lithic_High"])
+        self.assertGreaterEqual(int(r["dom_best_k"]), 2)
+        self.assertTrue(bool(r["dj_has"]))
+        self.assertEqual(str(r["dj_sec_tx"]), "Trans_Mississippi_Disjunct")
+        self.assertTrue(bool(r["dj_sec_sc_na"]))
 
 
 if __name__ == "__main__":

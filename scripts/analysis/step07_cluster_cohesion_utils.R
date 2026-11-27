@@ -273,8 +273,86 @@ if (grDevices::dev.cur() == 1L) grDevices::pdf(NULL)
     }
     cryptic_non_clinal_map[[mk]] <- isTRUE(non_clinal_ok); clinal_r2_map[[mk]] <- r2_cl; cryptic_cluster_pass_map[[mk]] <- isTRUE(pass_events && pass_osr && pass_div && non_clinal_ok)
   }
+
+  .hotelling_p <- function(idx_a, idx_b) {
+    Xm <- if (!is.null(bg_ctx$morph_X)) bg_ctx$morph_X else if (length(bg_ctx$morph_coord_cols) >= 1L) as.matrix(df[, bg_ctx$morph_coord_cols, drop = FALSE]) else NULL
+    if (is.null(Xm) || ncol(Xm) < 1L) return(1.0)
+    ia <- idx_a[stats::complete.cases(Xm[idx_a, , drop = FALSE])]; ib <- idx_b[stats::complete.cases(Xm[idx_b, , drop = FALSE])]
+    na <- length(ia); nb <- length(ib); pm <- min(ncol(Xm), max(1L, na + nb - 3L))
+    if (na < 3L || nb < 3L || pm < 1L) return(1.0)
+    Xa <- Xm[ia, seq_len(pm), drop = FALSE]; Xb <- Xm[ib, seq_len(pm), drop = FALSE]
+    Sp <- ((na - 1.0) * stats::cov(Xa) + (nb - 1.0) * stats::cov(Xb)) / max(1.0, na + nb - 2.0)
+    Sr <- 0.85 * Sp + 0.15 * diag(max(mean(diag(as.matrix(Sp))), 1e-4), pm, pm)
+    dv <- colMeans(Xa) - colMeans(Xb)
+    t2 <- (na * nb / (na + nb)) * sum(dv * tryCatch(solve(Sr, dv), error = function(e) rep(0.0, pm)))
+    df2 <- max(1.0, na + nb - pm - 1.0); f_st <- t2 * df2 / max(1.0, pm * (na + nb - 2.0))
+    if (is.finite(f_st) && f_st > 0.0) stats::pf(f_st, df1 = pm, df2 = df2, lower.tail = FALSE) else 1.0
+  }
+
+  sec_eco_cohesion_map <- list(); sec_eco_basionym_map <- list(); disjunct_sector_pass_map <- list()
+  ungeoref_morph_regime_aff <- rep(NA_character_, n); ungeoref_morph_regime_prob <- rep(NA_real_, n)
+  has_cc_g <- any(!is.na(rec_by_v) & nzchar(trimws(rec_by_v))) || any(nzchar(exs_clean))
+  for (sp_k in unique(sp_clean_vec[sp_clean_vec != "Unknown"])) {
+    er_rows <- which(sp_clean_vec == sp_k & grepl("^Ecotype_[0-9]+_", mv$eco_reg_dv))
+    if (length(unique(mv$eco_reg_dv[er_rows])) >= 2L) {
+      ss_rows <- er_rows[!mv$is_sec_eco_regime_dv[er_rows] & t1_pure_all[er_rows] & !mv$open_hyb_dv[er_rows]]
+      gcl_ss <- mv$geno_gcl_dv[ss_rows]; gcl_ss <- gcl_ss[grepl("^Geno_Cluster_", gcl_ss)]
+      mod_g_ss <- if (length(gcl_ss) > 0L) names(sort(table(gcl_ss), decreasing = TRUE))[1L] else ""
+      for (rg_nm in unique(mv$eco_reg_dv[er_rows[mv$is_sec_eco_regime_dv[er_rows]]])) {
+        rk <- paste(sp_k, rg_nm, sep = "||")
+        idx_rg <- er_rows[mv$eco_reg_dv[er_rows] == rg_nm & t1_pure_all[er_rows] & !mv$open_hyb_dv[er_rows]]
+        if (length(idx_rg) == 0L) { sec_eco_cohesion_map[[rk]] <- FALSE; next }
+        ev_ok <- if (n < 50L && !has_cc_g) length(idx_rg) >= 3L else (length(unique(gathering_event_key_all[idx_rg])) >= 5L && length(unique(spatial_deme_vec[idx_rg])) >= min(3L, max(1L, length(unique(spatial_deme_vec[er_rows])))))
+        d_m <- stats::median(d_edaph_all[idx_rg], na.rm = TRUE); sz_m <- stats::median(mv$ss_edaph_z_dv[idx_rg], na.rm = TRUE)
+        cv_v <- mv$srf_cv_acc_dv[idx_rg]; cv_ok <- !any(is.finite(cv_v)) || (stats::median(cv_v[is.finite(cv_v)], na.rm = TRUE) >= 0.70)
+        sig_eco <- cv_ok && ((is.finite(d_m) && d_m < 0.35) || (is.finite(sz_m) && sz_m > 2.0))
+        het_tp_rg <- er_rows[mv$eco_reg_dv[er_rows] == rg_nm & mv$is_type_dv[er_rows] & (mv$is_het_audit_dv[er_rows] | (!is.na(mv$conc_syn_dv[er_rows]) & mv$conc_syn_dv[er_rows] == "Heterotypic_Synonym"))]
+        if (length(het_tp_rg) > 0L) {
+          tb_rg <- trimws(ifelse(is.na(mv$typ_bas_dv[het_tp_rg]), "", mv$typ_bas_dv[het_tp_rg])); tb_rg <- tb_rg[nzchar(tb_rg)]
+          if (length(tb_rg) > 0L) sec_eco_basionym_map[[rk]] <- names(sort(table(tb_rg), decreasing = TRUE))[1L]
+        }
+        sig_m <- (.hotelling_p(ss_rows, idx_rg) < 0.05) || (length(het_tp_rg) > 0L)
+        gcl_rg <- mv$geno_gcl_dv[idx_rg]; gcl_rg <- gcl_rg[grepl("^Geno_Cluster_", gcl_rg)]
+        mod_g_rg <- if (length(gcl_rg) > 0L) names(sort(table(gcl_rg), decreasing = TRUE))[1L] else ""
+        anth_rg <- idx_rg[mv$is_anth_dv[idx_rg] & is.finite(ddoy_all[idx_rg])]
+        sig_gp <- (nzchar(mod_g_ss) && nzchar(mod_g_rg) && mod_g_ss != mod_g_rg) || (length(anth_rg) >= 3L && stats::median(abs(ddoy_all[anth_rg]), na.rm = TRUE) >= stats::median(mv$tau_ecotype_vec[anth_rg], na.rm = TRUE))
+        sec_eco_cohesion_map[[rk]] <- isTRUE(ev_ok && sig_eco && (sig_m || sig_gp))
+      }
+      Xm_u <- if (!is.null(bg_ctx$morph_X)) bg_ctx$morph_X else NULL
+      ug_rows <- which(sp_clean_vec == sp_k & !nzchar(mv$eco_reg_dv) & !nzchar(mv$bio_sec_dv))
+      if (!is.null(Xm_u) && ncol(Xm_u) >= 1L && length(ug_rows) > 0L && length(ss_rows) >= 4L) {
+        rg_u <- sort(unique(mv$eco_reg_dv[er_rows])); c_ok <- er_rows[stats::complete.cases(Xm_u[er_rows, , drop = FALSE])]
+        if (length(c_ok) >= 8L && length(rg_u) >= 2L) {
+          pm_u <- min(ncol(Xm_u), 8L); Xtr <- Xm_u[c_ok, seq_len(pm_u), drop = FALSE]
+          mus_u <- lapply(rg_u, function(rn) colMeans(Xtr[mv$eco_reg_dv[c_ok] == rn, , drop = FALSE]))
+          Sw_u <- stats::cov(Xtr); Sr_u <- 0.80 * Sw_u + 0.20 * diag(max(mean(diag(as.matrix(Sw_u))), 1e-4), pm_u, pm_u)
+          Si_u <- tryCatch(solve(Sr_u), error = function(e) diag(1.0, pm_u, pm_u))
+          for (ui in ug_rows[stats::complete.cases(Xm_u[ug_rows, seq_len(pm_u), drop = FALSE])]) {
+            d2_u <- vapply(seq_along(rg_u), function(ki) { dv <- Xm_u[ui, seq_len(pm_u)] - mus_u[[ki]]; max(0.0, sum(dv * as.numeric(Si_u %*% dv))) }, numeric(1))
+            pr_u <- exp(-0.5 * (d2_u - min(d2_u))); pr_u <- pr_u / max(sum(pr_u), 1e-12); bk <- which.max(pr_u)[1L]
+            ungeoref_morph_regime_aff[ui] <- rg_u[bk]; ungeoref_morph_regime_prob[ui] <- round(pr_u[bk], 4)
+          }
+        }
+      }
+    }
+    dj_secs <- unique(mv$bio_sec_dv[sp_clean_vec == sp_k & (mv$bio_sec_dv %in% c("Trans_Mississippi_Disjunct", "Allopatric_Disjunct_Sector"))])
+    for (sn in dj_secs) {
+      dk <- paste(sp_k, sn, sep = "||")
+      idx_dj <- which(sp_clean_vec == sp_k & mv$bio_sec_dv == sn & t1_pure_all & !mv$open_hyb_dv)
+      idx_mn <- which(sp_clean_vec == sp_k & mv$bio_sec_dv != sn & is.finite(lat_v_cl) & t1_pure_all & !mv$open_hyb_dv)
+      if (length(idx_dj) == 0L || length(idx_mn) == 0L) { disjunct_sector_pass_map[[dk]] <- FALSE; next }
+      gap_ok <- any(is.finite(mv$disj_gap_dv[idx_dj]) & mv$disj_gap_dv[idx_dj] >= 250.0)
+      ev_dj <- if (n < 50L && !has_cc_g) length(idx_dj) >= 3L else (length(unique(gathering_event_key_all[idx_dj])) >= 5L && length(unique(spatial_deme_vec[idx_dj])) >= min(3L, max(1L, length(unique(spatial_deme_vec[idx_dj])))))
+      g_dj <- mv$geno_gcl_dv[idx_dj]; g_dj <- g_dj[grepl("^Geno_Cluster_", g_dj)]; g_mn <- mv$geno_gcl_dv[idx_mn]; g_mn <- g_mn[grepl("^Geno_Cluster_", g_mn)]
+      sig_gd <- (length(g_dj) > 0L && length(g_mn) > 0L && length(intersect(unique(g_dj), unique(g_mn))) == 0L)
+      cz_dj <- mv$clim_z_dv[idx_dj]; sig_cd <- any(is.finite(cz_dj)) && (stats::median(cz_dj[is.finite(cz_dj)], na.rm = TRUE) > 1.5)
+      disjunct_sector_pass_map[[dk]] <- isTRUE(gap_ok && ev_dj && (sig_gd || (.hotelling_p(idx_mn, idx_dj) < 0.05) || sig_cd))
+    }
+  }
   list(sp_clean_vec = sp_clean_vec, g_cl_all = g_cl_all, t1_pure_all = t1_pure_all, edaph_z_all = edaph_z_all, ed_sp_all = ed_sp_all, d_edaph_all = d_edaph_all,
        ddoy_all = ddoy_all, bf_all = bf_all, spatial_deme_vec = spatial_deme_vec, coll_surname_all = coll_surname_all, clean_peer_df = clean_peer_df,
        azonal_flag_all = azonal_flag_all, cryptic_cluster_pass_map = cryptic_cluster_pass_map, cryptic_non_clinal_map = cryptic_non_clinal_map,
-       clinal_r2_map = clinal_r2_map, cluster_resurrect_bas_map = cluster_resurrect_bas_map)
+       clinal_r2_map = clinal_r2_map, cluster_resurrect_bas_map = cluster_resurrect_bas_map,
+       sec_eco_cohesion_map = sec_eco_cohesion_map, sec_eco_basionym_map = sec_eco_basionym_map, disjunct_sector_pass_map = disjunct_sector_pass_map,
+       ungeoref_morph_regime_aff = ungeoref_morph_regime_aff, ungeoref_morph_regime_prob = ungeoref_morph_regime_prob)
 }

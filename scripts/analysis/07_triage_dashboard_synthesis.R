@@ -268,17 +268,44 @@ apply_taxonomic_decision_matrix <- function(df, intraspecific_mode = FALSE, gmm_
     ag_r <- trimws(ifelse(is.na(df$analysis_group), "", as.character(df$analysis_group)))
     if (any(grepl("^Ecotype_[0-9]+_", ag_r))) eco_reg_raw <- ag_r
   }
+  eco_reg_raw[eco_reg_raw %in% c("NA", "Unknown", "Unassigned_No_Coords")] <- ""
   is_sec_eco_regime_dv <- rep(FALSE, n)
   conc_syn_pre <- trimws(ifelse(is.na(.chr_col(df, "concept_synonymy_status", n, "")), "", .chr_col(df, "concept_synonymy_status", n, "")))
   het_aud_pre <- .step07_safe_bool(if ("is_heterotypic_type_audit" %in% names(df)) df$is_heterotypic_type_audit else rep(FALSE, n))
   typ_m_pre <- if ("is_typical_morphotype" %in% names(df)) (!is.na(df$is_typical_morphotype) & as.logical(df$is_typical_morphotype)) else rep(FALSE, n)
+  ss_reg_pre <- trimws(ifelse(is.na(.chr_col(df, "sensu_stricto_ecotype_regime", n, "")), "", .chr_col(df, "sensu_stricto_ecotype_regime", n, "")))
   for (tx_e in active_taxa) {
     er_tx <- which(sp_all_vec == tx_e & grepl("^Ecotype_[0-9]+_", eco_reg_raw))
     if (length(unique(eco_reg_raw[er_tx])) < 2L) next
-    homo_er <- er_tx[is_type_dv[er_tx] & !het_aud_pre[er_tx] & (conc_syn_pre[er_tx] != "Heterotypic_Synonym")]
-    ref_er <- if (length(homo_er) > 0L) homo_er else if (any(typ_m_pre[er_tx] & anchor_all[er_tx])) er_tx[typ_m_pre[er_tx] & anchor_all[er_tx]] else if (any(anchor_all[er_tx])) er_tx[anchor_all[er_tx]] else er_tx
-    mod_er <- names(sort(table(eco_reg_raw[ref_er]), decreasing = TRUE))[1L]
+    ss_h <- unique(ss_reg_pre[er_tx][nzchar(ss_reg_pre[er_tx]) & (ss_reg_pre[er_tx] %in% eco_reg_raw[er_tx])])
+    if (length(ss_h) >= 1L) {
+      mod_er <- ss_h[1L]
+    } else {
+      homo_er <- er_tx[is_type_dv[er_tx] & !het_aud_pre[er_tx] & (conc_syn_pre[er_tx] != "Heterotypic_Synonym")]
+      topo_er <- if (length(homo_er) == 0L && exists(".resolve_locus_classicus_topotype_rows", mode = "function")) {
+        cand_tp <- er_tx[anchor_all[er_tx]]; if (length(cand_tp) < 2L) cand_tp <- er_tx
+        .resolve_locus_classicus_topotype_rows(df, cand_tp, tx_e)
+      } else integer(0)
+      ref_er <- if (length(homo_er) > 0L) homo_er else if (length(topo_er) >= 2L) topo_er else if (any(typ_m_pre[er_tx] & anchor_all[er_tx])) er_tx[typ_m_pre[er_tx] & anchor_all[er_tx]] else if (any(anchor_all[er_tx])) er_tx[anchor_all[er_tx]] else er_tx
+      mod_er <- names(sort(table(eco_reg_raw[ref_er]), decreasing = TRUE))[1L]
+    }
     is_sec_eco_regime_dv[er_tx[eco_reg_raw[er_tx] != mod_er]] <- TRUE
+  }
+  d_ed2_pre <- .num_col(df, "edaphic_schoener_d", n); srf_cv_pre <- .num_col(df, "spatial_block_cv_acc", n)
+  if (!is.null(opts$niche_summary) && nzchar(opts$niche_summary) && file.exists(opts$niche_summary)) {
+    ns_df <- tryCatch(readr::read_csv(opts$niche_summary, show_col_types = FALSE), error = function(e) NULL)
+    if (is.data.frame(ns_df) && nrow(ns_df) > 0L) {
+      if (all(c("Taxon1", "Taxon2", "D_edaph") %in% names(ns_df)) && any(grepl("^Ecotype_[0-9]+_", eco_reg_raw) & !is.finite(d_ed2_pre))) {
+        for (ug in unique(eco_reg_raw[grepl("^Ecotype_[0-9]+_", eco_reg_raw)])) {
+          dv_n <- suppressWarnings(as.numeric(ns_df$D_edaph[ns_df$Taxon1 == ug | ns_df$Taxon2 == ug])); dv_n <- dv_n[is.finite(dv_n)]
+          if (length(dv_n) > 0L) { mh <- (eco_reg_raw == ug) & !is.finite(d_ed2_pre); d_ed2_pre[mh] <- min(dv_n) }
+        }
+      }
+      if ("Spatial_Block_CV_Accuracy" %in% names(ns_df) && any(!is.finite(srf_cv_pre))) {
+        sb_n <- suppressWarnings(as.numeric(ns_df$Spatial_Block_CV_Accuracy)); sb_n <- sb_n[is.finite(sb_n)]
+        if (length(sb_n) > 0L) srf_cv_pre[!is.finite(srf_cv_pre)] <- sb_n[1L]
+      }
+    }
   }
 
   mv <- list(
@@ -291,7 +318,7 @@ apply_taxonomic_decision_matrix <- function(df, intraspecific_mode = FALSE, gmm_
     misid_flag_dv = if ("misidentification_flag" %in% names(df)) as.logical(df$misidentification_flag) else rep(NA, n),
     triage_cat_dv = .chr_col(df, "triage_category", n, NA_character_), edaph_sp_dv = .chr_col(df, "edaphic_best_fit_taxon", n, NA_character_),
     rf_pred_dv = .chr_col(df, "rf_predicted_taxon", n, NA_character_), rf_prob_dv = .num_col(df, "rf_predicted_prob", n),
-    d_ed1_dv = .num_col(df, "edaphic_niche_overlap_d", n), d_ed2_dv = .num_col(df, "edaphic_schoener_d", n), d_ed3_dv = .num_col(df, "schoener_d", n),
+    d_ed1_dv = .num_col(df, "edaphic_niche_overlap_d", n), d_ed2_dv = d_ed2_pre, d_ed3_dv = .num_col(df, "schoener_d", n), srf_cv_acc_dv = srf_cv_pre,
     gmm_unc_dv = .num_col(df, "gmm_uncertainty", n), gmm_cl_dv = if ("gmm_cluster" %in% names(df)) suppressWarnings(as.integer(df$gmm_cluster)) else rep(NA_integer_, n),
     ddoy1_dv = .num_col(df, "delta_doy_resid", n), ddoy2_dv = .num_col(df, "delta_doy", n), is_anth_dv = if ("is_active_anthesis" %in% names(df)) .lgl_col(df, "is_active_anthesis", n) else rep(TRUE, n),
     bf1_dv = .num_col(df, "two_delta_bic", n), bf2_dv = .num_col(df, "gmm_2_delta_bic", n), m_tier_src_dv = mts_init_v, n_t1_dv = dplyr::coalesce(bas_raw_i, if ("leaf_count" %in% names(df)) suppressWarnings(as.integer(df$leaf_count)) else rep(NA_integer_, n)),
@@ -331,7 +358,10 @@ apply_taxonomic_decision_matrix <- function(df, intraspecific_mode = FALSE, gmm_
     clim_z_dv = .num_col(df, "climatic_z_score", n), rf_given_p_dv = .num_col(df, "rf_given_taxon_prob", n), id_by_dv = .chr_col(df, "identifiedBy", n, NA_character_),
     portal_lag_flag = logical(n), portal_lag_gate = rep(NA_character_, n), p_type_morph = p_type_morph, type_morph_chisq95 = stats::qchisq(0.95, df = p_type_morph),
     osr_chisq85_vec = osr_chisq85_vec, osr_chisq90_vec = osr_chisq90_vec, osr_chisq95_vec = osr_chisq95_vec,
-    eco_reg_dv = eco_reg_raw, is_sec_eco_regime_dv = is_sec_eco_regime_dv,
+    eco_reg_dv = eco_reg_raw, is_sec_eco_regime_dv = is_sec_eco_regime_dv, geno_gcl_dv = geno_gcl_dv,
+    ss_edaph_z_dv = .num_col(df, "sensu_stricto_edaphic_z", n),
+    bio_sec_dv = trimws(ifelse(is.na(.chr_col(df, "biogeographic_sector", n, "")), "", .chr_col(df, "biogeographic_sector", n, ""))),
+    disj_gap_dv = .num_col(df, "disjunction_gap_km", n),
     n_sheet_ramets_vec = as.integer(table(cat_sheet_vec)[cat_sheet_vec])
   )
   cl_ctx <- .build_step07_cluster_cohesion_context(df, bg_ctx, mv, gmm_two_delta_bic = gmm_two_delta_bic, is_intra = is_intra)

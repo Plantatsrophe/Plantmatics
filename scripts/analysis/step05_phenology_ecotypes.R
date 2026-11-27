@@ -437,3 +437,57 @@ compute_isolation_by_environment <- function(df, edaph_vars = character(0), clim
   if (!is.null(Yp)) rows_out[[length(rows_out) + 1L]] <- eval_blk(Yp, "Anthesis_Phenology_IBE")
   if (length(rows_out) == 0L) empty_ibe else do.call(rbind, rows_out)
 }
+
+compute_geographic_disjunction_audit <- function(df, min_gap_km = 250.0, min_gap_ratio = 2.5) {
+  n <- if (is.data.frame(df)) nrow(df) else 0L
+  empty_sum <- data.frame(Taxon = character(0), N_Georef_Clean = integer(0), Max_MST_Gap_km = numeric(0), Q90_MST_Edge_km = numeric(0),
+                          Gap_Ratio = numeric(0), N_Primary_Sector = integer(0), N_Disjunct_Sector = integer(0), Disjunction_Sector = character(0),
+                          Has_Major_Disjunction = logical(0), stringsAsFactors = FALSE)
+  if (n == 0L) return(list(sector_vec = character(0), gap_km_vec = numeric(0), summary_df = empty_sum))
+  la <- if ("decimalLatitude" %in% names(df)) suppressWarnings(as.numeric(df$decimalLatitude)) else if ("latitude" %in% names(df)) suppressWarnings(as.numeric(df$latitude)) else rep(NA_real_, n)
+  lo <- if ("decimalLongitude" %in% names(df)) suppressWarnings(as.numeric(df$decimalLongitude)) else if ("longitude" %in% names(df)) suppressWarnings(as.numeric(df$longitude)) else rep(NA_real_, n)
+  has_xy <- is.finite(la) & is.finite(lo) & !(abs(la) < 1e-4 & abs(lo) < 1e-4)
+  fl <- .step05_anchor_flags(df, min_edaph_n = 4L)
+  sp_v <- if ("species_standardized" %in% names(df)) as.character(df$species_standardized) else rep("Unknown", n)
+  st_v <- if ("stateProvince" %in% names(df)) toupper(trimws(ifelse(is.na(df$stateProvince), "", as.character(df$stateProvince)))) else rep("", n)
+  sec_vec <- rep(NA_character_, n); gap_vec <- rep(NA_real_, n); sum_rows <- list()
+  for (tx in sort(unique(sp_v[!is.na(sp_v) & nzchar(sp_v) & sp_v != "Unknown"]))) {
+    sp_idx <- which(sp_v == tx); g_idx <- sp_idx[has_xy[sp_idx] & !fl$quar[sp_idx] & !fl$open_h[sp_idx] & !fl$cl_noise[sp_idx]]
+    ng <- length(g_idx); if (ng < 12L) next
+    D_km <- compute_haversine_dist_km_matrix(cbind(longitude = lo[g_idx], latitude = la[g_idx])); diag(D_km) <- Inf
+    in_t <- logical(ng); in_t[1L] <- TRUE; mu <- integer(ng - 1L); mv <- integer(ng - 1L); mw <- numeric(ng - 1L)
+    bd <- D_km[1L, ]; bp <- rep(1L, ng)
+    for (ei in seq_len(ng - 1L)) {
+      cd <- which(!in_t); pk <- cd[which.min(bd[cd])[1L]]; mu[ei] <- bp[pk]; mv[ei] <- pk; mw[ei] <- bd[pk]; in_t[pk] <- TRUE
+      rm_i <- which(!in_t); if (length(rm_i) > 0L) { im <- rm_i[D_km[pk, rm_i] < bd[rm_i]]; if (length(im) > 0L) { bd[im] <- D_km[pk, im]; bp[im] <- pk } }
+    }
+    min_cl <- max(4L, as.integer(ceiling(0.04 * ng))); best_e <- NA_integer_; comp_a <- integer(0)
+    for (ei in order(mw, decreasing = TRUE)) {
+      vis <- logical(ng); q <- mu[ei]; vis[q] <- TRUE; hd <- 1L
+      while (hd <= length(q)) {
+        cur <- q[hd]; hd <- hd + 1L
+        nb <- c(mv[mu == cur & seq_along(mu) != ei], mu[mv == cur & seq_along(mv) != ei]); nb <- nb[!vis[nb]]
+        if (length(nb) > 0L) { vis[nb] <- TRUE; q <- c(q, nb) }
+      }
+      ca <- which(vis); if (min(length(ca), ng - length(ca)) >= min_cl) { best_e <- ei; comp_a <- ca; break }
+    }
+    if (is.na(best_e)) next
+    comp_b <- setdiff(seq_len(ng), comp_a)
+    if (length(comp_a) <= length(comp_b)) { min_c <- comp_a; maj_c <- comp_b } else { min_c <- comp_b; maj_c <- comp_a }
+    q90_w <- as.numeric(stats::quantile(mw, probs = 0.90, names = FALSE)); g_km <- mw[best_e]; g_rat <- g_km / max(q90_w, 10.0)
+    is_disj <- is.finite(g_km) && (g_km >= min_gap_km) && (g_rat >= min_gap_ratio)
+    sec_lbl <- if (is_disj) {
+      if (mean(lo[g_idx[min_c]]) < -90.5 && mean(lo[g_idx[maj_c]]) > -89.0) "Trans_Mississippi_Disjunct" else "Allopatric_Disjunct_Sector"
+    } else "Continuous_Range"
+    gap_vec[sp_idx] <- round(g_km, 2)
+    if (is_disj) {
+      sec_vec[g_idx[min_c]] <- sec_lbl; min_st <- unique(st_v[g_idx[min_c]][nzchar(st_v[g_idx[min_c]])]); maj_st <- unique(st_v[g_idx[maj_c]][nzchar(st_v[g_idx[maj_c]])])
+      ug_sp <- sp_idx[!has_xy[sp_idx] & nzchar(st_v[sp_idx]) & (st_v[sp_idx] %in% setdiff(min_st, maj_st))]
+      if (length(ug_sp) > 0L) sec_vec[ug_sp] <- sec_lbl
+    }
+    sum_rows[[length(sum_rows) + 1L]] <- data.frame(
+      Taxon = tx, N_Georef_Clean = ng, Max_MST_Gap_km = round(g_km, 2), Q90_MST_Edge_km = round(q90_w, 2), Gap_Ratio = round(g_rat, 3),
+      N_Primary_Sector = length(maj_c), N_Disjunct_Sector = length(min_c), Disjunction_Sector = sec_lbl, Has_Major_Disjunction = is_disj, stringsAsFactors = FALSE)
+  }
+  list(sector_vec = sec_vec, gap_km_vec = gap_vec, summary_df = if (length(sum_rows) > 0L) do.call(rbind, sum_rows) else empty_sum)
+}

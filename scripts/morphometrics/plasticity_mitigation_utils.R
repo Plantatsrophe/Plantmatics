@@ -276,6 +276,14 @@ merge_plastic_gmm_components_ridgeline <- function(
   nm_0 <- matrix(2L, nrow = G_0, ncol = G_0); rr_0 <- matrix(0.0, nrow = G_0, ncol = G_0)
   for (j in seq_len(G_0 - 1L)) for (l in (j + 1L):G_0) {
     rl <- .compute_ridgeline_valley_ratio(pis_0[j], mus_0[[j]], Sigs_0[[j]], pis_0[l], mus_0[[l]], Sigs_0[[l]])
+    if (min(pis_0[j], pis_0[l]) < 0.25) {
+      S_av <- 0.5 * (Sigs_0[[j]] + Sigs_0[[l]]); dv_jl <- mus_0[[j]] - mus_0[[l]]
+      d_jl <- sqrt(max(0.0, sum(dv_jl * tryCatch(solve(S_av, dv_jl), error = function(e) rep(0.0, p)))))
+      if (is.finite(d_jl) && d_jl >= 2.60) {
+        rl_eq <- .compute_ridgeline_valley_ratio(0.5, mus_0[[j]], Sigs_0[[j]], 0.5, mus_0[[l]], Sigs_0[[l]])
+        if (as.integer(rl_eq$n_modes) >= 2L && as.numeric(rl_eq$ridge_ratio) < ridge_thr) rl <- rl_eq
+      }
+    }
     nm_0[j, l] <- nm_0[l, j] <- as.integer(rl$n_modes); rr_0[j, l] <- rr_0[l, j] <- as.numeric(rl$ridge_ratio)
   }
   grps <- as.list(seq_len(G_0))
@@ -284,8 +292,8 @@ merge_plastic_gmm_components_ridgeline <- function(
     best_pair <- NULL; best_ratio <- -1.0
     for (a in seq_len(length(grps) - 1L)) for (b in (a + 1L):length(grps)) {
       nm_sub <- nm_0[grps[[a]], grps[[b]], drop = FALSE]; rr_sub <- rr_0[grps[[a]], grps[[b]], drop = FALSE]
-      pair_rr <- max(rr_sub)
-      if ((any(nm_sub <= 1L) || (pair_rr >= ridge_thr)) && (pair_rr > best_ratio)) {
+      pair_rr <- min(rr_sub)
+      if (all((nm_sub <= 1L) | (rr_sub >= ridge_thr)) && (pair_rr > best_ratio)) {
         best_ratio <- pair_rr; best_pair <- c(a, b)
       }
     }

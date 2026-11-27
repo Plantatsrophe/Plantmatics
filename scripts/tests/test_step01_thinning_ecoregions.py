@@ -245,6 +245,20 @@ class TestEPALevel3EcoregionAssignment(unittest.TestCase):
             self.assertIn("Middle_Atlantic_Coastal_Plain", vals)
             self.assertIn("South_Central_Plains", vals)
 
+    def test_habitat_stratified_thinning_preserves_azonal_outcrop_islands(self):
+        """Verify 15 km thinning separates azonal granite outcrops from adjacent zonal sand matrix."""
+        df_hab = pd.DataFrame([
+            {"catalogNumber": "SAND_1", "species_standardized": "Packera dubia", "determiner_tier": "Tier_1_Gold",
+             "decimalLatitude": 34.6650, "decimalLongitude": -80.5200, "coordinateUncertainty": 50.0, "lithic_outcrop_index": 0.05},
+            {"catalogNumber": "ROCK_1", "species_standardized": "Packera dubia", "determiner_tier": "Tier_1_Gold",
+             "decimalLatitude": 34.6690, "decimalLongitude": -80.5273, "coordinateUncertainty": 100.0, "lithic_outcrop_index": 0.82},
+            {"catalogNumber": "ROCK_2", "species_standardized": "Packera dubia", "determiner_tier": "Tier_2_Silver",
+             "decimalLatitude": 34.6705, "decimalLongitude": -80.5280, "coordinateUncertainty": 200.0, "lithic_outcrop_index": 0.78},
+        ])
+        res = spatially_balance_and_thin_vouchers(df_hab, spatial_thin_km=15.0, preserve_all_gold=False)
+        kept = set(res["catalogNumber"].tolist())
+        self.assertEqual(kept, {"SAND_1", "ROCK_1"})
+
 
 if __name__ == "__main__":
     unittest.main()

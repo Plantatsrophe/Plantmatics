@@ -185,7 +185,7 @@ if (grDevices::dev.cur() == 1L) grDevices::pdf(NULL)
   # Per-group 95% chi-square Mahalanobis outlier pruning on active anchors (exempting nomenclatural types)
   for (lvl in act_lvls) {
     idx_g <- which(is_train & g_raw == lvl)
-    if (length(idx_g) >= 5L) {
+    if (length(idx_g) >= max(5L, p_sub + 2L)) {
       sub_g <- X_sub[idx_g, , drop = FALSE]
       d2_g <- tryCatch(stats::mahalanobis(sub_g, colMeans(sub_g), stats::cov(sub_g) + diag(1e-4, p_sub)), error = function(e) rep(0.0, length(idx_g)))
       drop_g <- !is.na(d2_g) & (d2_g > stats::qchisq(0.95, df = p_sub)) & !is_type_row[idx_g]

@@ -400,6 +400,41 @@ class TestStep06OrganellarCoalescent(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, f"Organellar containment gate check failed:\n{proc.stdout}\n{proc.stderr}")
             self.assertIn("ORGANELLAR_GATE_OK", proc.stdout)
 
+    def test_shared_site_gdi_eliminates_asymmetric_missingness_bias(self) -> None:
+        """Verify shared-site gdi evaluates theta_A, theta_B, and d_XY on identical jointly callable loci."""
+        # A0, B0, B1 come from one panmictic population: loci 0..39 are invariant (0.0) where A0 dropped out (NaN),
+        # while loci 40..79 are polymorphic (0.5) across all 3 samples. Without shared-site masking, theta_B is
+        # diluted by 2x across loci 0..79 while d_XY is evaluated only on loci 40..79, inflating gdi > 0.20.
+        mat = np.zeros((3, 80), dtype=np.float64)
+        mat[:, 40:] = 0.5
+        mat[0, :40] = np.nan
+        blk_cols = [cols for cols in np.array_split(np.arange(80), 8)]
+        n_blk = len(blk_cols)
+        diff_blk = np.zeros((n_blk, 3, 3), dtype=np.float64)
+        call_blk = np.zeros((n_blk, 3, 3), dtype=np.float64)
+        w_het = np.zeros((n_blk, 3), dtype=np.float64)
+        w_call = np.zeros((n_blk, 3), dtype=np.float64)
+        for bi, cols in enumerate(blk_cols):
+            sub = mat[:, cols]
+            ok = np.isfinite(sub)
+            ok_f = ok.astype(np.float64)
+            xs, omx = np.where(ok, sub, 0.0), np.where(ok, 1.0 - sub, 0.0)
+            call_blk[bi] = (ok_f @ ok_f.T) * 50.0
+            diff_blk[bi] = xs @ omx.T + omx @ xs.T
+            w_call[bi] = np.sum(ok_f, axis=1) * 50.0
+            w_het[bi] = np.sum(2.0 * xs * omx, axis=1)
+        biased_df, _ = coal_mod.compute_coalescent_gdi_delimitation(
+            ["A0", "B0", "B1"], ["Deme_A", "Deme_B", "Deme_B"], diff_blk, call_blk, w_het, w_call, n_boot=50
+        )
+        sh_ctx = {"mode": "dosage", "mat": mat, "ok_all": np.isfinite(mat), "blk_cols": blk_cols, "site_scale": 50.0}
+        gdi_df, _ = coal_mod.compute_coalescent_gdi_delimitation(
+            ["A0", "B0", "B1"], ["Deme_A", "Deme_B", "Deme_B"], diff_blk, call_blk, w_het, w_call, n_boot=50, shared_ctx=sh_ctx
+        )
+        self.assertGreater(float(biased_df[biased_df["taxon"] == "Deme_A"].iloc[0]["coalescent_gdi"]), 0.20)
+        row_a = gdi_df[gdi_df["taxon"] == "Deme_A"].iloc[0]
+        self.assertEqual(float(row_a["coalescent_gdi"]), 0.0)
+        self.assertAlmostEqual(float(row_a["theta_lineage"]), float(row_a["theta_sister"]), places=6)
+
 
 if __name__ == "__main__":
     unittest.main()

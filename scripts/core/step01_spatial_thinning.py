@@ -195,6 +195,33 @@ def spatially_balance_and_thin_vouchers(
         thin_m = float(spatial_thin_km) * 1000.0
         sp_geo_groups: Dict[str, List[int]] = {}
         non_geo_indices: List[int] = []
+        has_hab_cols = any(
+            c in out_df.columns
+            for c in ("_thin_substrate_stratum", "is_rock_outcrop", "lithic_outcrop_index", "ssurgo_rock_outcrop_pct", "ecotype_regime")
+        )
+
+        def _row_hab_stratum(r_idx: int) -> str:
+            if not has_hab_cols:
+                return ""
+            r_sub = out_df.iloc[r_idx]
+            raw_s = str(r_sub.get("_thin_substrate_stratum", "") or "").strip()
+            if raw_s and raw_s.lower() not in ("nan", "none", "na"):
+                return raw_s
+            er_s = str(r_sub.get("ecotype_regime", "") or "").strip()
+            if er_s and er_s.startswith("Ecotype_"):
+                return er_s
+            ro_v = r_sub.get("is_rock_outcrop")
+            if ro_v is True or str(ro_v).strip().lower() in ("true", "1", "t", "yes"):
+                return "azonal_outcrop"
+            for nc_h, thr_h in (("lithic_outcrop_index", 0.45), ("ssurgo_rock_outcrop_pct", 15.0)):
+                if nc_h in out_df.columns:
+                    try:
+                        fv = float(r_sub.get(nc_h))
+                        if math.isfinite(fv):
+                            return "azonal_outcrop" if fv >= thr_h else "zonal_matrix"
+                    except (TypeError, ValueError):
+                        pass
+            return "zonal_matrix" if "is_rock_outcrop" in out_df.columns and str(ro_v).strip().lower() in ("false", "0", "f", "no") else ""
 
         for idx in active_indices:
             lat_v = lats[idx]
@@ -203,7 +230,9 @@ def spatially_balance_and_thin_vouchers(
             if lat_v is None or lon_v is None:
                 non_geo_indices.append(idx)
             else:
-                sp_geo_groups.setdefault(sp_val, []).append(idx)
+                hab_k = _row_hab_stratum(idx)
+                grp_k = f"{sp_val}||{hab_k}" if hab_k else sp_val
+                sp_geo_groups.setdefault(grp_k, []).append(idx)
 
         thinned_indices: List[int] = []
         for _sp_k, sp_idxs in sp_geo_groups.items():

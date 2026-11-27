@@ -311,20 +311,38 @@ if (grDevices::dev.cur() == 1L) {
       procrustes_r = NA_real_, procrustes_p = NA_real_, stringsAsFactors = FALSE
     )
   }
-  morph_linked_rows <- NULL
+  morph_linked_rows <- NULL; eff_cats <- as.character(pass_df$catalogNumber)
   if (!is.null(db_path) && nzchar(db_path) && file.exists(db_path)) {
     conn <- tryCatch(DBI::dbConnect(RSQLite::SQLite(), dbname = db_path, flags = RSQLite::SQLITE_RO), error = function(e) NULL)
     if (!is.null(conn)) {
       on.exit(tryCatch(DBI::dbDisconnect(conn), error = function(e) NULL), add = TRUE)
-      cats <- unique(stats::na.omit(pass_df$catalogNumber))
-      if (length(cats) >= 3L && db_table_exists_safe(conn, "otu_morphometrics")) {
-        q_cats <- paste(vapply(cats, function(s) as.character(DBI::dbQuoteString(conn, s)), character(1)), collapse = ", ")
-        morph_linked_rows <- tryCatch(DBI::dbGetQuery(conn, sprintf("SELECT catalogNumber, AVG(PC1) AS PC1, AVG(PC2) AS PC2, AVG(PC3) AS PC3 FROM otu_morphometrics WHERE run_id = %s AND catalogNumber IN (%s) GROUP BY catalogNumber;", as.character(DBI::dbQuoteString(conn, run_id)), q_cats)), error = function(e) NULL)
+      if (db_table_exists_safe(conn, "otu_morphometrics")) {
+        cats <- unique(stats::na.omit(eff_cats)); cats <- cats[nzchar(trimws(cats))]
+        if (length(cats) >= 1L) {
+          q_cats <- paste(vapply(cats, function(s) as.character(DBI::dbQuoteString(conn, s)), character(1)), collapse = ", ")
+          morph_linked_rows <- tryCatch(DBI::dbGetQuery(conn, sprintf("SELECT catalogNumber, AVG(PC1) AS PC1, AVG(PC2) AS PC2, AVG(PC3) AS PC3 FROM otu_morphometrics WHERE run_id = %s AND catalogNumber IN (%s) GROUP BY catalogNumber;", as.character(DBI::dbQuoteString(conn, run_id)), q_cats)), error = function(e) NULL)
+        }
+        miss_g3 <- intersect(geo_idx, which(is.na(eff_cats) | !nzchar(trimws(eff_cats))))
+        if (length(miss_g3) >= 1L && db_table_exists_safe(conn, "vouchers")) {
+          v_sub <- tryCatch(DBI::dbGetQuery(conn, sprintf("SELECT m.catalogNumber, v.species_standardized, v.decimalLatitude, v.decimalLongitude, COALESCE(v.is_centroid_or_inst_coord, 0) AS is_cent, AVG(m.PC1) AS PC1, AVG(m.PC2) AS PC2, AVG(m.PC3) AS PC3 FROM otu_morphometrics m JOIN vouchers v ON m.catalogNumber = v.catalogNumber WHERE m.run_id = %s AND v.decimalLatitude IS NOT NULL AND v.decimalLongitude IS NOT NULL GROUP BY m.catalogNumber;", as.character(DBI::dbQuoteString(conn, run_id)))), error = function(e) NULL)
+          if (is.data.frame(v_sub) && nrow(v_sub) > 0L) {
+            v_sub <- v_sub[suppressWarnings(as.integer(v_sub$is_cent)) == 0L, , drop = FALSE]; prx_rows <- list()
+            for (gi in miss_g3) {
+              sp_g <- if ("species_standardized" %in% names(pass_df)) as.character(pass_df$species_standardized[gi]) else NA_character_
+              cv <- if (!is.na(sp_g) && nzchar(sp_g)) v_sub[v_sub$species_standardized == sp_g, , drop = FALSE] else v_sub
+              if (nrow(cv) == 0L) next
+              dk <- 2.0 * 6371.0 * asin(pmin(1.0, sqrt(pmax(0.0, sin(((cv$decimalLatitude - lat_v[gi]) * pi / 180.0) / 2)^2 + cos(lat_v[gi] * pi / 180.0) * cos(cv$decimalLatitude * pi / 180.0) * sin(((cv$decimalLongitude - lon_v[gi]) * pi / 180.0) / 2)^2))))
+              hv <- which(is.finite(dk) & dk <= 2.0)
+              if (length(hv) >= 1L) { pk <- sprintf("__G3_PROXY_%d", gi); eff_cats[gi] <- pk; prx_rows[[length(prx_rows) + 1L]] <- data.frame(catalogNumber = pk, PC1 = mean(cv$PC1[hv], na.rm = TRUE), PC2 = mean(cv$PC2[hv], na.rm = TRUE), PC3 = mean(cv$PC3[hv], na.rm = TRUE), stringsAsFactors = FALSE) }
+            }
+            if (length(prx_rows) > 0L) morph_linked_rows <- dplyr::bind_rows(morph_linked_rows, dplyr::bind_rows(prx_rows))
+          }
+        }
       }
     }
   }
   if (!is.null(morph_linked_rows) && nrow(morph_linked_rows) >= 4L) {
-    m_match <- match(pass_df$catalogNumber, morph_linked_rows$catalogNumber)
+    m_match <- match(eff_cats, morph_linked_rows$catalogNumber)
     ok_m <- which(!is.na(m_match) & is.finite(morph_linked_rows$PC1[m_match]) & is.finite(morph_linked_rows$PC2[m_match]))
     if (length(ok_m) >= 4L) {
       X_m <- as.matrix(morph_linked_rows[m_match[ok_m], c("PC1", "PC2", "PC3"), drop = FALSE]); X_m[!is.finite(X_m)] <- 0.0

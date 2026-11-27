@@ -341,6 +341,14 @@ main <- function(cli_args = commandArgs(trailingOnly = TRUE)) {
   niche <- run_warren_niche_identity_tests(vdf, kept_rf, opts$permutations, is_intra, psel$primary_env_vars, psel$primary_clim_vars, psel$primary_edaph_vars, psel$rf_var_weights)
   edc <- c("Pair", "Taxon1", "Taxon2", "D_edaph", "I_edaph", "p_equiv_D_edaph", "p_bg_D_edaph")
   niche$edaphic_schoener_d <- if (length(psel$primary_edaph_vars) > 0L && is.data.frame(niche$summary) && all(edc %in% names(niche$summary))) niche$summary[, edc, drop = FALSE] else compute_edaphic_schoener_d(vdf, psel$primary_edaph_vars, psel$rf_var_weights, opts$permutations, is_intra)
+  vdf$edaphic_schoener_d <- rep(NA_real_, nrow(vdf))
+  if (is.data.frame(niche$edaphic_schoener_d) && nrow(niche$edaphic_schoener_d) > 0L && all(c("Taxon1", "Taxon2", "D_edaph") %in% names(niche$edaphic_schoener_d))) {
+    esd <- niche$edaphic_schoener_d; gk <- if (is_intra) as.character(vdf$analysis_group) else as.character(vdf$species_standardized)
+    for (ug in unique(stats::na.omit(gk))) {
+      dv_u <- suppressWarnings(as.numeric(esd$D_edaph[esd$Taxon1 == ug | esd$Taxon2 == ug])); dv_u <- dv_u[is.finite(dv_u)]
+      if (length(dv_u) > 0L) vdf$edaphic_schoener_d[!is.na(gk) & gk == ug] <- round(min(dv_u), 4)
+    }
+  }
 
   geo_vdf <- vdf
   if (nrow(ng_df) > 0L) {
@@ -349,10 +357,13 @@ main <- function(cli_args = commandArgs(trailingOnly = TRUE)) {
     ng_df$high_coord_uncertainty_flag <- TRUE; ng_df$is_training_eligible_coord <- FALSE; ng_df$is_clim_eligible_coord <- FALSE
     ng_df$is_edaphic_eligible_coord <- FALSE; ng_df$edaphic_coord_weight <- 0.0; ng_df$env_mahal_d2 <- NA_real_; ng_df$env_mcd_outlier_flag <- FALSE
     ng_df <- execute_crossmodal_consensus(ng_df, is_intra, NULL, psel$primary_env_vars, psel$primary_clim_vars, psel$primary_edaph_vars, psel$rf_var_weights)
+    if ("sensu_stricto_ecotype_regime" %in% names(geo_vdf)) ng_df$sensu_stricto_ecotype_regime <- rep(geo_vdf$sensu_stricto_ecotype_regime[1L], nrow(ng_df))
     vdf <- .bind_rows_schema_safe(geo_vdf, ng_df)
   }
-  for (nc in c("hopkins_adjusted_doy", "hopkins_adjusted_doy_resid", "anthesis_dominance_weight", "allochronic_bimodality_delta_bic", "nearest_type_basionym_edaphic_z", "lithic_outcrop_index", "summer_moisture_deficit_idx", "maritime_continentality_idx")) if (!(nc %in% names(vdf))) vdf[[nc]] <- rep(NA_real_, nrow(vdf))
-  for (cc in c("nearest_type_niche_basionym", "ecotype_regime")) if (!(cc %in% names(vdf))) vdf[[cc]] <- rep(NA_character_, nrow(vdf))
+  disj_res <- if (exists("compute_geographic_disjunction_audit", mode = "function")) compute_geographic_disjunction_audit(vdf) else list(sector_vec = rep(NA_character_, nrow(vdf)), gap_km_vec = rep(NA_real_, nrow(vdf)), summary_df = data.frame())
+  vdf$biogeographic_sector <- disj_res$sector_vec; vdf$disjunction_gap_km <- disj_res$gap_km_vec
+  for (nc in c("hopkins_adjusted_doy", "hopkins_adjusted_doy_resid", "anthesis_dominance_weight", "allochronic_bimodality_delta_bic", "nearest_type_basionym_edaphic_z", "sensu_stricto_edaphic_z", "edaphic_schoener_d", "disjunction_gap_km", "lithic_outcrop_index", "summer_moisture_deficit_idx", "maritime_continentality_idx")) if (!(nc %in% names(vdf))) vdf[[nc]] <- rep(NA_real_, nrow(vdf))
+  for (cc in c("nearest_type_niche_basionym", "ecotype_regime", "sensu_stricto_ecotype_regime", "biogeographic_sector")) if (!(cc %in% names(vdf))) vdf[[cc]] <- rep(NA_character_, nrow(vdf))
 
   exp_df <- if (all(c("decimalLatitude", "decimalLongitude") %in% names(vdf))) vdf[, setdiff(names(vdf), c("latitude", "longitude")), drop = FALSE] else vdf
   write_csv_atomic(exp_df, opts$output_flags, demo = dm)
@@ -383,7 +394,19 @@ main <- function(cli_args = commandArgs(trailingOnly = TRUE)) {
       write_env_outlier_quarantine_audit(vdf, list(env_mahal_d2 = vdf$env_mahal_d2, env_mcd_outlier_flag = vdf$env_mcd_outlier_flag, env_outlier_rescued_azonal = c(ra, rep(FALSE, nrow(ng_df)))), acsv, c(anc_g, rep(FALSE, nrow(ng_df))))
     } else write_env_outlier_quarantine_audit(vdf, srf$env_outlier_screen, acsv, anc_g)
   }
-  if (is.data.frame(srf$ibe_summary) && nrow(srf$ibe_summary) > 0L) write_csv_atomic(srf$ibe_summary, file.path(dirname(opts$output_summary), "isolation_by_environment_summary.csv"), demo = dm)
+  ibe_out_df <- if (is.data.frame(srf$ibe_summary) && nrow(srf$ibe_summary) > 0L) srf$ibe_summary else {
+    ia_ibe <- if (length(srf$anchor_idx) >= 8L) srf$anchor_idx[srf$anchor_idx >= 1L & srf$anchor_idx <= nrow(geo_vdf)] else seq_len(nrow(geo_vdf))
+    d_ibe <- geo_vdf[ia_ibe, , drop = FALSE]; sib_m <- file.path(dirname(opts$vouchers), "morphometric_flags.csv")
+    m_src <- if (!is.null(pm_df) && nrow(pm_df) > 0L) pm_df else if (file.exists(sib_m)) tryCatch(readr::read_csv(sib_m, show_col_types = FALSE), error = function(e) NULL) else NULL
+    if (is.data.frame(m_src) && "catalogNumber" %in% names(m_src)) {
+      m_cols <- unique(c("catalogNumber", intersect("plant_individual_id", names(m_src)), grep("^(PC|ECT_PC)[1-4]$", names(m_src), value = TRUE), intersect(c("aspect_ratio", "petiole_to_blade_ratio", "solidity", "dissection_index"), names(m_src))))
+      d_ibe <- left_join_by_voucher_individual(d_ibe, m_src[, m_cols, drop = FALSE], m_cols)
+    }
+    mm_ibe <- if (!is.null(srf$MEMs) && nrow(as.matrix(srf$MEMs)) == nrow(geo_vdf)) as.matrix(srf$MEMs)[ia_ibe, , drop = FALSE] else NULL
+    tryCatch(compute_isolation_by_environment(d_ibe, psel$primary_edaph_vars, psel$primary_clim_vars, mm_ibe, opts$permutations), error = function(e) NULL)
+  }
+  if (is.data.frame(ibe_out_df) && nrow(ibe_out_df) > 0L) write_csv_atomic(ibe_out_df, file.path(dirname(opts$output_summary), "isolation_by_environment_summary.csv"), demo = dm)
+  if (is.data.frame(disj_res$summary_df) && nrow(disj_res$summary_df) > 0L) write_csv_atomic(disj_res$summary_df, file.path(dirname(opts$output_summary), "geographic_disjunction_summary.csv"), demo = dm)
   if (is.data.frame(srf$variance_partition) && nrow(srf$variance_partition) > 0L) write_csv_atomic(srf$variance_partition, file.path(dirname(opts$output_summary), "variance_partitioning_summary.csv"), demo = dm)
   if (!skip_f) export_spatial_rf_figures(geo_vdf, srf, niche, opts$output_plot, pheno_res = pheno_res)
   message("=== Multimodal Spatial RF & Niche Modeling Analysis Complete ===")

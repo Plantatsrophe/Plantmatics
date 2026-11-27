@@ -344,19 +344,20 @@ build_taxon_morphotype_subclusters <- function(morph_df, min_vouchers = 5L) {
     } else {
       character(0)
     }
-    eco_ok <- length(eco_col) == nrow(morph_df) && sum(table(eco_col[!is.na(eco_col) & nzchar(eco_col)]) >= min_vouchers) >= 2L
+    if (length(eco_col) == nrow(morph_df)) eco_col[is.na(eco_col) | !nzchar(eco_col) | (eco_col %in% c("NA", "Unknown", "Unassigned_No_Coords")) | (eco_col %in% u_sp)] <- NA_character_
+    eco_ok <- length(eco_col) == nrow(morph_df) && sum(table(eco_col[!is.na(eco_col)]) >= min_vouchers) >= 2L
     if (!eco_ok) return(list(morph_df = morph_df, subcluster_mode = FALSE))
-    cand_lbl <- ifelse(!is.na(eco_col) & nzchar(eco_col), eco_col, raw_sp)
+    cand_lbl <- eco_col
   } else {
     k_vec <- if (has_gmm) ifelse(is.na(morph_df$gmm_cluster), 1L, as.integer(morph_df$gmm_cluster)) else rep(1L, nrow(morph_df))
     short_sp <- sub("^Packera[[:space:]]+", "P. ", raw_sp); cand_lbl <- sprintf("%s [K%d]", short_sp, k_vec)
   }
-  tab_c <- table(cand_lbl); valid_c <- names(tab_c)[tab_c >= min_vouchers]
+  tab_c <- table(cand_lbl[!is.na(cand_lbl)]); valid_c <- names(tab_c)[tab_c >= min_vouchers]
   if (length(valid_c) < 2L) {
     if (n_sp >= 2L) return(list(morph_df = morph_df, subcluster_mode = FALSE))
     return(list(morph_df = morph_df, subcluster_mode = FALSE))
   }
-  keep_m <- cand_lbl %in% valid_c; morph_df <- morph_df[keep_m, , drop = FALSE]; morph_df$base_species <- raw_sp[keep_m]
+  keep_m <- !is.na(cand_lbl) & (cand_lbl %in% valid_c); morph_df <- morph_df[keep_m, , drop = FALSE]; morph_df$base_species <- raw_sp[keep_m]
   morph_df$base_cda_predicted_taxon <- if ("cda_predicted_taxon" %in% names(morph_df)) .std_complex_taxon(morph_df$cda_predicted_taxon) else raw_sp[keep_m]
   morph_df$species_standardized <- cand_lbl[keep_m]
   if ("cda_predicted_taxon" %in% names(morph_df)) {

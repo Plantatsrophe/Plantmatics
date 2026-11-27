@@ -241,23 +241,18 @@ compute_type_locality_ecological_control <- function(df, primary_env_vars = NULL
     return(list(type_edaphic_z_score = numeric(0), nearest_type_niche_taxon = character(0), matches_type_lithology = logical(0),
                 nearest_type_niche_basionym = character(0), nearest_type_basionym_edaphic_z = numeric(0), is_heterotypic_type_audit = logical(0),
                 type_niche_status = character(0), type_niche_audit_status = character(0), rf_prediction_source_hint = character(0),
-                type_niche_profiles = list(), basionym_niche_profiles = list()))
+                type_niche_profiles = list(), basionym_niche_profiles = list(), sensu_stricto_ecotype_regime = NA_character_, sensu_stricto_edaphic_z = numeric(0)))
   }
-
   t_info <- if (exists(".identify_type_specimen_vec", mode = "function")) .identify_type_specimen_vec(df) else {
     ts_raw <- if ("type_status" %in% names(df)) as.character(df$type_status) else rep("", n); ts_raw[is.na(ts_raw)] <- ""
-    is_t <- grepl("(^|[^[:alnum:]_])(holotype|lectotype|neotype|epitype|isotype|isolectotype|isoneotype|syntype|isosyntype|paratype|isoparatype|type|cotype)s?($|[^[:alnum:]_])", ts_raw, ignore.case = TRUE) &
-            !grepl("not a type|non-type|false type", ts_raw, ignore.case = TRUE)
+    is_t <- grepl("(^|[^[:alnum:]_])(holotype|lectotype|neotype|epitype|isotype|isolectotype|isoneotype|syntype|isosyntype|paratype|isoparatype|type|cotype)s?($|[^[:alnum:]_])", ts_raw, ignore.case = TRUE) & !grepl("not a type|non-type|false type", ts_raw, ignore.case = TRUE)
     if ("is_type_specimen" %in% names(df)) is_t <- is_t | .to_bool_s05(df$is_type_specimen)
     list(type_rank = ifelse(is_t, 2L, 0L), is_type_specimen = is_t)
   }
   is_type_vec <- as.logical(t_info$is_type_specimen); is_type_vec[is.na(is_type_vec)] <- FALSE
   is_intra <- isTRUE(intraspecific_mode) || (("species_standardized" %in% names(df)) && length(unique(stats::na.omit(df$species_standardized))) < 2L)
-  grp_vec <- if (is_intra && "analysis_group" %in% names(df)) as.character(df$analysis_group)
-    else if ("species_standardized" %in% names(df)) as.character(df$species_standardized)
-    else if ("analysis_group" %in% names(df)) as.character(df$analysis_group) else rep("Unknown", n)
-  active_taxa <- sort(unique(grp_vec[!is.na(grp_vec) & nzchar(grp_vec) & grp_vec != "Unknown"]))
-  if (length(active_taxa) == 0L) active_taxa <- "Unknown"
+  grp_vec <- if (is_intra && "analysis_group" %in% names(df)) as.character(df$analysis_group) else if ("species_standardized" %in% names(df)) as.character(df$species_standardized) else if ("analysis_group" %in% names(df)) as.character(df$analysis_group) else rep("Unknown", n)
+  active_taxa <- sort(unique(grp_vec[!is.na(grp_vec) & nzchar(grp_vec) & grp_vec != "Unknown"])); if (length(active_taxa) == 0L) active_taxa <- "Unknown"
 
   if ((is.null(primary_env_vars) || length(primary_env_vars) == 0L) && "primary_env_predictors" %in% names(df)) {
     r0 <- stats::na.omit(as.character(df$primary_env_predictors)); if (length(r0) > 0L && nzchar(r0[1L])) primary_env_vars <- trimws(unlist(strsplit(r0[1L], ";", fixed = TRUE)))
@@ -400,44 +395,32 @@ compute_type_locality_ecological_control <- function(df, primary_env_vars = NULL
   audit_wts <- if (length(edaph_v) > 0L) w_ed else w_en
   is_syn_tx <- function(x) grepl("^(Ecotype|Morphotype|Cluster|Geno_Cluster|Subcluster|Complex)_[0-9]+", as.character(x), ignore.case = TRUE)
   canon_sp <- if ("species_standardized" %in% names(df)) { sv <- stats::na.omit(trimws(as.character(df$species_standardized))); sv <- sv[nzchar(sv) & sv != "Unknown"]; if (length(sv) > 0L) names(sort(table(sv), decreasing = TRUE))[1L] else "" } else ""
-  pr_sp_ss <- NULL
+  pr_sp_ss <- NULL; ss_ecotype_regime <- NA_character_
   if (is_intra && any(is_syn_tx(active_taxa)) && nzchar(canon_sp)) {
     elig_sp <- which(is_type_georef_ok); homo_sp <- elig_sp[is_homo_all[elig_sp]]; excl_sp <- c(which(is_quar_type), elig_sp[!is_homo_all[elig_sp]])
     clean_sp <- setdiff(which(is_anc_v), c(elig_sp, which(is_quar_type)))
     topo_sp <- if (length(homo_sp) == 0L && length(clean_sp) >= 2L) (if (exists(".resolve_locus_classicus_topotype_rows", mode = "function")) .resolve_locus_classicus_topotype_rows(df, clean_sp, canon_sp) else .fallback_topotype_rows_s05(df, clean_sp, canon_sp)) else integer(0)
+    ss_ref <- if (length(homo_sp) > 0L) homo_sp else topo_sp
+    if (length(ss_ref) > 0L) { sg <- grp_vec[ss_ref]; sg <- sg[!is.na(sg) & is_syn_tx(sg)]; if (length(sg) > 0L) ss_ecotype_regime <- names(sort(table(sg), decreasing = TRUE))[1L] }
     pr_sp_ss <- if (length(homo_sp) > 0L) build_profile(seq_len(n), homo_sp, excl_rows = excl_sp) else if (length(topo_sp) >= 2L) { p0 <- build_profile(seq_len(n), topo_sp, excl_rows = excl_sp); p0$anchor_type_rows <- integer(0); p0 } else NULL
   }
 
   for (tx in active_taxa) {
-    tx_rows <- which(grp_vec == tx); elig_t <- tx_rows[is_type_georef_ok[tx_rows]]
-    homo_t <- elig_t[is_homo_all[elig_t]]; het_t <- elig_t[!is_homo_all[elig_t]]
-    q_tx <- tx_rows[is_quar_type[tx_rows]]; excl_ss <- c(q_tx, het_t)
-    clean_nt <- setdiff(tx_rows[is_anc_v[tx_rows]], c(elig_t, q_tx))
-    topo_t <- if (length(homo_t) == 0L && length(clean_nt) >= 2L && !is_syn_tx(tx)) {
-      if (exists(".resolve_locus_classicus_topotype_rows", mode = "function")) .resolve_locus_classicus_topotype_rows(df, clean_nt, tx) else .fallback_topotype_rows_s05(df, clean_nt, tx)
-    } else integer(0)
-    if (length(homo_t) > 0L) {
-      pr_ss <- build_profile(tx_rows, homo_t, excl_rows = excl_ss)
-      type_niche_status[homo_t] <- "Confirmed_Type_Control"; type_niche_audit_status[homo_t] <- "Confirmed_Type_Control"
-    } else if (length(topo_t) >= 2L) {
-      pr_ss <- build_profile(tx_rows, topo_t, excl_rows = excl_ss); pr_ss$anchor_type_rows <- integer(0)
-    } else if (length(het_t) > 0L) {
-      pr_ss <- if (length(clean_nt) >= 2L) build_profile(tx_rows, integer(0), excl_rows = excl_ss) else build_profile(tx_rows, het_t, excl_rows = q_tx)
+    tx_rows <- which(grp_vec == tx); elig_t <- tx_rows[is_type_georef_ok[tx_rows]]; homo_t <- elig_t[is_homo_all[elig_t]]; het_t <- elig_t[!is_homo_all[elig_t]]
+    q_tx <- tx_rows[is_quar_type[tx_rows]]; excl_ss <- c(q_tx, het_t); clean_nt <- setdiff(tx_rows[is_anc_v[tx_rows]], c(elig_t, q_tx))
+    topo_t <- if (length(homo_t) == 0L && length(clean_nt) >= 2L && !is_syn_tx(tx)) (if (exists(".resolve_locus_classicus_topotype_rows", mode = "function")) .resolve_locus_classicus_topotype_rows(df, clean_nt, tx) else .fallback_topotype_rows_s05(df, clean_nt, tx)) else integer(0)
+    if (length(homo_t) > 0L) { pr_ss <- build_profile(tx_rows, homo_t, excl_rows = excl_ss); type_niche_status[homo_t] <- "Confirmed_Type_Control"; type_niche_audit_status[homo_t] <- "Confirmed_Type_Control"
+    } else if (length(topo_t) >= 2L) { pr_ss <- build_profile(tx_rows, topo_t, excl_rows = excl_ss); pr_ss$anchor_type_rows <- integer(0)
+    } else if (length(het_t) > 0L) { pr_ss <- if (length(clean_nt) >= 2L) build_profile(tx_rows, integer(0), excl_rows = excl_ss) else build_profile(tx_rows, het_t, excl_rows = q_tx)
     } else pr_ss <- build_profile(tx_rows, integer(0), excl_rows = q_tx)
-
     ref_het_pr <- if (!is.null(pr_sp_ss)) pr_sp_ss else pr_ss
-    if (length(het_t) > 0L) {
-      for (hi in het_t) {
-        ev_h <- eval_prof(hi, ref_het_pr, audit_vars, audit_wts); pe <- ev_h$p_eff
-        if (pe >= 1L) {
-          c_chi <- stats::qchisq(0.99, df = pe); c_rms <- sqrt(c_chi / pe)
-          if ((is.finite(ev_h$z_rms) && ev_h$z_rms > c_rms) || (is.finite(ev_h$sum_z2) && ev_h$sum_z2 > c_chi)) {
-            is_het_audit[hi] <- TRUE; type_niche_status[hi] <- "Type_Synonymy_Candidate"
-            type_niche_audit_status[hi] <- "Type_Synonymy_Candidate"; rf_source_hint[hi] <- "Passive_Heterotypic_Type_Audit"
-          } else {
-            type_niche_status[hi] <- "Confirmed_Type_Control"; type_niche_audit_status[hi] <- "Concordant_Heterotypic_Type"
-          }
-        }
+    if (length(het_t) > 0L) for (hi in het_t) {
+      ev_h <- eval_prof(hi, ref_het_pr, audit_vars, audit_wts); pe <- ev_h$p_eff
+      if (pe >= 1L) {
+        c_chi <- stats::qchisq(0.99, df = pe); c_rms <- sqrt(c_chi / pe)
+        if ((is.finite(ev_h$z_rms) && ev_h$z_rms > c_rms) || (is.finite(ev_h$sum_z2) && ev_h$sum_z2 > c_chi)) {
+          is_het_audit[hi] <- TRUE; type_niche_status[hi] <- "Type_Synonymy_Candidate"; type_niche_audit_status[hi] <- "Type_Synonymy_Candidate"; rf_source_hint[hi] <- "Passive_Heterotypic_Type_Audit"
+        } else { type_niche_status[hi] <- "Confirmed_Type_Control"; type_niche_audit_status[hi] <- "Concordant_Heterotypic_Type" }
       }
     }
     type_profiles[[tx]] <- pr_ss
@@ -448,20 +431,20 @@ compute_type_locality_ecological_control <- function(df, primary_env_vars = NULL
     if (is.na(bn) || !nzchar(bn) || is_syn_tx(bn)) next
     b_rows <- elig_type_all[bas_all[elig_type_all] == bn]; tx_bn <- grp_vec[b_rows[1L]]; tx_r <- which(grp_vec == tx_bn)
     ref_sd <- if (!is.null(pr_sp_ss)) pr_sp_ss$sd else if (!is.null(type_profiles[[tx_bn]])) type_profiles[[tx_bn]]$sd else NULL
-    basionym_profiles[[bn]] <- if (all(is_homo_all[b_rows])) build_profile(tx_r, b_rows, excl_rows = tx_r[is_quar_type[tx_r] | (is_type_georef_ok[tx_r] & !is_homo_all[tx_r])])
-      else build_profile(b_rows, b_rows, excl_rows = integer(0), fixed_sd = ref_sd)
+    basionym_profiles[[bn]] <- if (all(is_homo_all[b_rows])) build_profile(tx_r, b_rows, excl_rows = tx_r[is_quar_type[tx_r] | (is_type_georef_ok[tx_r] & !is_homo_all[tx_r])]) else build_profile(b_rows, b_rows, excl_rows = integer(0), fixed_sd = ref_sd)
   }
   for (tx in active_taxa) if (!is_syn_tx(tx) && !any(grp_vec[elig_type_all] == tx) && !(tx %in% names(basionym_profiles))) basionym_profiles[[tx]] <- type_profiles[[tx]]
   if (!is.null(pr_sp_ss) && nzchar(canon_sp) && !(canon_sp %in% names(basionym_profiles))) basionym_profiles[[canon_sp]] <- pr_sp_ss
   bas_names <- names(basionym_profiles)
 
   type_edaphic_z <- numeric(n); nearest_type_niche <- character(n); matches_lith <- rep(TRUE, n)
-  nearest_basionym <- rep(NA_character_, n); nearest_bas_z <- rep(NA_real_, n)
+  nearest_basionym <- rep(NA_character_, n); nearest_bas_z <- rep(NA_real_, n); ss_edaphic_z <- rep(NA_real_, n)
   for (i in seq_len(n)) {
     g_sp <- grp_vec[i]; if (is.na(g_sp) || !(g_sp %in% active_taxa)) g_sp <- active_taxa[1L]
     z_ed <- vapply(active_taxa, function(tx) eval_prof(i, type_profiles[[tx]], edaph_v, w_ed)$z_rms, numeric(1))
     z_en <- vapply(active_taxa, function(tx) eval_prof(i, type_profiles[[tx]], env_v, w_en)$z_rms, numeric(1))
     gp <- match(g_sp, active_taxa); type_edaphic_z[i] <- round(z_ed[if (is.na(gp)) 1L else gp], 4)
+    ss_edaphic_z[i] <- if (!is.null(pr_sp_ss)) round(eval_prof(i, pr_sp_ss, edaph_v, w_ed)$z_rms, 4) else type_edaphic_z[i]
     nearest_type_niche[i] <- active_taxa[which.min(0.60 * z_ed + 0.40 * z_en)][1L]
     if (length(bas_names) > 0L) {
       zb_ed <- vapply(bas_names, function(bn) eval_prof(i, basionym_profiles[[bn]], edaph_v, w_ed)$z_rms, numeric(1))
@@ -474,5 +457,6 @@ compute_type_locality_ecological_control <- function(df, primary_env_vars = NULL
   list(type_edaphic_z_score = type_edaphic_z, nearest_type_niche_taxon = nearest_type_niche, matches_type_lithology = as.logical(matches_lith),
        nearest_type_niche_basionym = nearest_basionym, nearest_type_basionym_edaphic_z = nearest_bas_z, is_heterotypic_type_audit = is_het_audit,
        type_niche_status = type_niche_status, type_niche_audit_status = type_niche_audit_status, rf_prediction_source_hint = rf_source_hint,
-       type_niche_profiles = type_profiles, basionym_niche_profiles = basionym_profiles)
+       type_niche_profiles = type_profiles, basionym_niche_profiles = basionym_profiles,
+       sensu_stricto_ecotype_regime = ss_ecotype_regime, sensu_stricto_edaphic_z = ss_edaphic_z)
 }

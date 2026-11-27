@@ -256,6 +256,30 @@ if manifest_df is not None and flagged_ramets and {'catalogNumber', 'plant_indiv
     manifest_df = manifest_df.loc[_keep_m].copy()
 
 pre_balance_n = len(subset_df)
+if spatial_thin_km > 0.0 and 'catalogNumber' in subset_df.columns:
+    _hab_map = {}
+    for _tf_h in (triage_files if exclude_misidentified else []):
+        for _fn_h in ('multimodal_conflict_flags.csv', 'ssurgo_edaphic_validation.csv'):
+            _cand_h = _tf_h.parent / _fn_h
+            if _cand_h.is_file() and _cand_h.stat().st_size > 0:
+                try:
+                    _hdf = pd.read_csv(_cand_h, low_memory=False)
+                    if 'catalogNumber' in _hdf.columns:
+                        for _, _hr in _hdf.iterrows():
+                            _hc = str(_hr.get('catalogNumber') or '').strip()
+                            if not _hc or _hc in _hab_map:
+                                continue
+                            _er = str(_hr.get('ecotype_regime') or '').strip()
+                            if _er.startswith('Ecotype_'):
+                                _hab_map[_hc] = _er
+                            elif str(_hr.get('is_rock_outcrop') or '').strip().lower() in ('true', '1', 't', 'yes'):
+                                _hab_map[_hc] = 'azonal_outcrop'
+                            elif 'lithic_outcrop_index' in _hdf.columns and pd.notna(_hr.get('lithic_outcrop_index')):
+                                _hab_map[_hc] = 'azonal_outcrop' if float(_hr.get('lithic_outcrop_index')) >= 0.45 else 'zonal_matrix'
+                except Exception:
+                    pass
+    if _hab_map:
+        subset_df['_thin_substrate_stratum'] = subset_df['catalogNumber'].astype(str).str.strip().map(lambda c: _hab_map.get(c, ''))
 subset_df = spatially_balance_and_thin_vouchers(
     subset_df,
     spatial_thin_km=spatial_thin_km,
@@ -267,6 +291,8 @@ subset_df = spatially_balance_and_thin_vouchers(
     manifest_df=manifest_df,
     workspace_dir=root_data.parent,
 )
+if '_thin_substrate_stratum' in subset_df.columns:
+    subset_df = subset_df.drop(columns=['_thin_substrate_stratum'])
 if no_spatial_weights:
     subset_df['spatial_balance_weight'] = 1.0
 

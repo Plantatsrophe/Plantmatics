@@ -214,17 +214,28 @@ build_triage_queue <- function(opts) {
     vouchers <- sql_master
     if ("plant_height_mm" %in% names(vouchers) && !("plant_height_cm" %in% names(vouchers))) vouchers$plant_height_cm <- round(suppressWarnings(as.numeric(vouchers$plant_height_mm)) / 10.0, 2)
     if (!("can3" %in% names(vouchers))) vouchers$can3 <- if ("PC3" %in% names(vouchers)) suppressWarnings(as.numeric(vouchers$PC3)) else NA_real_
+    if (!is.null(opts$multimodal_flags) && nzchar(opts$multimodal_flags) && file.exists(opts$multimodal_flags)) {
+      mm_ex <- tryCatch(readr::read_csv(opts$multimodal_flags, show_col_types = FALSE), error = function(e) NULL)
+      if (is.data.frame(mm_ex) && "catalogNumber" %in% names(mm_ex)) {
+        mm_ex$catalogNumber <- as.character(mm_ex$catalogNumber)
+        ex_num <- intersect(c("sensu_stricto_edaphic_z", "edaphic_schoener_d", "disjunction_gap_km"), names(mm_ex))
+        ex_chr <- intersect(c("sensu_stricto_ecotype_regime", "biogeographic_sector", "ecotype_regime"), names(mm_ex))
+        ex_keep <- unique(c("catalogNumber", intersect("plant_individual_id", names(mm_ex)), ex_num, ex_chr))
+        if (length(c(ex_num, ex_chr)) > 0L) vouchers <- safe_left_join_and_coalesce(vouchers, mm_ex[, ex_keep, drop = FALSE], numeric_coalesce_cols = ex_num, chr_coalesce_cols = ex_chr, append_missing = TRUE)
+      }
+    }
     message(sprintf("Hydrated %d specimen rows from SQLite v_integrative_triage_master.", nrow(vouchers)))
   } else {
     mm_numeric_coalesce <- c(
       "doy", "decimalLatitude", "decimalLongitude", "soil_ph", "soil_sand", "soil_cec", "soil_bulk_density", "delta_doy",
       "hopkins_adjusted_doy", "hopkins_adjusted_doy_resid", "anthesis_dominance_weight", "allochronic_bimodality_delta_bic",
       "fine_soil_ph", "fine_soil_sand", "fine_bedrock_depth_cm", "ssurgo_rock_outcrop_pct", "lithic_outcrop_index",
-      "wetland_seepage_index", "nearest_type_basionym_edaphic_z", "edaphic_z_score", "type_edaphic_z_score", "climatic_z_score",
+      "wetland_seepage_index", "nearest_type_basionym_edaphic_z", "sensu_stricto_edaphic_z", "edaphic_schoener_d", "disjunction_gap_km",
+      "edaphic_z_score", "type_edaphic_z_score", "climatic_z_score",
       "spatial_block_cv_acc", "rf_predicted_prob", "rf_given_taxon_prob", "open_set_p_value", "open_set_novelty_p",
       "log1p_capitulum_count", .STEP07_MORPHO_NUM_COLS
     )
-    step07_chr_coalesce <- c("ecotype_regime", "anthesis_filter_status", "nearest_type_niche_basionym", "typified_basionym", "concept_synonymy_status", "anchor_tier_source")
+    step07_chr_coalesce <- c("ecotype_regime", "sensu_stricto_ecotype_regime", "biogeographic_sector", "anthesis_filter_status", "nearest_type_niche_basionym", "typified_basionym", "concept_synonymy_status", "anchor_tier_source")
     step07_lgl_coalesce <- c("is_open_or_hybrid_concept")
     run_dir_env <- env_plantmatics_or_packera("PLANTMATICS_RUN_DIR", "PACKERA_RUN_DIR")
     def_dt_dir <- normalizePath(if (nzchar(run_dir_env)) file.path(run_dir_env, "data/tables") else "data/tables", mustWork = FALSE)

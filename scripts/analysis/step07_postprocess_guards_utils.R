@@ -127,6 +127,15 @@ if (grDevices::dev.cur() == 1L) grDevices::pdf(NULL)
   for (mi in which(st_res$is_marginal_ext_v & !st_res$portal_lag_flag & (treat_sub == "Confirmed_Species"))) {
     if (!grepl("Marginal Range Extension Preserved", rationales[mi], fixed = TRUE)) rationales[mi] <- paste0(rationales[mi], sprintf(" [Marginal Range Extension Preserved: rf_given_p=%.3f, clim_z=%s]", mv$rf_given_p_dv[mi], ifelse(is.finite(mv$clim_z_dv[mi]), sprintf("%.2f", mv$clim_z_dv[mi]), "NA")))
   }
+  if (!is.null(cl_ctx$ungeoref_morph_regime_aff) && length(cl_ctx$ungeoref_morph_regime_aff) == n) {
+    df$ungeoref_morph_regime_affinity <- as.character(cl_ctx$ungeoref_morph_regime_aff)
+    df$ungeoref_morph_regime_prob <- as.numeric(cl_ctx$ungeoref_morph_regime_prob)
+    for (ui in which(!is.na(cl_ctx$ungeoref_morph_regime_aff) & nzchar(cl_ctx$ungeoref_morph_regime_aff) & (treat_sub == "Confirmed_Species"))) {
+      if (!grepl("Ungeoreferenced Morphology-Only", rationales[ui], fixed = TRUE)) {
+        rationales[ui] <- paste0(rationales[ui], sprintf(" [Ungeoreferenced Morphology-Only Regime Affinity: %s (p=%.2f; soil unassigned)]", cl_ctx$ungeoref_morph_regime_aff[ui], cl_ctx$ungeoref_morph_regime_prob[ui]))
+      }
+    }
+  }
 
   df$authority_weight <- aw_sheet_vec; df$is_type_specimen <- as.logical(mv$is_type_dv)
   if (!("type_status" %in% names(df))) df$type_status <- mv$type_stat_dv

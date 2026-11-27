@@ -14,6 +14,12 @@ if (grDevices::dev.cur() == 1L) grDevices::pdf(NULL)
   g_tab <- table(valid_g); g_tab_multi <- g_tab[g_tab >= 2L]
   N_min <- if (length(g_tab_multi) >= 2L) min(as.integer(g_tab_multi)) else N
   P_max <- if (N_min >= 6L) max(min_p, floor(N_min / 3)) else M
+  if (length(g_tab_multi) >= 4L) {
+    df_w_multi <- max(1L, as.integer(N) - length(g_tab_multi))
+    n_q25 <- as.integer(stats::quantile(as.numeric(g_tab_multi), probs = 0.25, names = FALSE))
+    eff_n <- max(N_min, min(n_q25, floor(df_w_multi / max(2L, length(g_tab_multi)))))
+    P_max <- max(P_max, min(M, min(16L, floor(eff_n / 3L))))
+  }
   if (isTRUE(allow_supervised_f) && length(g_tab_multi) >= 2L) {
     # Pooled within-group Ledoit-Wolf CDA estimates a single regularized W across df_W = N - G anchors,
     # so a single rare endemic with small N_min must not collapse 13-species CDA down to 2 PCs.

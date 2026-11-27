@@ -74,7 +74,10 @@ if (grDevices::dev.cur() == 1L) grDevices::pdf(NULL)
     has_obs_edaph_chk <- (!is.na(mv$edaph_sp_dv[i]) && nzchar(trimws(mv$edaph_sp_dv[i]))) || (!is.na(mv$rf_pred_dv[i]) && nzchar(trimws(mv$rf_pred_dv[i]))) || is.finite(edaph_z_i) || !is.na(mv$d_ed1_dv[i]) || !is.na(mv$d_ed2_dv[i]) || !is.na(mv$d_ed3_dv[i])
     has_obs_edaph_i <- has_obs_edaph_chk || is.finite(te_z_i)
     n_type_locs_i <- if (!is.na(given_sp) && (given_sp %in% names(n_type_locs_by_sp))) n_type_locs_by_sp[[given_sp]] else 0L
-    in_type_edaphic_env_i <- if (!has_geo_ll_i && is_extralimital_st && !has_obs_edaph_chk) FALSE else if (n_type_locs_i >= 3L && is.finite(te_z_i)) (te_z_i <= 2.0) else (!is.finite(edaph_z_i) || edaph_z_i <= 2.0)
+    is_sec_eco_pre_i <- is_intra && !is.null(mv$is_sec_eco_regime_dv) && isTRUE(mv$is_sec_eco_regime_dv[i])
+    bio_sec_i <- if (is_intra && !is.null(mv$bio_sec_dv)) mv$bio_sec_dv[i] else ""
+    is_disj_pass_i <- nzchar(bio_sec_i) && !is.null(cl_ctx$disjunct_sector_pass_map) && isTRUE(cl_ctx$disjunct_sector_pass_map[[paste(given_sp, bio_sec_i, sep = "||")]])
+    in_type_edaphic_env_i <- if (!has_geo_ll_i && is_extralimital_st && !has_obs_edaph_chk) FALSE else if (is_sec_eco_pre_i) FALSE else if (n_type_locs_i >= 3L && is.finite(te_z_i)) (te_z_i <= 2.0) else (!is.finite(edaph_z_i) || edaph_z_i <= 2.0)
     bas_m_i <- if (!is.na(mv$nt_bas_dv[i]) && nzchar(trimws(mv$nt_bas_dv[i]))) trimws(mv$nt_bas_dv[i]) else NA_character_
     bas_n_i <- if (!is.na(mv$nt_niche_bas_dv[i]) && nzchar(trimws(mv$nt_niche_bas_dv[i])) && is.finite(mv$nt_niche_bas_z_dv[i]) && mv$nt_niche_bas_z_dv[i] <= 2.5) trimws(mv$nt_niche_bas_dv[i]) else NA_character_
     is_het_bas_m_i <- !is.na(bas_m_i) && if (exists(".is_het_bas_cand", mode = "function")) .is_het_bas_cand(bas_m_i, given_sp, df, i)[1L] else (exists(".is_homotypic_sensu_stricto_basionym", mode = "function") && !isTRUE(.is_homotypic_sensu_stricto_basionym(bas_m_i, given_sp, df = df[i, setdiff(df_nms_d, "concept_synonymy_status"), drop = FALSE])[1L]))
@@ -82,7 +85,7 @@ if (grDevices::dev.cur() == 1L) grDevices::pdf(NULL)
     bas_m_ok_i <- is_het_bas_m_i && (!is.finite(mv$bas_d2_dv[i]) || mv$bas_d2_dv[i] <= mv$type_morph_chisq95) && (!is.finite(tm_d2_i) || is.finite(mv$bas_d2_dv[i]) || tm_d2_i <= mv$type_morph_chisq95)
     bas_i <- if (bas_m_ok_i && is_het_bas_n_i && tolower(bas_m_i) == tolower(bas_n_i)) bas_m_i else if (bas_m_ok_i) bas_m_i else if (is_het_bas_n_i) bas_n_i else if (is_het_bas_m_i) bas_m_i else NA_character_
     is_heterotypic_bas_match_i <- is_het_bas_m_i || is_het_bas_n_i
-    is_sensu_stricto_locked_i <- typ_m_i && in_type_edaphic_env_i && !is_heterotypic_bas_match_i && !is_extralimital_st && !is_exs_conflict_i && !isTRUE(mv$open_hyb_dv[i])
+    is_sensu_stricto_locked_i <- typ_m_i && in_type_edaphic_env_i && !is_disj_pass_i && !is_heterotypic_bas_match_i && !is_extralimital_st && !is_exs_conflict_i && !isTRUE(mv$open_hyb_dv[i])
 
     cl_key_i <- paste(given_sp, g_cl, sep = "||")
     cryptic_non_clinal_pass[i] <- if (g_cl > 1L && (cl_key_i %in% names(cl_ctx$cryptic_non_clinal_map))) isTRUE(cl_ctx$cryptic_non_clinal_map[[cl_key_i]]) else FALSE
@@ -334,8 +337,12 @@ if (grDevices::dev.cur() == 1L) grDevices::pdf(NULL)
       obs_self_out_95_i <- is.finite(self_d2_eff) && (self_d2_eff > stats::qchisq(0.95, df = self_df_i))
       k1_bimod_pheno_i <- (g_cl == 1L) && !is_taphonomic_plasticity && raw_pheno_shift_i && is_mo_flag && is.finite(bimod_val_i) && (bimod_val_i > 2.0)
       is_sec_eco_i <- !is.null(mv$is_sec_eco_regime_dv) && isTRUE(mv$is_sec_eco_regime_dv[i])
-      is_sec_eco_corrob_i <- is_sec_eco_i && (has_ep_div || is_mo_flag || obs_self_out_95_i || is_heterotypic_bas_match_i)
+      reg_key_i <- if (is_sec_eco_i && !is.null(mv$eco_reg_dv)) paste(given_sp, mv$eco_reg_dv[i], sep = "||") else ""
+      sec_reg_pop_ok_i <- nzchar(reg_key_i) && !is.null(cl_ctx$sec_eco_cohesion_map) && isTRUE(cl_ctx$sec_eco_cohesion_map[[reg_key_i]])
+      sec_reg_bas_i <- if (nzchar(reg_key_i) && !is.null(cl_ctx$sec_eco_basionym_map) && !is.null(cl_ctx$sec_eco_basionym_map[[reg_key_i]])) cl_ctx$sec_eco_basionym_map[[reg_key_i]] else NA_character_
+      is_sec_eco_corrob_i <- is_sec_eco_i && (sec_reg_pop_ok_i || has_ep_div || is_mo_flag || obs_self_out_95_i || is_heterotypic_bas_match_i)
       eco_reg_note_i <- if (is_sec_eco_i && !is.null(mv$eco_reg_dv) && nzchar(mv$eco_reg_dv[i])) sprintf(" [Step 05 Ecological Regime: %s]", mv$eco_reg_dv[i]) else ""
+      disj_note_i <- if (is_disj_pass_i) sprintf(" [Allopatric Barrier Disjunction: %s (gap=%.0f km)]", bio_sec_i, ifelse(!is.null(mv$disj_gap_dv) && is.finite(mv$disj_gap_dv[i]), mv$disj_gap_dv[i], 250.0)) else ""
       if (is_cry_in) {
         p_c_n <- if (is_cluster_prop_gdi_only_i && is.finite(eff_gdi_i) && (eff_gdi_i > 0.70) && !tier0_abstain_i) sprintf(" [Candidate Member via Cluster-Propagated gdi=%.2f; confirm by targeted sequencing]", eff_gdi_i) else ""
         c_b_n <- if (has_cytotype_barrier_i) { bp <- .resolve_cytotype_barrier_pair(i, given_sp, g_cl, mv$cat_sheet_vec[i], mv$pid_cyto_dv[i], cyto_bar_lbl_attr, mv$sp_all_vec, mv$gmm_cl_dv, mv$voucher_ploidy_v, mv$taxon_cyto_str_v, mv$is_type_dv, mv$is_typ_morph_dv); sprintf(" [Postzygotic Heteroploid Barrier: cluster ploidy %s vs type-cluster %s]", bp$cl_lbl, bp$type_lbl) } else ""
@@ -346,7 +353,7 @@ if (grDevices::dev.cur() == 1L) grDevices::pdf(NULL)
       } else if (geno_gdi_oversplit_i && raw_in_c) {
         ot_in <- if (is_cluster_prop_gdi_only_i) sprintf("[Cluster Coalescent Oversplit Block: propagated gdi=%.2f]", eff_gdi_i) else sprintf("[Coalescent Oversplit Block: gdi=%.2f < 0.20]", eff_gdi_i)
         if (has_cytotype_barrier_i) { sc <- .build_stage4_cytotype_decision(given_sp, raw_sp, g_cl, sprintf("Stage 4 Intraspecific Cytotype %s: Conspecific coalescent support retains %s at subspecific rank", ot_in, given_sp)); set_i(i, sc$status, sc$rec, sc$prio, sc$act, sc$rat, sc$broad, sc$sub); next }
-        else if (is_sec_eco_corrob_i) { set_i(i, "Subspecies_Ecotype", if (g_cl > 1L) sprintf("%s var. morphotype_K%d", given_sp, g_cl) else paste0(given_sp, " var. ecotype"), "MEDIUM", "Accept_Subspecific_Treatment", paste0(sprintf("Stage 4 Ecotype %s: Cohesive ecological divergence retained at subspecific rank", ot_in), eco_reg_note_i), "Variety / Ecotype", "Subspecies_Ecotype"); next }
+        else if (is_sec_eco_corrob_i || is_disj_pass_i) { set_i(i, "Subspecies_Ecotype", if (is_disj_pass_i) sprintf("%s var. %s", given_sp, tolower(gsub("_", "-", bio_sec_i))) else if (g_cl > 1L) sprintf("%s var. morphotype_K%d", given_sp, g_cl) else paste0(given_sp, " var. ecotype"), "MEDIUM", "Accept_Subspecific_Treatment", paste0(sprintf("Stage 4 Ecotype %s: Cohesive ecological/biogeographic divergence retained at subspecific rank", ot_in), eco_reg_note_i, disj_note_i), "Variety / Ecotype", "Subspecies_Ecotype"); next }
         else if (is_taphonomic_plasticity || intra_eco_out || g_cl > 1L) { set_i(i, "Ecophenotypic_Plasticity", given_sp, "MEDIUM", "Annotate_Taphonomic_Ecophenotype", paste0(sprintf("Stage 4 Plasticity %s: Conspecific coalescent support retains %s within intraspecific envelope", ot_in, given_sp), cong_aud_note), "Variety / Ecotype", "Ecophenotypic_Plasticity"); next }
         else { set_i(i, "Species_Confirmed", given_sp, "RESOLVED", "Accept_Current_Determination", sprintf("Stage 5 Confirmed %s: Conspecific coalescent support retains %s", ot_in, given_sp), "Confirmed Species", "Confirmed_Species"); next }
       } else if (!is_tier1_pure_morph && is_mo_flag && !morph_concordant_self && (d_edaph < 0.30 || (is.finite(edaph_z) && edaph_z > 2.5))) {
@@ -355,13 +362,14 @@ if (grDevices::dev.cur() == 1L) grDevices::pdf(NULL)
         br_c <- if (g_cl > 1L && has_ep_div) paste0(sprintf("Secondary GMM morphotype (K%d) with cytotype barrier and edaphic/phenological divergence (delta_DOY=%.1fd, pH=%s, Sand=%s)", g_cl, ddoy, ph_str, sand_str), if (is_heterotypic_bas_match_i) sprintf(" [Available Heterotypic Basionym: %s]", bas_i) else "", if (!cryptic_non_clinal_pass[i] && is.finite(clinal_r2_i) && clinal_r2_i >= 0.60) sprintf(" [Allopatric Spatial Cline R2=%.2f; Chambers & Hillis 2020]", clinal_r2_i) else "")
           else sprintf("Stage 4 Intraspecific Cytotype Differentiation: Morphologically overlapping or non-disjunct heteroploid cluster (GMM K%d, edaphic_z=%s) retained at subspecific rank", max(1L, g_cl), ifelse(is.finite(edaph_z), sprintf("%.2f", edaph_z), "NA"))
         sc <- .build_stage4_cytotype_decision(given_sp, raw_sp, g_cl, br_c); set_i(i, sc$status, sc$rec, sc$prio, sc$act, sc$rat, sc$broad, sc$sub); next
-      } else if (!is_sensu_stricto_locked_i && ((g_cl > 1L) || (pheno_unimodal_blocked_i && is_mo_flag) || k1_bimod_pheno_i || is_sec_eco_corrob_i) && !tier0_abstain_i) {
-        if (has_ep_div || is_sec_eco_corrob_i) {
-          use_pheno_in <- !is_sec_eco_corrob_i && (pheno_unimodal_blocked_i || k1_bimod_pheno_i)
+      } else if (!is_sensu_stricto_locked_i && ((g_cl > 1L) || (pheno_unimodal_blocked_i && is_mo_flag) || k1_bimod_pheno_i || is_sec_eco_corrob_i || is_disj_pass_i) && !tier0_abstain_i) {
+        if (has_ep_div || is_sec_eco_corrob_i || is_disj_pass_i) {
+          use_pheno_in <- !is_sec_eco_corrob_i && !is_disj_pass_i && (pheno_unimodal_blocked_i || k1_bimod_pheno_i)
           st_eco_in <- if (use_pheno_in) "Phenological_Ecotype" else "Subspecies_Ecotype"
           bm_note_in <- if (pheno_unimodal_blocked_i) sprintf(" [Unimodal Allochronic Cline: delta_BIC<=2.0 (%.2f)]", bimod_val_i) else if (use_pheno_in && is.finite(bimod_val_i) && bimod_val_i > 2.0) sprintf(" [Bimodal Allochronic Shift: delta_BIC=%.2f]", bimod_val_i) else ""
-          rec_eco_in <- if (g_cl > 1L) sprintf("%s var. morphotype_K%d", given_sp, g_cl) else paste0(given_sp, " var. ecotype")
-          set_i(i, st_eco_in, rec_eco_in, "MEDIUM", "Accept_Subspecific_Treatment", paste0(sprintf("Intraspecific ecotype/morphotype (K%d) with cohesive edaphic/phenological divergence (delta_DOY=%.1fd, pH=%s, Sand=%s)", g_cl, ddoy, ph_str, sand_str), eco_reg_note_i, if (is_heterotypic_bas_match_i) sprintf(" [Available Heterotypic Basionym: %s]", bas_i) else "", bm_note_in, if (!cryptic_non_clinal_pass[i] && is.finite(clinal_r2_i) && clinal_r2_i >= 0.60) sprintf(" [Allopatric Spatial Cline R2=%.2f; Chambers & Hillis 2020]", clinal_r2_i) else ""), "Variety / Ecotype", "Subspecies_Ecotype"); next
+          eff_bas_in <- if (is_heterotypic_bas_match_i && !is.na(bas_i) && nzchar(bas_i)) bas_i else sec_reg_bas_i
+          rec_eco_in <- if (is_disj_pass_i) sprintf("%s var. %s", given_sp, tolower(gsub("_", "-", bio_sec_i))) else if (g_cl > 1L) sprintf("%s var. morphotype_K%d", given_sp, g_cl) else paste0(given_sp, " var. ecotype")
+          set_i(i, st_eco_in, rec_eco_in, "MEDIUM", "Accept_Subspecific_Treatment", paste0(sprintf("Intraspecific ecotype/morphotype (K%d) with cohesive edaphic/phenological divergence (delta_DOY=%.1fd, pH=%s, Sand=%s)", g_cl, ddoy, ph_str, sand_str), eco_reg_note_i, disj_note_i, if (!is.na(eff_bas_in) && nzchar(eff_bas_in)) sprintf(" [Available Heterotypic Basionym: %s]", eff_bas_in) else "", bm_note_in, if (!cryptic_non_clinal_pass[i] && is.finite(clinal_r2_i) && clinal_r2_i >= 0.60) sprintf(" [Allopatric Spatial Cline R2=%.2f; Chambers & Hillis 2020]", clinal_r2_i) else ""), "Variety / Ecotype", "Subspecies_Ecotype"); next
         } else if (g_cl > 1L && !cryptic_cluster_cohesion_pass[i] && (!is.finite(edaph_z) || edaph_z <= 2.5) && (!is_anth || abs(ddoy) < tau_cryptic_i)) {
           if (is_taphonomic_plasticity || intra_eco_out) set_i(i, "Ecophenotypic_Plasticity", given_sp, "MEDIUM", "Annotate_Taphonomic_Ecophenotype", paste0(sprintf("Stage 4 Plasticity: Secondary shape mode (GMM K%d) within %s ecological/phenological envelope (edaphic_z=%s)", g_cl, given_sp, ifelse(is.finite(edaph_z), sprintf("%.2f", edaph_z), "NA")), cong_aud_note), "Variety / Ecotype", "Ecophenotypic_Plasticity")
           else set_i(i, "Species_Confirmed", given_sp, "RESOLVED", "Accept_Current_Determination", sprintf("Stage 5 Confirmed: Secondary unweighted shape mode (GMM K%d) within %s ecological and phenological niche (continuous intraspecific foliar polymorphism / heteroblasty)", g_cl, given_sp), "Confirmed Species", "Confirmed_Species")
