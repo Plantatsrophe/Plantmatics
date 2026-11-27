@@ -334,8 +334,16 @@ class TestCLIPurgeAndComputeFlags(unittest.TestCase):
             check=False,
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn("dubia_01_eastern_discovery", proc.stdout)
-        self.assertIn("dubia_03_intraspecific_clean", proc.stdout)
+        self.assertRegex(proc.stdout, r"dubia_\d{8}_[0-9a-f]{6}/01_eastern_discovery")
+        for sub_st in (
+            "01_eastern_discovery",
+            "02_complex_triage",
+            "03_intraspecific_clean",
+            "04_spatial_thin_field_audit",
+            "05_monographer_gold_audit",
+            "06_lineage_diagnosability",
+        ):
+            self.assertIn(sub_st, proc.stdout)
 
     def test_python_and_bash_cli_flag_parity(self) -> None:
         """Verify Python main.build_parser() and Bash run_pipeline.sh + pipe_cli_args.sh maintain flag and dual-env export parity."""

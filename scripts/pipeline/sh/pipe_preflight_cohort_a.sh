@@ -48,6 +48,7 @@ ALLOWED_TREATMENT_SUBTYPES = {
 
 tier_map = {
     'tier_1_gold': 'Tier_1_Gold', 'gold': 'Tier_1_Gold', 'tier_1': 'Tier_1_Gold', 'tier1': 'Tier_1_Gold', '1': 'Tier_1_Gold',
+    'tier_1_2_gold_silver': 'Tier_1_2_Gold_Silver', 'gold_silver': 'Tier_1_2_Gold_Silver', 'gold+silver': 'Tier_1_2_Gold_Silver',
     'tier_2_silver': 'Tier_2_Silver', 'silver': 'Tier_2_Silver', 'tier_2': 'Tier_2_Silver', 'tier2': 'Tier_2_Silver', '2': 'Tier_2_Silver',
     'tier_3_bronze': 'Tier_3_Bronze', 'bronze': 'Tier_3_Bronze', 'tier_3': 'Tier_3_Bronze', 'tier3': 'Tier_3_Bronze', '3': 'Tier_3_Bronze',
 }

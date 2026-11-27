@@ -141,11 +141,11 @@ class TestEasternNAMonographCLI(unittest.TestCase):
                 rc = monograph_main(["--dry-run", "--skip-harvest", "-j", "16", "--db", str(db_path)], workspace_root=ws)
             self.assertEqual(rc, 0); self.assertFalse((ws / "runs").exists())
             stdout = buf.getvalue(); cmd_lines = [ln for ln in stdout.splitlines() if "run_pipeline.sh" in ln and "--run-id" in ln]
-            self.assertEqual(len(cmd_lines), 12); self.assertTrue(all("--geographic-scope eastern_na" in ln for ln in cmd_lines))
+            self.assertEqual(len(cmd_lines), 18); self.assertTrue(all("--geographic-scope eastern_na" in ln for ln in cmd_lines))
             for stage in ("00_genus_wide/01_raw_discovery", "00_genus_wide/02_purified_genus", "00_genus_wide/03_gold_thin_audit"):
                 self.assertIn(stage, stdout)
             for slug in ("Packera_anonyma", "Packera_aurea", "Packera_obovata"):
-                for st in ("02_complex_triage", "03_intraspecific_clean", "04_gold_thin_audit"):
+                for st in ("02_complex_triage", "03_intraspecific_clean", "04_spatial_thin_field_audit", "05_monographer_gold_audit", "06_lineage_diagnosability"):
                     self.assertIn(f"{slug}/{st}", stdout)
             self.assertNotIn("Packera_schweinitziana", stdout); self.assertRegex(stdout, r"--triage-source\s+\S*00_genus_wide/01_raw_discovery")
             self.assertTrue(any("--skip-discovery" in ln for ln in cmd_lines) or all("01_eastern_discovery" not in ln for ln in cmd_lines))
@@ -168,7 +168,11 @@ class TestEasternNAMonographCLI(unittest.TestCase):
             _fake_run = lambda cmd, *a, **kw: subprocess.CompletedProcess(args=cmd, returncode=0, stdout="000000\n", stderr="")
             with mock.patch("subprocess.run", side_effect=_fake_run) as m_resume:
                 self.assertEqual(monograph_main(["--resume", "--skip-harvest", "--db", str(db_path)], workspace_root=ws), 0)
-            exp_inc = {f"{parent_id}/Packera_dubia/03_intraspecific_clean", f"{parent_id}/Packera_dubia/04_gold_thin_audit", f"{parent_id}/Packera_aurea/03_intraspecific_clean", f"{parent_id}/Packera_aurea/04_gold_thin_audit"}
+            exp_inc = {
+                f"{parent_id}/{sp_s}/{st_s}"
+                for sp_s in ("Packera_dubia", "Packera_aurea")
+                for st_s in ("03_intraspecific_clean", "04_spatial_thin_field_audit", "05_monographer_gold_audit", "06_lineage_diagnosability")
+            }
             self.assertEqual(set(_extract_pipeline_run_ids(m_resume, ws)), exp_inc)
             with mock.patch("subprocess.run", side_effect=_fake_run) as m_force:
                 self.assertEqual(monograph_main(["--parent-run-id", parent_id, "--force", "--skip-harvest", "--db", str(db_path)], workspace_root=ws), 0)
@@ -178,8 +182,9 @@ class TestEasternNAMonographCLI(unittest.TestCase):
                 {"catalogNumber": "NCU_DUBIA_001", "plant_individual_id": 1, "institutionCode": "NCU", "species_standardized": "Packera dubia", "taxonomic_treatment_subtype": "Confirmed_Type_Control", "synthesis_triage_priority": "RESOLVED", "gmm_cluster": "1", "cryptic_cluster_cohesion_pass": "FALSE", "delta_doy_resid": "2.1"},
                 {"catalogNumber": "NCU_DUBIA_003", "plant_individual_id": 1, "institutionCode": "NCU", "species_standardized": "Packera dubia", "recommended_determination": "Packera dubia", "taxonomic_treatment_subtype": "Putative_Cryptic_Species", "synthesis_triage_priority": "CRITICAL", "gmm_cluster": "2", "cryptic_cluster_cohesion_pass": "TRUE", "delta_doy_resid": "19.5", "synthesis_rationale": "Cohesive outcrop lineage"},
             ])
-            _seed_stage_outputs(ws, db_path, f"{parent_id}/Packera_dubia/04_gold_thin_audit", [{"catalogNumber": "NCU_DUBIA_003", "plant_individual_id": 1, "species_standardized": "Packera dubia", "taxonomic_treatment_subtype": "Putative_Cryptic_Species", "gmm_cluster": "2", "cryptic_cluster_cohesion_pass": "TRUE"}])
-            for st in ("03_intraspecific_clean", "04_gold_thin_audit"):
+            for st_d in ("04_spatial_thin_field_audit", "05_monographer_gold_audit", "06_lineage_diagnosability"):
+                _seed_stage_outputs(ws, db_path, f"{parent_id}/Packera_dubia/{st_d}", [{"catalogNumber": "NCU_DUBIA_003", "plant_individual_id": 1, "species_standardized": "Packera dubia", "taxonomic_treatment_subtype": "Putative_Cryptic_Species", "gmm_cluster": "2", "cryptic_cluster_cohesion_pass": "TRUE"}])
+            for st in ("03_intraspecific_clean", "04_spatial_thin_field_audit", "05_monographer_gold_audit", "06_lineage_diagnosability"):
                 _seed_stage_outputs(ws, db_path, f"{parent_id}/Packera_aurea/{st}", [{"catalogNumber": "NCU_AUREA_001", "plant_individual_id": 1, "species_standardized": "Packera aurea", "taxonomic_treatment_subtype": "Confirmed_Species", "gmm_cluster": "1"}])
             with mock.patch("subprocess.run", side_effect=_fake_run) as m_sum:
                 self.assertEqual(monograph_main(["--parent-run-id", parent_id, "--summarize-only", "--db", str(db_path)], workspace_root=ws), 0)
@@ -294,6 +299,23 @@ class TestEasternNAMonographCLI(unittest.TestCase):
         for _, _, cmd in stages:
             self.assertIn("--geographic-scope", cmd)
             self.assertEqual(cmd[cmd.index("--geographic-scope") + 1], "eastern_na")
+
+    def test_focal_parent_run_directory_six_stages_and_resume_manifest(self) -> None:
+        from scripts.pipeline import resolve_focal_species_complex as rfsc
+        with tempfile.TemporaryDirectory() as tmp:
+            ws = Path(tmp).resolve(); (ws / "run_pipeline.sh").write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+            db_path = _seed_voucher_db(ws / "data" / "plantmatics.sqlite", {"Packera dubia": 10})
+            pid = rfsc.generate_focal_parent_run_id("dubia")
+            self.assertRegex(pid, r"^dubia_\d{8}_[0-9a-f]{6}$")
+            _seed_stage_outputs(ws, db_path, f"{pid}/01_eastern_discovery", [{"catalogNumber": "NCU_DUBIA_001", "plant_individual_id": 1, "species_standardized": "Packera dubia", "taxonomic_treatment_subtype": "Confirmed_Species", "gmm_cluster": "1"}])
+            _fake_run = lambda cmd, *a, **kw: subprocess.CompletedProcess(args=cmd, returncode=0, stdout="000000\n", stderr="")
+            with mock.patch("subprocess.run", side_effect=_fake_run) as m_run:
+                self.assertEqual(rfsc.main(["--parent-run-id", pid, "--skip-harvest", "-j", "64", "--db", str(db_path)], workspace_root=ws), 0)
+            ran_ids = _extract_pipeline_run_ids(m_run, ws)
+            self.assertEqual(ran_ids, [f"{pid}/{s}" for s in ("02_complex_triage", "03_intraspecific_clean", "04_spatial_thin_field_audit", "05_monographer_gold_audit", "06_lineage_diagnosability")])
+            pdir = ws / "runs" / pid
+            self.assertTrue((ws / "runs" / "latest_dubia").is_symlink() and os.readlink(ws / "runs" / "latest_dubia") == pid)
+            self.assertTrue((pdir / "Packera_dubia_Stage_Comparison.csv").is_file() and (pdir / "Packera_dubia_Complex_Resolution_Report.md").is_file() and (pdir / "focal_complex_run_manifest.json").is_file())
 
 
 if __name__ == "__main__":

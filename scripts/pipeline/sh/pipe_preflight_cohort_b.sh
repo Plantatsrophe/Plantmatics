@@ -11,9 +11,10 @@ if target_tier and 'determiner_tier' in df.columns:
         if (g1_dna_cats and 'catalogNumber' in df.columns)
         else False
     )
-    if target_tier == 'Tier_1_Gold':
+    if target_tier in ('Tier_1_Gold', 'Tier_1_2_Gold_Silver'):
         is_type_col = df['is_type_specimen'].fillna(False).astype(bool) if 'is_type_specimen' in df.columns else False
-        df = df[tier_vals.isin(['Tier_1_Gold', 'Tier_0_Type']) | is_type_col | is_g1_df].copy()
+        allow_t = ['Tier_1_Gold', 'Tier_0_Type'] + (['Tier_2_Silver'] if target_tier == 'Tier_1_2_Gold_Silver' else [])
+        df = df[tier_vals.isin(allow_t) | is_type_col | is_g1_df].copy()
     else:
         df = df[tier_vals == target_tier].copy()
     print(f'[Preflight: Determiner Tier] Filtered to determiner_tier == {target_tier!r} (+ types and G1 DNA vouchers when Tier_1_Gold): retained {len(df)} / {before_tier_n} vouchers.')
@@ -239,9 +240,10 @@ if target_tier and 'determiner_tier' in subset_df.columns:
         if (g1_dna_cats and 'catalogNumber' in subset_df.columns)
         else False
     )
-    if target_tier == 'Tier_1_Gold':
+    if target_tier in ('Tier_1_Gold', 'Tier_1_2_Gold_Silver'):
         sub_types = subset_df['is_type_specimen'].fillna(False).astype(bool) if 'is_type_specimen' in subset_df.columns else False
-        subset_df = subset_df[sub_tiers.isin(['Tier_1_Gold', 'Tier_0_Type']) | sub_types | is_g1_sub].copy()
+        allow_sub = ['Tier_1_Gold', 'Tier_0_Type'] + (['Tier_2_Silver'] if target_tier == 'Tier_1_2_Gold_Silver' else [])
+        subset_df = subset_df[sub_tiers.isin(allow_sub) | sub_types | is_g1_sub].copy()
     else:
         subset_df = subset_df[sub_tiers == target_tier].copy()
 if exclude_misidentified and misidentified_cats:
@@ -286,7 +288,7 @@ subset_df = spatially_balance_and_thin_vouchers(
     max_per_state=max_per_state,
     max_per_region=max_per_region,
     primary_duplicates_only=True,
-    preserve_all_gold=(not (target_tier == 'Tier_1_Gold' and spatial_thin_km > 0.0)),
+    preserve_all_gold=(not (target_tier in ('Tier_1_Gold', 'Tier_1_2_Gold_Silver') and spatial_thin_km > 0.0)),
     preserve_catalog_numbers=sorted(g1_dna_cats) if g1_dna_cats else None,
     manifest_df=manifest_df,
     workspace_dir=root_data.parent,

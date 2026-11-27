@@ -50,6 +50,19 @@ done
 _pipe_finalize_cli_args
 _pipe_handle_early_purges
 _pipe_init_run_env_and_seed
+
+if [[ -n "${LINEAGE_DIAG_SOURCE}" ]]; then
+  echo "[Stage 06/06] Running Supervised Candidate-Lineage Diagnosability & Key-Trait Resolution..."
+  Rscript scripts/analysis/step07_lineage_diagnosability.R \
+    --source-run "${LINEAGE_DIAG_SOURCE}" \
+    --run-dir "${RUN_DIR}" \
+    --run-id "${RUN_ID}" \
+    ${FOCAL_ARGS[@]+"${FOCAL_ARGS[@]}"} \
+    ${DEMO_FLAG[@]+"${DEMO_FLAG[@]}"}
+  _pipe_finalize_run_metadata
+  exit 0
+fi
+
 _pipe_run_step01_harvest
 
 # Preflight subset filter: select_cascading_outgroup_anchors and Misidentification_Reassign pruning

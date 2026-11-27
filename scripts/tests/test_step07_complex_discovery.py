@@ -171,6 +171,52 @@ df_disj <- data.frame(
 )
 dj_out <- compute_geographic_disjunction_audit(df_disj)
 
+# 7. Stage 06 supervised candidate lineage diagnosability, 3-way niche overlap, calibrated-mm key traits, & 300-DPI PNG
+source("scripts/analysis/step07_lineage_diagnosability.R")
+set.seed(707L)
+df_s6 <- rbind(
+  data.frame(catalogNumber = sprintf("CP_%02d", 1:12), plant_individual_id = 0L, species_standardized = "Packera dubia",
+             determiner_tier = "Tier_1_Gold", is_type_specimen = c(TRUE, rep(FALSE, 11L)), typified_basionym = c("Senecio alabamensis", rep("", 11L)),
+             morph_tier_source = "Basal_Rosette", is_calibrated_mm = TRUE, taxonomic_treatment_subtype = "Subspecies_Ecotype",
+             biogeographic_sector = "", ecotype_regime = "Ecotype_1_lithic_outcrop_index_Low", sensu_stricto_ecotype_regime = "Ecotype_2_lithic_outcrop_index_High",
+             gmm_cluster = 1L, decimalLatitude = seq(31.0, 33.5, length.out = 12L), decimalLongitude = seq(-83.0, -79.5, length.out = 12L),
+             stateProvince = "GA", institutionCode = "NCU", is_edaphic_eligible_coord = TRUE, is_active_anthesis = TRUE,
+             PC1 = rnorm(12L, -3.5, 0.35), PC2 = rnorm(12L, 0.2, 0.35), aspect_ratio = rnorm(12L, 3.4, 0.15), petiole_to_blade_ratio = rnorm(12L, 1.35, 0.08),
+             blade_length_mm = rnorm(12L, 58.0, 2.5), blade_width_mm = rnorm(12L, 17.0, 1.2),
+             fine_soil_sand = rnorm(12L, 70.0, 3.0), fine_soil_ph = rnorm(12L, 5.1, 0.15), lithic_outcrop_index = rnorm(12L, 0.02, 0.01),
+             bio1 = rnorm(12L, 18.5, 0.4), bio12 = rnorm(12L, 1220, 35), hopkins_adjusted_doy = rnorm(12L, 106, 3), coalescent_gdi = 0.0, stringsAsFactors = FALSE),
+  data.frame(catalogNumber = sprintf("FR_%02d", 1:12), plant_individual_id = 0L, species_standardized = "Packera dubia",
+             determiner_tier = "Tier_2_Silver", is_type_specimen = FALSE, typified_basionym = "",
+             morph_tier_source = "Basal_Rosette", is_calibrated_mm = TRUE, taxonomic_treatment_subtype = "Confirmed_Species",
+             biogeographic_sector = "", ecotype_regime = "Ecotype_2_lithic_outcrop_index_High", sensu_stricto_ecotype_regime = "Ecotype_2_lithic_outcrop_index_High",
+             gmm_cluster = 1L, decimalLatitude = seq(34.2, 35.1, length.out = 12L), decimalLongitude = seq(-81.2, -80.1, length.out = 12L),
+             stateProvince = "SC", institutionCode = "CLEMS", is_edaphic_eligible_coord = TRUE, is_active_anthesis = TRUE,
+             PC1 = rnorm(12L, 0.0, 0.35), PC2 = rnorm(12L, 2.8, 0.35), aspect_ratio = rnorm(12L, 2.2, 0.15), petiole_to_blade_ratio = rnorm(12L, 0.85, 0.08),
+             blade_length_mm = rnorm(12L, 38.0, 2.5), blade_width_mm = rnorm(12L, 17.5, 1.2),
+             fine_soil_sand = rnorm(12L, 54.0, 2.5), fine_soil_ph = rnorm(12L, 5.4, 0.10), lithic_outcrop_index = rnorm(12L, 0.18, 0.02),
+             bio1 = rnorm(12L, 16.2, 0.4), bio12 = rnorm(12L, 1330, 35), hopkins_adjusted_doy = rnorm(12L, 108, 3), coalescent_gdi = 0.0, stringsAsFactors = FALSE),
+  data.frame(catalogNumber = sprintf("TM_%02d", 1:12), plant_individual_id = 0L, species_standardized = "Packera dubia",
+             determiner_tier = "Tier_1_Gold", is_type_specimen = FALSE, typified_basionym = "",
+             morph_tier_source = "Basal_Rosette", is_calibrated_mm = FALSE, taxonomic_treatment_subtype = "Subspecies_Ecotype",
+             biogeographic_sector = "Trans_Mississippi_Disjunct", ecotype_regime = "Ecotype_1_lithic_outcrop_index_Low", sensu_stricto_ecotype_regime = "Ecotype_2_lithic_outcrop_index_High",
+             gmm_cluster = 1L, decimalLatitude = seq(31.2, 33.4, length.out = 12L), decimalLongitude = seq(-95.4, -93.2, length.out = 12L),
+             stateProvince = "TX", institutionCode = "BRIT", is_edaphic_eligible_coord = TRUE, is_active_anthesis = TRUE,
+             PC1 = rnorm(12L, 3.6, 0.35), PC2 = rnorm(12L, -2.5, 0.35), aspect_ratio = rnorm(12L, 1.5, 0.12), petiole_to_blade_ratio = rnorm(12L, 0.48, 0.06),
+             blade_length_mm = rnorm(12L, 999.0, 5.0), blade_width_mm = rnorm(12L, 999.0, 5.0),
+             fine_soil_sand = rnorm(12L, 42.0, 3.0), fine_soil_ph = rnorm(12L, 5.3, 0.15), lithic_outcrop_index = rnorm(12L, 0.02, 0.01),
+             bio1 = rnorm(12L, 18.8, 0.4), bio12 = rnorm(12L, 1290, 35), hopkins_adjusted_doy = rnorm(12L, 111, 3), coalescent_gdi = 0.0, stringsAsFactors = FALSE)
+)
+lin_s6 <- assign_stage06_candidate_lineages(df_s6, min_n = 5L)
+mc_s6 <- select_stage06_morph_features(df_s6)
+oof_s6 <- run_candidate_lineage_oof_cda(df_s6, lin_s6$lineage, mc_s6)
+pw_s6 <- augment_pairwise_niche_and_pheno(df_s6, lin_s6$lineage, oof_s6$pair_df)
+key_s6 <- build_dichotomous_key_table(df_s6, lin_s6$lineage)
+diag_s6 <- adjudicate_lineage_ranks(df_s6, lin_s6, oof_s6, pw_s6, key_s6, "Packera dubia")
+s6_png <- file.path(c_dir, "Figure_Lineage_Diagnosability_Packera_dubia.png")
+render_lineage_diagnosability_png(df_s6, lin_s6$lineage, oof_s6, key_s6, "Packera dubia", s6_png)
+s6_png_ok <- file.exists(s6_png) && identical(as.integer(readBin(s6_png, "raw", 4L)), c(137L, 80L, 78L, 71L))
+pdf_files <- list.files(c_dir, pattern = "\\.pdf$", recursive = TRUE, ignore.case = TRUE)
+
 write_json(list(
   rng_preserved = rng_preserved,
   mix_labels = as.character(part_mix$complexes_df$complex_label),
@@ -198,7 +244,13 @@ write_json(list(
   dom_best_k = as.integer(dom_mrg$best_k),
   dj_has = isTRUE(dj_out$summary_df$Has_Major_Disjunction[1L]),
   dj_sec_tx = as.character(dj_out$sector_vec[21L]),
-  dj_sec_sc_na = is.na(dj_out$sector_vec[22L])
+  dj_sec_sc_na = is.na(dj_out$sector_vec[22L]),
+  s6_n_lin = as.integer(lin_s6$n_lineages),
+  s6_oof_acc = as.numeric(oof_s6$global_oof_acc),
+  s6_n_pairs = nrow(pw_s6),
+  s6_mm_masked = !("blade_length_mm" %in% key_s6$trait_name),
+  s6_ranks = as.character(diag_s6$recommended_rank),
+  s6_png_ok = s6_png_ok
 ), out_json, auto_unbox = TRUE, na = "null")
 """
 
@@ -314,6 +366,12 @@ class TestStep07ComplexDiscovery(unittest.TestCase):
         self.assertTrue(bool(r["dj_has"]))
         self.assertEqual(str(r["dj_sec_tx"]), "Trans_Mississippi_Disjunct")
         self.assertTrue(bool(r["dj_sec_sc_na"]))
+        self.assertEqual(int(r["s6_n_lin"]), 3)
+        self.assertGreaterEqual(float(r["s6_oof_acc"]), 0.85)
+        self.assertEqual(int(r["s6_n_pairs"]), 3)
+        self.assertTrue(bool(r["s6_mm_masked"]))
+        self.assertIn("Formal_Subspecies_or_Variety", r["s6_ranks"])
+        self.assertTrue(bool(r["s6_png_ok"]))
 
 
 if __name__ == "__main__":

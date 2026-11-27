@@ -56,6 +56,7 @@ _pipe_init_defaults() {
   COMPUTE_ARGS=()
   SKIP_NWI_NETWORK=false
   HARVEST_FULL_CONTINENTAL_RANGE=""
+  LINEAGE_DIAG_SOURCE=""
 }
 
 print_usage() {
@@ -206,6 +207,8 @@ _pipe_consume_extra_arg() {
     --skip-backbone-download) SKIP_BACKBONE_DOWNLOAD=true ;;
     --force-backbone-download) FORCE_BACKBONE_DOWNLOAD=true ;;
     --download-taxonomic-backbone) DOWNLOAD_TAXONOMIC_BACKBONE=1 ;;
+    --lineage-diagnosability-source) LINEAGE_DIAG_SOURCE="$2"; _PIPE_SHIFT=2 ;;
+    --lineage-diagnosability-source=*) LINEAGE_DIAG_SOURCE="${1#*=}" ;;
     *) ;;
   esac
 }
@@ -218,6 +221,9 @@ _pipe_finalize_cli_args() {
     gold|tier_1_gold)
       DETERMINER_TIER="Tier_1_Gold"
       GOLD_ONLY=true
+      ;;
+    gold_silver|gold+silver|tier_1_2_gold_silver)
+      DETERMINER_TIER="Tier_1_2_Gold_Silver"
       ;;
     silver|tier_2_silver)
       DETERMINER_TIER="Tier_2_Silver"

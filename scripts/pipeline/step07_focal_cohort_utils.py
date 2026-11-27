@@ -18,6 +18,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from scripts.core.harvester import standardize_packera_taxon
+from scripts.pipeline.step07_focal_parent_run import _six_stage_run_ids
 
 NA_TOKENS: Set[str] = {"", "NA", "NAN", "NONE", "NULL"}
 
@@ -373,6 +374,13 @@ def _extract_stage_metrics(
     )
     neighbors = _collect_complex_neighbors(complex_rows, run_dir, focal_std)
     geno_cyto = _collect_genomics_and_cytology(eval_rows, run_dir, focal_std)
+    diag_rows = _read_csv_rows(run_dir / "outputs" / "reports" / "candidate_lineage_diagnosability.csv")
+    oof_lin_acc = _safe_float(diag_rows[0].get("global_oof_morph_accuracy")) if diag_rows else None
+    diag_pass_cnt = sum(1 for dr in diag_rows if _is_truthy(dr.get("passes_75_rule")))
+    rank_calls = "; ".join(
+        f"{dr.get('candidate_lineage', '')}:{dr.get('recommended_rank', '')}"
+        for dr in diag_rows if str(dr.get("candidate_lineage") or "").strip()
+    )
 
     def _fmt(val: Optional[float], spec: str) -> str:
         return format(val, spec) if val is not None else ""
@@ -391,6 +399,10 @@ def _extract_stage_metrics(
         "delta_icl_vs_null": _fmt(gmm["delta_icl_vs_null"], ".2f"),
         "boot_lrt_p_k1_vs_k2": _fmt(gmm["boot_lrt_p_k1_vs_k2"], ".4f"),
         "spatial_block_cv_acc": _fmt(spatial_block_cv_acc, ".4f"),
+        "oof_lineage_morph_acc": _fmt(oof_lin_acc, ".4f"),
+        "n_candidate_lineages": len(diag_rows) if diag_rows else "",
+        "n_lineages_75_pass": diag_pass_cnt if diag_rows else "",
+        "lineage_rank_calls": rank_calls,
         "n_confirmed_species": _count_sub("Confirmed_Species"),
         "n_confirmed_type_control": _count_sub("Confirmed_Type_Control"),
         "n_type_synonymy_candidate": _count_sub("Type_Synonymy_Candidate"),

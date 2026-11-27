@@ -169,9 +169,16 @@ if (grDevices::dev.cur() == 1L) grDevices::pdf(NULL)
       if (nt_e_vote == rf_vote) nt_e_vote else if (is.finite(te_z_i) && te_z_i > 2.5 && (!is.finite(rf_prob) || rf_prob < 0.70)) nt_e_vote else if (is.finite(rf_prob) && rf_prob >= 0.70) rf_vote else NA_character_
     } else if (!is.na(nt_e_vote)) nt_e_vote else rf_vote
     deviates_from_given_type <- (is.finite(tm_d2_i) && tm_d2_i > tm_chisq95_i) || (is.finite(mv$tm_conc_dv[i]) && mv$tm_conc_dv[i] < 0.25) || (is.finite(te_z_i) && te_z_i > 2.0)
-    type_control_reassign <- !is_type_specimen_i && !morph_concordant_self && outside_self_morph_95 && (!isTRUE(typ_m_i) || (is.finite(tm_d2_i) && tm_d2_i > tm_chisq95_i)) &&
-      !is.na(vote_morph) && !is.na(vote_edaph) && (vote_morph == vote_edaph) && (vote_morph != given_sp) && deviates_from_given_type
-    type_control_target_sp <- if (type_control_reassign) vote_morph else NULL
+    severe_dual_excl <- !is_intra && (n_known_taxa >= 6L) && !is_type_specimen_i && !morph_concordant_self &&
+      is.finite(self_d2_eff) && (self_d2_eff > stats::qchisq(0.995, df = self_df_i)) &&
+      is.finite(edaph_z_i) && (edaph_z_i > 2.5) && is.finite(te_z_i) && (te_z_i > 4.0) &&
+      !is.na(vote_morph) && (vote_morph != given_sp) && !is.na(vote_edaph) && (vote_edaph != given_sp) && deviates_from_given_type
+    type_control_reassign <- (!is_type_specimen_i && !morph_concordant_self && outside_self_morph_95 && (!isTRUE(typ_m_i) || (is.finite(tm_d2_i) && tm_d2_i > tm_chisq95_i)) &&
+      !is.na(vote_morph) && !is.na(vote_edaph) && (vote_morph == vote_edaph) && (vote_morph != given_sp) && deviates_from_given_type) || severe_dual_excl
+    type_control_target_sp <- if (severe_dual_excl && (vote_morph != vote_edaph)) {
+      rk_sd <- .rank_sympatric_congeners_ctx(i, given_sp, morph_sp, cda_prob, cda_sec_taxon, cda_sec, edaph_sp, edaph_is_taxon, rf_sp, rf_is_taxon, rf_prob, min_cong_tx_i, nt_m_i, nt_e_i, te_z_i, FALSE, NA_character_, NA_real_, cl_ctx, bg_ctx, mv, FALSE)
+      if (!is.null(rk_sd$best) && nzchar(rk_sd$best) && rk_sd$best != given_sp) rk_sd$best else vote_edaph
+    } else if (type_control_reassign) vote_morph else NULL
 
     has_geno_i <- mv$has_geno_dv[i]; geno_sp_i <- if (has_geno_i && !is.na(mv$geno_pred_dv[i]) && nzchar(mv$geno_pred_dv[i])) mv$geno_pred_dv[i] else NA_character_
     geno_is_taxon <- has_geno_i && !is.na(geno_sp_i) && .is_valid_packera_taxon_step07(geno_sp_i, bg_ctx$active_taxa)

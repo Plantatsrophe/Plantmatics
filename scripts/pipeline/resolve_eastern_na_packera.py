@@ -16,8 +16,8 @@ if str(PROJECT_ROOT) not in sys.path:
 from scripts.core.harvester import standardize_packera_taxon
 from scripts.core.taxonomy_authority import evaluate_eastern_na_cohort_filter
 from scripts.pipeline.resolve_focal_species_complex import (
-    _extract_stage_metrics, _fetch_complex_rows_for_run, _read_csv_rows, _stage_run_ids,
-    build_four_stage_commands, compile_complex_resolution_summary, slugify_taxon,
+    _extract_stage_metrics, _fetch_complex_rows_for_run, _read_csv_rows, _six_stage_run_ids, _stage_run_ids,
+    build_six_stage_commands, compile_complex_resolution_summary, slugify_taxon,
 )
 
 BINOMIAL_RE = re.compile(r"^Packera [a-z][a-z-]+$")
@@ -237,7 +237,7 @@ def _build_genus_commands(run_script: Path, g1_eff: str, g2: str, g3: str, args:
     return cmds
 
 def _species_commands(run_script: Path, sp: str, sp_prefix: str, g1_eff: str, args: argparse.Namespace, threads_override: Optional[int] = None) -> List[Tuple[str, str, List[str]]]:
-    return build_four_stage_commands(
+    return build_six_stage_commands(
         run_script=run_script, focal_taxon=sp, prefix=sp_prefix, discovery_run_id=g1_eff, geographic_scope=args.geographic_scope,
         gold_anchors=args.gold_anchors, spatial_thin_km=args.spatial_thin_km,
         threads=(args.threads if threads_override is None else threads_override), gpu_batch_size=args.gpu_batch_size,
@@ -278,9 +278,11 @@ def _build_master_row(
     slug, runs_root = slugify_taxon(sp), ws / "runs"
     s1, _ = _extract_stage_metrics(stage_name="Stage_1_Discovery", run_id=g1_eff, focal_std=sp, runs_root=runs_root, conn=conn)
     if sweep_ran:
-        _, r2, r3, r4 = _stage_run_ids(f"{parent_run_id}/{slug}/", discovery_run_id=g1_eff)
+        _, r2, r3, r4, r5, _ = _six_stage_run_ids(f"{parent_run_id}/{slug}/", discovery_run_id=g1_eff)
+        _, _, _, r4_leg = _stage_run_ids(f"{parent_run_id}/{slug}/", discovery_run_id=g1_eff)
+        r4_eff = r4 if (runs_root / r4).exists() else (r5 if (runs_root / r5).exists() else r4_leg)
         s2, s3, s4 = (_extract_stage_metrics(stage_name=st, run_id=rid, focal_std=sp, runs_root=runs_root, conn=conn)[0]
-                      for st, rid in (("Stage_2_Complex_Triage", r2), ("Stage_3_Intraspecific_Clean", r3), ("Stage_4_Spatially_Thinned", r4)))
+                      for st, rid in (("Stage_2_Complex_Triage", r2), ("Stage_3_Intraspecific_Clean", r3), ("Stage_4_Spatial_Thin_Field_Audit", r4_eff)))
     else:
         r2, s2, s3, s4 = g2, dict.fromkeys(s1, ""), dict.fromkeys(s1, ""), {"n_focal_otus": 0, "gmm_optimal_k": ""}
     n_raw, n_misid = int(s1["n_focal_otus"] or 0) or int(n_disc), int(s2.get("n_misidentification_reassign") or 0)
