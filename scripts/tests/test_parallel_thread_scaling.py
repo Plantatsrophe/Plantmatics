@@ -239,7 +239,7 @@ class TestParallelThreadScaling(unittest.TestCase):
                 rc = monograph_main(["--skip-harvest", "--skip-discovery", "-j", "58", "--species-jobs", "2", "--db", str(db_p)], workspace_root=ws)
             self.assertEqual(rc, 0)
             sp_calls = [c for c in calls if any("Packera_aurea" in x or "Packera_dubia" in x for x in c[0])]
-            self.assertEqual(len(sp_calls), 6)
+            self.assertEqual(len(sp_calls), 10)
             for cmd, env_d in sp_calls:
                 self.assertIsNotNone(env_d)
                 self.assertEqual(env_d.get("PLANTMATICS_NO_LATEST_SYMLINK"), "1")
