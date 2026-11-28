@@ -13,22 +13,69 @@ if (grDevices::dev.cur() == 1L) grDevices::pdf(NULL)
 
 .clean_regime_lbl <- function(reg_tok, is_ss = FALSE) {
   r <- gsub("^Ecotype_[0-9]+_", "", reg_tok)
-  r <- gsub("lithic_outcrop_index_High", "Piedmont_Granite_Flatrock", r)
-  r <- gsub("lithic_outcrop_index_Low", "Coastal_Plain_Sand_Matrix", r)
+  r <- gsub("(lithic_outcrop_index|topo_slope_deg)_High", "Piedmont_Upland_Outcrop", r)
+  r <- gsub("(lithic_outcrop_index|topo_slope_deg)_Low", "Coastal_Plain_Sand_Matrix", r)
   r <- gsub("[^A-Za-z0-9_]+", "_", r)
   if (isTRUE(is_ss) && !grepl("^Sensu_Stricto_", r)) paste0("Sensu_Stricto_", r) else r
 }
 
+hydrate_ecotypes_from_stage4 <- function(df, s4_mc_path) {
+  eco_cur <- if ("ecotype_regime" %in% names(df)) .nz_s06d(df$ecotype_regime) else rep("", nrow(df))
+  if (any(grepl("^Ecotype_", eco_cur)) || !file.exists(s4_mc_path)) return(df)
+  s4 <- tryCatch(utils::read.csv(s4_mc_path, stringsAsFactors = FALSE), error = function(e) data.frame())
+  if (nrow(s4) == 0L || !("ecotype_regime" %in% names(s4))) return(df)
+  s4_eco <- .nz_s06d(s4$ecotype_regime)
+  regs <- sort(unique(s4_eco[grepl("^Ecotype_", s4_eco)]))
+  if (length(regs) < 2L) return(df)
+  s4_map <- stats::setNames(s4_eco[grepl("^Ecotype_", s4_eco)], as.character(s4$catalogNumber[grepl("^Ecotype_", s4_eco)]))
+  lat_v <- if ("decimalLatitude" %in% names(df)) suppressWarnings(as.numeric(df$decimalLatitude)) else rep(NA_real_, nrow(df))
+  lon_v <- if ("decimalLongitude" %in% names(df)) suppressWarnings(as.numeric(df$decimalLongitude)) else rep(NA_real_, nrow(df))
+  has_ll <- is.finite(lat_v) & is.finite(lon_v)
+  new_eco <- ifelse(as.character(df$catalogNumber) %in% names(s4_map), s4_map[as.character(df$catalogNumber)], "")
+  f_cols <- intersect(c("topo_slope_deg", "lithic_outcrop_index", "fine_soil_sand", "fine_soil_ph"), intersect(names(df), names(s4)))
+  if (length(f_cols) >= 2L && any(has_ll & !nzchar(new_eco))) {
+    M4 <- as.matrix(sapply(f_cols, function(cl) suppressWarnings(as.numeric(s4[[cl]]))))
+    ok4 <- grepl("^Ecotype_", s4_eco) & is.finite(rowSums(M4))
+    if (sum(ok4) >= 8L) {
+      m_c <- colMeans(M4[ok4, , drop = FALSE]); s_c <- apply(M4[ok4, , drop = FALSE], 2L, stats::sd); s_c[!is.finite(s_c) | s_c < 1e-6] <- 1.0
+      M4s <- scale(M4[ok4, , drop = FALSE], center = m_c, scale = s_c)
+      meds <- do.call(rbind, lapply(regs, function(rg) apply(M4s[s4_eco[ok4] == rg, , drop = FALSE], 2L, stats::median)))
+      rownames(meds) <- regs
+      M3 <- as.matrix(sapply(f_cols, function(cl) suppressWarnings(as.numeric(df[[cl]]))))
+      fill_idx <- which(has_ll & !nzchar(new_eco) & is.finite(rowSums(M3)))
+      if (length(fill_idx) > 0L) {
+        M3s <- scale(M3[fill_idx, , drop = FALSE], center = m_c, scale = s_c)
+        d_mat <- sapply(regs, function(rg) rowSums(sweep(M3s, 2L, meds[rg, ], "-")^2))
+        if (is.null(dim(d_mat))) d_mat <- matrix(d_mat, nrow = 1L)
+        new_eco[fill_idx] <- regs[max.col(-d_mat, ties.method = "first")]
+      }
+    }
+  }
+  df$ecotype_regime <- ifelse(nzchar(new_eco), new_eco, df$ecotype_regime)
+  # Anchor higher lithic_outcrop_index regime as sensu stricto when Forty Acre Rock outcrop regime is present
+  if ("lithic_outcrop_index" %in% names(df)) {
+    lv <- suppressWarnings(as.numeric(df$lithic_outcrop_index))
+    med_by_r <- vapply(regs, function(rg) stats::median(lv[new_eco == rg], na.rm = TRUE), numeric(1))
+    if (all(is.finite(med_by_r)) && max(med_by_r) >= 0.06 && max(med_by_r) > 1.8 * min(med_by_r)) {
+      df$sensu_stricto_ecotype_regime <- names(which.max(med_by_r))[1L]
+    }
+  }
+  df
+}
+
 assign_stage06_candidate_lineages <- function(df, min_n = 5L) {
   n <- nrow(df)
-  if (n == 0L) return(list(lineage = character(0), is_ss_lineage = character(0), n_lineages = 0L))
+  if (n == 0L) return(list(lineage = character(0), ss_lineage = "", valid_lineages = character(0), n_lineages = 0L))
   sub_v <- if ("taxonomic_treatment_subtype" %in% names(df)) .nz_s06d(df$taxonomic_treatment_subtype) else rep("", n)
   sec_v <- if ("biogeographic_sector" %in% names(df)) .nz_s06d(df$biogeographic_sector) else rep("", n)
   eco_v <- if ("ecotype_regime" %in% names(df)) .nz_s06d(df$ecotype_regime) else rep("", n)
   ss_v <- if ("sensu_stricto_ecotype_regime" %in% names(df)) .nz_s06d(df$sensu_stricto_ecotype_regime) else rep("", n)
   gmm_v <- if ("gmm_cluster" %in% names(df)) .nz_s06d(df$gmm_cluster) else rep("", n)
+  lat_v <- if ("decimalLatitude" %in% names(df)) suppressWarnings(as.numeric(df$decimalLatitude)) else rep(NA_real_, n)
+  has_any_disj <- any(nzchar(sec_v) & sec_v != "Continuous_Range")
+  has_any_eco <- any(grepl("^Ecotype_", eco_v))
 
-  ss_tok <- next_ss <- ""
+  ss_tok <- ""
   nz_ss <- ss_v[nzchar(ss_v)]
   if (length(nz_ss) > 0L) ss_tok <- names(sort(table(nz_ss), decreasing = TRUE))[1L]
 
@@ -40,6 +87,8 @@ assign_stage06_candidate_lineages <- function(df, min_n = 5L) {
       lin[i] <- sec_v[i]
     } else if (grepl("^Ecotype_", eco_v[i])) {
       lin[i] <- .clean_regime_lbl(eco_v[i], is_ss = (nzchar(ss_tok) && eco_v[i] == ss_tok))
+    } else if (has_any_disj && !has_any_eco && is.finite(lat_v[i])) {
+      lin[i] <- "Sensu_Stricto_Cis_Mississippi_Core"
     }
   }
   tab_l <- table(lin[!is.na(lin)])
@@ -65,18 +114,21 @@ select_stage06_morph_features <- function(df) {
   pc_cols <- grep("^PC[0-9]+$", names(df), value = TRUE)
   if (length(pc_cols) > 6L) pc_cols <- pc_cols[seq_len(6L)]
   ect_cols <- intersect(c("ECT_PC1", "ECT_PC2", "ECT_PC3", "ect_lobe_complexity"), names(df))
+  micro_cols <- c("phyllary_tip_darkening_delta", "phyllary_tip_anthocyanin_delta", "involucre_basal_cie_l_delta",
+                  "peduncle_cie_l_sheet_delta", "calyculus_flare_index", "cauline_cie_l_q85_sheet_delta", "basal_to_cauline_wool_delta")
   arch_cols <- intersect(c(
     "aspect_ratio", "solidity", "dissection_index", "basal_cordate_index",
     "terminal_lobe_area_frac", "margin_serration_index", "margin_tooth_acuteness",
     "base_angle_deg", "apex_angle_deg", "lamina_curvature", "petiole_to_blade_ratio",
-    "blade_cie_l_q85_sheet_delta", "AR_inv", "log1p_capitulum_count", "radiate_head_fraction"
+    "blade_cie_l_q85_sheet_delta", "AR_inv", "log1p_capitulum_count", "radiate_head_fraction", micro_cols
   ), names(df))
   cand <- unique(c(pc_cols, ect_cols, arch_cols))
   keep <- character(0)
   for (cl in cand) {
     v <- suppressWarnings(as.numeric(df[[cl]]))
     fin <- v[is.finite(v)]
-    if (length(fin) >= 15L && stats::sd(fin) > 1e-6 && (length(fin) / max(1L, nrow(df))) >= 0.55) {
+    min_cov <- if (cl %in% c(micro_cols, "AR_inv", "radiate_head_fraction", "log1p_capitulum_count")) 0.30 else 0.55
+    if (length(fin) >= 12L && stats::sd(fin) > 1e-6 && (length(fin) / max(1L, nrow(df))) >= min_cov) {
       keep <- c(keep, cl)
     }
   }
@@ -129,14 +181,10 @@ run_candidate_lineage_oof_cda <- function(df, lineage_vec, morph_cols, seed = 42
     return(list(available = FALSE, global_oof_acc = NA_real_, recall_by_lin = stats::setNames(rep(NA_real_, G), valid_lin),
                 oof_pred = rep(NA_character_, n), oof_prob = rep(NA_real_, n), cv1 = rep(NA_real_, n), cv2 = rep(NA_real_, n), pair_df = data.frame()))
   }
-  X_raw <- as.matrix(df[, morph_cols, drop = FALSE])
-  storage.mode(X_raw) <- "double"
+  X_raw <- as.matrix(df[, morph_cols, drop = FALSE]); storage.mode(X_raw) <- "double"; X_unimp <- X_raw
   for (j in seq_len(ncol(X_raw))) {
-    col_v <- X_raw[, j]
-    med_j <- stats::median(col_v[is.finite(col_v)])
-    if (!is.finite(med_j)) med_j <- 0.0
-    col_v[!is.finite(col_v)] <- med_j
-    X_raw[, j] <- col_v
+    col_v <- X_raw[, j]; med_j <- stats::median(col_v[is.finite(col_v)])
+    col_v[!is.finite(col_v)] <- if (is.finite(med_j)) med_j else 0.0; X_raw[, j] <- col_v
   }
   tier_v <- if ("determiner_tier" %in% names(df)) .nz_s06d(df$determiner_tier) else rep("Tier_2_Silver", n)
   is_type_v <- if ("is_type_specimen" %in% names(df)) (!is.na(df$is_type_specimen) & as.logical(df$is_type_specimen)) else rep(FALSE, n)
@@ -176,19 +224,26 @@ run_candidate_lineage_oof_cda <- function(df, lineage_vec, morph_cols, seed = 42
   oof_prob_tr <- numeric(length(tr_idx))
   oof_mat_tr <- matrix(NA_real_, nrow = length(tr_idx), ncol = G, dimnames = list(NULL, valid_lin))
   for (f in sort(unique(fold_assign))) {
-    in_te <- which(fold_assign == f)
-    in_tr <- which(fold_assign != f)
+    in_te <- which(fold_assign == f); in_tr <- which(fold_assign != f)
     if (length(in_tr) < G + 2L || length(unique(lineage_vec[tr_idx[in_tr]])) < G) in_tr <- seq_along(tr_idx)
-    X_f_tr <- X_raw[tr_idx[in_tr], , drop = FALSE]
+    X_f_tr <- X_unimp[tr_idx[in_tr], , drop = FALSE]; X_f_te <- X_unimp[tr_idx[in_te], , drop = FALSE]
+    for (j in seq_len(ncol(X_f_tr))) {
+      mj <- stats::median(X_f_tr[is.finite(X_f_tr[, j]), j]); if (!is.finite(mj)) mj <- 0.0
+      X_f_tr[!is.finite(X_f_tr[, j]), j] <- mj; X_f_te[!is.finite(X_f_te[, j]), j] <- mj
+    }
     m_f <- colMeans(X_f_tr); s_f <- apply(X_f_tr, 2L, stats::sd); s_f[!is.finite(s_f) | s_f < 1e-6] <- 1.0
-    X_f_tr_s <- scale(X_f_tr, center = m_f, scale = s_f)
-    X_f_te_s <- scale(X_raw[tr_idx[in_te], , drop = FALSE], center = m_f, scale = s_f)
-    mdl_f <- .fit_shrinkage_lda_equal_prior(X_f_tr_s, lineage_vec[tr_idx[in_tr]])
-    pr_f <- .predict_shrinkage_lda(mdl_f, X_f_te_s)
-    oof_pred_tr[in_te] <- pr_f$pred
-    oof_prob_tr[in_te] <- pr_f$max_prob
-    oof_mat_tr[in_te, colnames(pr_f$prob)] <- pr_f$prob
+    mdl_f <- .fit_shrinkage_lda_equal_prior(scale(X_f_tr, center = m_f, scale = s_f), lineage_vec[tr_idx[in_tr]])
+    pr_f <- .predict_shrinkage_lda(mdl_f, scale(X_f_te, center = m_f, scale = s_f))
+    oof_pred_tr[in_te] <- pr_f$pred; oof_prob_tr[in_te] <- pr_f$max_prob; oof_mat_tr[in_te, colnames(pr_f$prob)] <- pr_f$prob
   }
+
+  repro_mc <- intersect(c("phyllary_tip_darkening_delta", "phyllary_tip_anthocyanin_delta", "involucre_basal_cie_l_delta", "peduncle_cie_l_sheet_delta"), colnames(X_unimp))
+  has_repro_tr <- if (length(repro_mc) > 0L) rowSums(is.finite(X_unimp[tr_idx, repro_mc, drop = FALSE])) >= 1L else rep(FALSE, length(tr_idx))
+  repro_recall <- stats::setNames(vapply(valid_lin, function(g) {
+    ig <- which(lineage_vec[tr_idx] == g & has_repro_tr)
+    if (length(ig) >= 4L) mean(oof_pred_tr[ig] == g) else NA_real_
+  }, numeric(1L)), valid_lin)
+  repro_oof_acc <- if (all(is.finite(repro_recall))) mean(repro_recall) else NA_real_
 
   recall_by_lin <- stats::setNames(numeric(G), valid_lin)
   for (g in valid_lin) {
@@ -245,30 +300,31 @@ run_candidate_lineage_oof_cda <- function(df, lineage_vec, morph_cols, seed = 42
     )
   }
   list(available = TRUE, global_oof_acc = global_oof_acc, recall_by_lin = recall_by_lin,
+       repro_oof_acc = repro_oof_acc, repro_recall_by_lin = repro_recall,
        oof_pred = oof_pred_full, oof_prob = oof_prob_full, cv1 = cv1, cv2 = cv2,
        pair_df = do.call(rbind, pair_rows))
 }
 
-.schoener_d_2d <- function(M, g_vec, ga, gb, bins = 32L) {
+.schoener_d_2d <- function(M, g_vec, ga, gb, bins = 64L) {
   ok <- is.finite(rowSums(M)) & !is.na(g_vec) & (g_vec %in% c(ga, gb))
   if (sum(ok & g_vec == ga) < 4L || sum(ok & g_vec == gb) < 4L) return(NA_real_)
   Ms <- scale(M[ok, , drop = FALSE])
   Ms[, !is.finite(colSums(Ms))] <- 0.0
   pc <- tryCatch(stats::prcomp(Ms, rank. = 2L)$x, error = function(e) Ms[, seq_len(min(2L, ncol(Ms))), drop = FALSE])
-  if (ncol(pc) == 1L) pc <- cbind(pc[, 1L], 0.0)
+  if (ncol(pc) == 1L) pc <- cbind(pc[, 1L], stats::rnorm(nrow(pc), 0, 0.01))
   r1 <- range(pc[, 1L]); r2 <- range(pc[, 2L])
-  b1 <- seq(r1[1L] - 1e-5, r1[2L] + 1e-5, length.out = bins + 1L)
-  b2 <- seq(r2[1L] - 1e-5, r2[2L] + 1e-5, length.out = bins + 1L)
+  pad1 <- max(0.25, 0.15 * diff(r1)); pad2 <- max(0.25, 0.15 * diff(r2))
+  lims <- c(r1[1L] - pad1, r1[2L] + pad1, r2[1L] - pad2, r2[2L] + pad2)
   g_ok <- g_vec[ok]
-  c_a <- table(cut(pc[g_ok == ga, 1L], b1), cut(pc[g_ok == ga, 2L], b2))
-  c_b <- table(cut(pc[g_ok == gb, 1L], b1), cut(pc[g_ok == gb, 2L], b2))
-  p_a <- as.numeric(c_a) / max(1.0, sum(c_a)); p_b <- as.numeric(c_b) / max(1.0, sum(c_b))
+  ka <- MASS::kde2d(pc[g_ok == ga, 1L], pc[g_ok == ga, 2L], n = bins, lims = lims)$z
+  kb <- MASS::kde2d(pc[g_ok == gb, 1L], pc[g_ok == gb, 2L], n = bins, lims = lims)$z
+  p_a <- as.numeric(ka) / max(1e-12, sum(ka)); p_b <- as.numeric(kb) / max(1e-12, sum(kb))
   round(1.0 - 0.5 * sum(abs(p_a - p_b)), 4)
 }
 
 augment_pairwise_niche_and_pheno <- function(df, lineage_vec, pair_df) {
   if (nrow(pair_df) == 0L) return(pair_df)
-  clim_cols <- intersect(paste0("bio", 1:19), names(df))
+  clim_cols <- grep("^bio[0-9]+($|_)", names(df), value = TRUE)
   edaph_cols <- intersect(c("lithic_outcrop_index", "fine_soil_sand", "fine_soil_ph", "ilr_texture_1", "ilr_texture_2", "topo_slope_deg", "wetland_seepage_index"), names(df))
   M_clim <- if (length(clim_cols) >= 2L) as.matrix(sapply(clim_cols, function(cl) suppressWarnings(as.numeric(df[[cl]])))) else NULL
   M_edaph <- if (length(edaph_cols) >= 2L) as.matrix(sapply(edaph_cols, function(cl) suppressWarnings(as.numeric(df[[cl]])))) else NULL
@@ -319,7 +375,9 @@ build_dichotomous_key_table <- function(df, lineage_vec) {
   mm_traits <- c("blade_length_mm", "blade_width_mm", "petiole_length_mm", "involucre_height_mm", "involucre_width_mm", "plant_height_cm")
   ratio_traits <- c("aspect_ratio", "petiole_to_blade_ratio", "solidity", "dissection_index", "basal_cordate_index",
                     "base_angle_deg", "apex_angle_deg", "margin_serration_index", "corymb_head_count_est", "AR_inv",
-                    "radiate_head_fraction", "blade_cie_l_q85_sheet_delta")
+                    "radiate_head_fraction", "blade_cie_l_q85_sheet_delta", "cauline_cie_l_q85_sheet_delta",
+                    "basal_to_cauline_wool_delta", "phyllary_tip_darkening_delta", "phyllary_tip_anthocyanin_delta",
+                    "involucre_basal_cie_l_delta", "peduncle_cie_l_sheet_delta", "calyculus_flare_index")
   cand_t <- intersect(c(mm_traits, ratio_traits), names(df))
   rows_k <- list()
   for (tr in cand_t) {

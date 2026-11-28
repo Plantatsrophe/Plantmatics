@@ -29,7 +29,9 @@ prepare_step04_standardized_features <- function(closed_df, pca_cols, outline_on
     cc_eff <- ifelse(is.finite(cc_n) | is.finite(ce_n), pmax(cc_n, ce_n, na.rm = TRUE), NA_real_)
     closed_df$log1p_capitulum_count <- ifelse(is.finite(cc_eff) & cc_eff >= 1, round(log1p(cc_eff), 5), NA_real_)
   }
-  phot_eb_cols <- unique(intersect(c(grep("^blade_cie_", names(closed_df), value = TRUE), "basal_zone_cie_l_delta", "abaxial_cie_l_sheet_delta"), names(closed_df)))
+  phot_eb_cols <- unique(intersect(c(grep("^blade_cie_", names(closed_df), value = TRUE), "basal_zone_cie_l_delta", "abaxial_cie_l_sheet_delta",
+                                     "cauline_cie_l_q85_sheet_delta", "involucre_basal_cie_l_delta", "peduncle_cie_l_sheet_delta",
+                                     "phyllary_tip_darkening_delta", "phyllary_tip_anthocyanin_delta"), names(closed_df)))
   if (length(phot_eb_cols) > 0L && exists("apply_eb_institution_batch_centering", mode = "function")) {
     closed_df <- apply_eb_institution_batch_centering(closed_df, target_cols = phot_eb_cols, min_inst_n = 10L)
   }
@@ -37,10 +39,12 @@ prepare_step04_standardized_features <- function(closed_df, pca_cols, outline_on
   aw_vec[!is.finite(aw_vec)] <- 0.0; ref_mask <- aw_vec > 0.0; ref_idx <- which(ref_mask)
   if (length(ref_idx) < 3L) { ref_mask <- rep(TRUE, n); ref_idx <- seq_len(n) }
 
-  caul_het_raw <- c("basal_vs_cauline_length_ratio", "basal_vs_cauline_solidity_delta", "heteroblasty_efa_distance", "heteroblasty_ect_distance",
+  caul_het_raw <- c("basal_vs_cauline_length_ratio", "basal_vs_cauline_solidity_delta", "cauline_cie_l_q85_sheet_delta", "basal_to_cauline_wool_delta",
+                    "heteroblasty_efa_distance", "heteroblasty_ect_distance",
                     "cauline_dissection_index_med", "cauline_solidity_med", "cauline_ect_lobe_complexity", "Cauline_PC1", "Cauline_ECT_PC1")
+  micro_repro_raw <- c("phyllary_tip_darkening_delta", "phyllary_tip_anthocyanin_delta", "involucre_basal_cie_l_delta", "peduncle_cie_l_sheet_delta", "calyculus_flare_index")
   diag_phys_raw <- c("log_centsize", "petiole_length_mm", "lamina_trace_length_mm", "plant_height_cm")
-  repro_arch_raw <- c("AR_inv", "radiate_head_fraction", "log1p_capitulum_count", "petiole_to_blade_ratio", "scape_to_basal_leaf_ratio")
+  repro_arch_raw <- c("AR_inv", "radiate_head_fraction", "log1p_capitulum_count", "petiole_to_blade_ratio", "scape_to_basal_leaf_ratio", micro_repro_raw)
   topo_arch_raw <- c("ECT_PC1", "ECT_PC2", "ECT_PC3", "ect_lobe_complexity", "basal_cordate_index", "solidity", "q25_solidity", "dissection_index",
                      "terminal_lobe_area_frac", "margin_serration_index", "margin_tooth_acuteness", "base_angle_deg", "apex_angle_deg",
                      "lamina_curvature", "within_rosette_efa_dispersion", "aspect_ratio")
@@ -65,7 +69,7 @@ prepare_step04_standardized_features <- function(closed_df, pca_cols, outline_on
     (mean(is.finite(vv)) >= min_frac) && (sum(is.finite(vv)) >= 5L) && isTRUE(stats::sd(vv, na.rm = TRUE) > 1e-6)
   }
   has_sheet_l <- has_cov("blade_cie_l_q85_sheet_delta_std", 0.70) || has_cov("blade_cie_l_sheet_delta_std", 0.70)
-  caul_het_std <- paste0(caul_het_raw, "_std")
+  caul_het_std <- paste0(c(caul_het_raw, micro_repro_raw), "_std")
   cand_pool <- unique(c(
     "AR_inv_std", "radiate_head_fraction_std", "log1p_capitulum_count_std", "petiole_to_blade_ratio_std", "scape_to_basal_leaf_ratio_std",
     "ECT_PC1_std", "ECT_PC2_std", "ECT_PC3_std", "ect_lobe_complexity_std", "basal_cordate_index_std",
@@ -75,7 +79,7 @@ prepare_step04_standardized_features <- function(closed_df, pca_cols, outline_on
     "basal_zone_cie_l_delta_std", "abaxial_cie_l_sheet_delta_std", "blade_cie_a_browning_delta_std", "blade_cie_b_yellowing_delta_std",
     if (!has_sheet_l) "blade_cie_l_norm_std", "aspect_ratio_std", caul_het_std
   ))
-  cov_cands <- cand_pool[vapply(cand_pool, function(sc) has_cov(sc, if (sc %in% caul_het_std) 0.50 else 0.70), logical(1))]
+  cov_cands <- cand_pool[vapply(cand_pool, function(sc) has_cov(sc, if (sc %in% caul_het_std) 0.45 else 0.70), logical(1))]
   dis_var <- if (length(cov_cands) > 0L && exists("filter_biologically_variable_dissection_scalars", mode = "function")) {
     filter_biologically_variable_dissection_scalars(closed_df, cov_cands, active_mask = ref_mask)
   } else cov_cands
@@ -85,7 +89,9 @@ prepare_step04_standardized_features <- function(closed_df, pca_cols, outline_on
     if (isTRUE(intraspecific_mode)) {
       intra_pool <- c("ECT_PC1_std", "ECT_PC2_std", "ECT_PC3_std", "petiole_to_blade_ratio_std",
                       "margin_tooth_acuteness_std", "basal_cordate_index_std", "apex_angle_deg_std",
-                      "base_angle_deg_std", "blade_cie_l_q85_sheet_delta_std", "q25_solidity_std")
+                      "base_angle_deg_std", "blade_cie_l_q85_sheet_delta_std", "q25_solidity_std",
+                      "phyllary_tip_darkening_delta_std", "phyllary_tip_anthocyanin_delta_std",
+                      "involucre_basal_cie_l_delta_std", "peduncle_cie_l_sheet_delta_std", "basal_to_cauline_wool_delta_std")
       intra_cands <- intersect(intra_pool, dis_var)
       intra_cands <- intra_cands[vapply(intra_cands, function(sc) {
         vv <- round(suppressWarnings(as.numeric(closed_df[[sc]][ref_idx])), 5); vv <- vv[is.finite(vv)]

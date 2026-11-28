@@ -95,7 +95,9 @@ def load_step02_records_from_db(
                 el.petiole_to_blade_ratio,
                 vrp.capitula_count, vrp.involucre_height_px, vrp.involucre_width_px,
                 vrp.involucre_height_mm, vrp.involucre_width_mm,
-                vrp.AR_inv, vrp.corymb_head_count_est, vrp.radiate_head_fraction
+                vrp.AR_inv, vrp.corymb_head_count_est, vrp.radiate_head_fraction,
+                vrp.phyllary_tip_darkening_delta, vrp.phyllary_tip_anthocyanin_delta,
+                vrp.involucre_basal_cie_l_delta, vrp.peduncle_cie_l_sheet_delta, vrp.calyculus_flare_index
             FROM extracted_leaves el
             LEFT JOIN plant_individuals pi
                 ON pi.catalogNumber = el.catalogNumber
@@ -152,6 +154,8 @@ def load_step02_records_from_db(
                 vrp.capitula_count, vrp.involucre_height_px, vrp.involucre_width_px,
                 vrp.involucre_height_mm, vrp.involucre_width_mm,
                 vrp.AR_inv, vrp.corymb_head_count_est, vrp.radiate_head_fraction,
+                vrp.phyllary_tip_darkening_delta, vrp.phyllary_tip_anthocyanin_delta,
+                vrp.involucre_basal_cie_l_delta, vrp.peduncle_cie_l_sheet_delta, vrp.calyculus_flare_index,
                 pi.plant_height_cm, pi.scape_to_basal_leaf_ratio, pi.is_bent_stem,
                 vrp.total_capitula, vrp.n_anthesis, vrp.n_fruiting,
                 vrp.n_bud, vrp.n_senescent, vrp.voucher_phenological_state,
@@ -181,6 +185,11 @@ def load_step02_records_from_db(
                 "AR_inv": d.get("AR_inv"),
                 "corymb_head_count_est": int(d.get("corymb_head_count_est") or 0),
                 "radiate_head_fraction": d.get("radiate_head_fraction"),
+                "phyllary_tip_darkening_delta": d.get("phyllary_tip_darkening_delta"),
+                "phyllary_tip_anthocyanin_delta": d.get("phyllary_tip_anthocyanin_delta"),
+                "involucre_basal_cie_l_delta": d.get("involucre_basal_cie_l_delta"),
+                "peduncle_cie_l_sheet_delta": d.get("peduncle_cie_l_sheet_delta"),
+                "calyculus_flare_index": d.get("calyculus_flare_index"),
                 "plant_height_cm": d.get("plant_height_cm"),
                 "scape_to_basal_leaf_ratio": d.get("scape_to_basal_leaf_ratio"),
                 "is_bent_stem": bool(d.get("is_bent_stem")),

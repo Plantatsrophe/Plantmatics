@@ -397,6 +397,7 @@ aggregate_step03_otu_medians_fast <- function(closed_leaf_df, all_harm_cols, sym
       "georef_qc_status", "is_centroid_or_inst_coord", "coord_quarantine_reason",
       "usda_symbol", "usda_county_status", "exsiccatae_key", "exsiccatae_taxonomic_conflict", "exsiccatae_gold_taxon",
       "corymb_head_count_est", "radiate_head_fraction",
+      "phyllary_tip_darkening_delta", "phyllary_tip_anthocyanin_delta", "involucre_basal_cie_l_delta", "peduncle_cie_l_sheet_delta", "calyculus_flare_index",
       "stateProvince", "county", "locality", "decimalLatitude", "decimalLongitude", "coordinateUncertainty",
       "year", "month", "day", "eventDate", "regional_group", "spatial_balance_weight"),
     names(closed_leaf_df)

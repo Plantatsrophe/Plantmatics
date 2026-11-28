@@ -145,6 +145,7 @@ def _build_tier_b_schema_ddl() -> str:
         cauline_blade_length_mm REAL,
         basal_vs_cauline_length_ratio REAL,
         basal_vs_cauline_solidity_delta REAL,
+        cauline_cie_l_q85_sheet_delta REAL, basal_to_cauline_wool_delta REAL,
         heteroblasty_efa_distance REAL,
         Cauline_PC1 REAL,
         Cauline_PC2 REAL,

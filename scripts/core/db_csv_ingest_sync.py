@@ -176,6 +176,11 @@ def ingest_existing_csvs_to_db(
                                 if rep.get("radiate_head_fraction") is not None
                                 else phe.get("radiate_head_fraction")
                             ),
+                            "phyllary_tip_darkening_delta": _to_float(rep.get("phyllary_tip_darkening_delta")),
+                            "phyllary_tip_anthocyanin_delta": _to_float(rep.get("phyllary_tip_anthocyanin_delta")),
+                            "involucre_basal_cie_l_delta": _to_float(rep.get("involucre_basal_cie_l_delta")),
+                            "peduncle_cie_l_sheet_delta": _to_float(rep.get("peduncle_cie_l_sheet_delta")),
+                            "calyculus_flare_index": _to_float(rep.get("calyculus_flare_index")),
                         }],
                         pk_cols=("catalogNumber", "plant_individual_id"),
                     )

@@ -80,6 +80,9 @@ _DYNAMIC_TABLE_MIGRATION_SPECS: Dict[str, Tuple[Tuple[str, str], ...]] = {
     "voucher_reproductive_phenology": (
         ("corymb_head_count_est", "INTEGER DEFAULT 0"),
         ("radiate_head_fraction", "REAL"),
+        ("phyllary_tip_darkening_delta", "REAL"), ("phyllary_tip_anthocyanin_delta", "REAL"),
+        ("involucre_basal_cie_l_delta", "REAL"), ("peduncle_cie_l_sheet_delta", "REAL"),
+        ("calyculus_flare_index", "REAL"),
     ),
     "run_active_cohort": (
         ("type_status", "TEXT"),
@@ -155,6 +158,7 @@ _DYNAMIC_TABLE_MIGRATION_SPECS: Dict[str, Tuple[Tuple[str, str], ...]] = {
             ("cauline_blade_length_mm", "REAL"),
             ("basal_vs_cauline_length_ratio", "REAL"),
             ("basal_vs_cauline_solidity_delta", "REAL"),
+            ("cauline_cie_l_q85_sheet_delta", "REAL"), ("basal_to_cauline_wool_delta", "REAL"),
             ("heteroblasty_efa_distance", "REAL"),
             ("Cauline_PC1", "REAL"),
             ("Cauline_PC2", "REAL"),

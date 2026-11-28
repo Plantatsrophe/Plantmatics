@@ -16,7 +16,9 @@ if (!exists(".sort_numbered_pc_cols", mode = "function")) {
 .STEP07_MORPHO_NUM_COLS <- c(
   "petiole_length_mm", "blade_length_mm", "petiole_to_blade_ratio", "plant_height_cm", "scape_to_basal_leaf_ratio",
   "capitula_count", "involucre_height_mm", "involucre_width_mm", "AR_inv", "blade_cie_l_sheet_delta",
-  "blade_cie_a_browning_delta", "blade_cie_b_yellowing_delta", "corymb_head_count_est", "blade_cie_l_norm", "blade_cie_l_sd"
+  "blade_cie_a_browning_delta", "blade_cie_b_yellowing_delta", "corymb_head_count_est", "blade_cie_l_norm", "blade_cie_l_sd",
+  "phyllary_tip_darkening_delta", "phyllary_tip_anthocyanin_delta", "involucre_basal_cie_l_delta",
+  "peduncle_cie_l_sheet_delta", "calyculus_flare_index", "cauline_cie_l_q85_sheet_delta", "basal_to_cauline_wool_delta"
 )
 
 # 5. Taxon-Adjusted Institutional Batch Audit (Marginal Drop-1 ANCOVA + Partial Eta^2)

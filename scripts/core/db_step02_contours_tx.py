@@ -187,8 +187,10 @@ def record_voucher_segmentation_transaction(
                     total_capitula, n_anthesis, n_bud, n_fruiting, n_senescent,
                     voucher_phenological_state, is_verified_anthesis,
                     reproductive_stage_confidence, dominant_pappus_ratio,
-                    corymb_head_count_est, radiate_head_fraction
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                    corymb_head_count_est, radiate_head_fraction,
+                    phyllary_tip_darkening_delta, phyllary_tip_anthocyanin_delta,
+                    involucre_basal_cie_l_delta, peduncle_cie_l_sheet_delta, calyculus_flare_index
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                 """,
                 repro_pheno_rows,
             )

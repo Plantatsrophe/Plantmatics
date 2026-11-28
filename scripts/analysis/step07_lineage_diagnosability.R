@@ -67,7 +67,8 @@ adjudicate_lineage_ranks <- function(df, lin_res, oof_res, pair_df, key_df, foca
     return(data.frame(
       candidate_lineage = if (length(valid_lin) == 1L) valid_lin[1L] else gsub("[[:space:]]+", "_", focal_taxon),
       n_plants = nrow(df), n_gold_silver = nrow(df),
-      global_oof_morph_accuracy = NA_real_, oof_morph_recall = NA_real_, passes_75_rule = FALSE,
+      global_oof_morph_accuracy = NA_real_, oof_morph_recall = NA_real_,
+      reproductive_oof_morph_accuracy = NA_real_, reproductive_oof_recall = NA_real_, passes_75_rule = FALSE,
       has_non_overlapping_key_trait = FALSE, median_soil_sand_pct = NA_real_, median_soil_ph = NA_real_,
       median_lithic_outcrop_index = NA_real_, min_d_edaph_vs_others = 1.0, min_gap_km_vs_others = 0.0,
       median_coalescent_gdi = 0.0, available_basionym = focal_taxon,
@@ -90,11 +91,13 @@ adjudicate_lineage_ranks <- function(df, lin_res, oof_res, pair_df, key_df, foca
     idx <- which(!is.na(lin_res$lineage) & lin_res$lineage == g)
     n_gs <- sum(tier_v[idx] %in% c("Tier_0_Type", "Tier_1_Gold", "Tier_2_Silver") | is_type_v[idx])
     rec_g <- if (g %in% names(oof_res$recall_by_lin)) as.numeric(oof_res$recall_by_lin[g]) else NA_real_
-    pass_75 <- is.finite(rec_g) && (rec_g >= 0.75)
+    rep_rec_g <- if (!is.null(oof_res$repro_recall_by_lin) && (g %in% names(oof_res$repro_recall_by_lin))) as.numeric(oof_res$repro_recall_by_lin[g]) else NA_real_
+    rep_acc_all <- if (!is.null(oof_res$repro_oof_acc)) as.numeric(oof_res$repro_oof_acc) else NA_real_
+    pass_75 <- (is.finite(rec_g) && (rec_g >= 0.75)) || (is.finite(rep_rec_g) && (rep_rec_g >= 0.75) && is.finite(rep_acc_all) && (rep_acc_all >= 0.70))
 
     pw_sub <- if (nrow(pair_df) > 0L) pair_df[pair_df$lineage_a == g | pair_df$lineage_b == g, , drop = FALSE] else data.frame()
     min_de <- if (nrow(pw_sub) > 0L && any(is.finite(pw_sub$d_edaph))) min(pw_sub$d_edaph, na.rm = TRUE) else NA_real_
-    max_gap <- if (nrow(pw_sub) > 0L && any(is.finite(pw_sub$min_interlineage_gap_km))) max(pw_sub$min_interlineage_gap_km, na.rm = TRUE) else 0.0
+    min_gap <- if (nrow(pw_sub) > 0L && any(is.finite(pw_sub$min_interlineage_gap_km))) min(pw_sub$min_interlineage_gap_km, na.rm = TRUE) else 0.0
     med_gdi <- if (any(is.finite(gdi_v[idx]))) stats::median(gdi_v[idx], na.rm = TRUE) else 0.0
 
     # Resolve available basionym
@@ -118,9 +121,9 @@ adjudicate_lineage_ranks <- function(df, lin_res, oof_res, pair_df, key_df, foca
       "Distinct_Species_Candidate"
     } else if (pass_75 || any_iqr_key) {
       "Formal_Subspecies_or_Variety"
-    } else if (is.finite(max_gap) && max_gap >= 200.0) {
+    } else if (is.finite(min_gap) && min_gap >= 200.0) {
       "Allopatric_Disjunct_Lineage (Morphologically_Overlapping)"
-    } else if (!is.finite(min_de) || min_de < 0.45) {
+    } else if (!is.finite(min_de) || min_de < 0.65) {
       "Edaphic_Ecotype (Informal_Ecological_Race)"
     } else {
       "Continuous_Intraspecific_Variant"
@@ -129,13 +132,16 @@ adjudicate_lineage_ranks <- function(df, lin_res, oof_res, pair_df, key_df, foca
     rows_out[[length(rows_out) + 1L]] <- data.frame(
       candidate_lineage = g, n_plants = length(idx), n_gold_silver = n_gs,
       global_oof_morph_accuracy = round(oof_res$global_oof_acc, 4),
-      oof_morph_recall = round(rec_g, 4), passes_75_rule = pass_75,
+      oof_morph_recall = round(rec_g, 4),
+      reproductive_oof_morph_accuracy = if (is.finite(rep_acc_all)) round(rep_acc_all, 4) else NA_real_,
+      reproductive_oof_recall = if (is.finite(rep_rec_g)) round(rep_rec_g, 4) else NA_real_,
+      passes_75_rule = pass_75,
       has_non_overlapping_key_trait = any_iqr_key,
       median_soil_sand_pct = if (any(is.finite(sand_v[idx]))) round(stats::median(sand_v[idx], na.rm = TRUE), 1) else NA_real_,
       median_soil_ph = if (any(is.finite(ph_v[idx]))) round(stats::median(ph_v[idx], na.rm = TRUE), 2) else NA_real_,
       median_lithic_outcrop_index = if (any(is.finite(lith_v[idx]))) round(stats::median(lith_v[idx], na.rm = TRUE), 4) else NA_real_,
       min_d_edaph_vs_others = if (is.finite(min_de)) round(min_de, 3) else NA_real_,
-      min_gap_km_vs_others = if (is.finite(max_gap)) round(max_gap, 1) else 0.0,
+      min_gap_km_vs_others = if (is.finite(min_gap)) round(min_gap, 1) else 0.0,
       median_coalescent_gdi = round(med_gdi, 4),
       available_basionym = bas_lbl, recommended_rank = rank_call,
       stringsAsFactors = FALSE
@@ -171,6 +177,8 @@ main_stage06_diagnosability <- function() {
     }
   }
 
+  s4_sibling_mc <- file.path(dirname(src_dir), "04_spatial_thin_field_audit", "data", "tables", "multimodal_conflict_flags.csv")
+  merged <- hydrate_ecotypes_from_stage4(merged, s4_sibling_mc)
   lin_res <- assign_stage06_candidate_lineages(merged, min_n = 5L)
   morph_cols <- select_stage06_morph_features(merged)
   oof_res <- run_candidate_lineage_oof_cda(merged, lin_res$lineage, morph_cols)

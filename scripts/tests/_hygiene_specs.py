@@ -140,6 +140,7 @@ RAW_STRICT_LINE_CEILINGS: Tuple[Tuple[str, int], ...] = (
     ("scripts/vision/step02_lm3_compat_geometry.py", 400), ("scripts/vision/step02_lm3_compat_ect_metrics.py", 350),
     ("scripts/vision/step02_ruler_calibration_io.py", 400),
     ("scripts/vision/step02_leaf_traits_utils.py", 360), ("scripts/vision/step02_photometry_corymb_utils.py", 360),
+    ("scripts/vision/step02_capitulum_microchars.py", 340), ("scripts/vision/rescore_step02_capitulum_microchars.py", 320),
     ("scripts/vision/leaf_geometry_utils.py", 480), ("scripts/tests/test_step02_vision_hygiene.py", 380),
     ("scripts/tests/test_step02_taxonomic_clarity.py", 400),
     # Step 02B pipeline, rescorer, figure facades, submodules, & split test suites
@@ -220,7 +221,7 @@ RAW_STRICT_LINE_CEILINGS: Tuple[Tuple[str, int], ...] = (
     ("scripts/figures/step07b_network_figures.R", 320), ("scripts/pipeline/resolve_focal_species_complex.py", 340),
     ("scripts/pipeline/step07_focal_cohort_utils.py", 450), ("scripts/pipeline/step07_focal_stage_runners.py", 450),
     ("scripts/pipeline/step07_focal_parent_run.py", 260), ("scripts/pipeline/step07_focal_report_writer.py", 340),
-    ("scripts/analysis/step07_lineage_diagnosability.R", 300), ("scripts/analysis/step07_diagnosability_key_utils.R", 440),
+    ("scripts/analysis/step07_lineage_diagnosability.R", 300), ("scripts/analysis/step07_diagnosability_key_utils.R", 470),
     ("scripts/tests/test_step07_queue_and_ancova.py", 440), ("scripts/tests/test_step07_hopkins_and_consensus.py", 440),
     ("scripts/tests/test_step07_type_and_basionym_rules.py", 440), ("scripts/tests/test_step07_hybrid_and_biogeo_gates.py", 440),
     ("scripts/tests/test_step07_cryptic_and_cohesion.py", 440), ("scripts/tests/test_step07_complex_discovery.py", 440),

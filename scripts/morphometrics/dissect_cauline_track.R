@@ -14,6 +14,8 @@ compute_separate_cauline_otu_track <- function(efa_df, specimen_df, sym_names = 
   cauline_blade_length_mm <- rep(NA_real_, n_spec)
   basal_vs_cauline_length_ratio <- rep(NA_real_, n_spec)
   basal_vs_cauline_solidity_delta <- rep(NA_real_, n_spec)
+  cauline_cie_l_q85_sheet_delta <- rep(NA_real_, n_spec)
+  basal_to_cauline_wool_delta <- rep(NA_real_, n_spec)
   heteroblasty_efa_distance <- rep(NA_real_, n_spec)
   Cauline_PC1 <- rep(NA_real_, n_spec)
   Cauline_PC2 <- rep(NA_real_, n_spec)
@@ -149,6 +151,18 @@ compute_separate_cauline_otu_track <- function(efa_df, specimen_df, sym_names = 
         b_sol <- if ("solidity" %in% names(specimen_df)) suppressWarnings(as.numeric(specimen_df$solidity[i])) else med_col(basal_rows, "solidity", 4L)
         if (is.finite(b_sol) && is.finite(cauline_solidity_med[i])) {
           basal_vs_cauline_solidity_delta[i] <- round(b_sol - cauline_solidity_med[i], 4)
+        }
+
+        if ("blade_cie_l_q85_sheet_delta" %in% names(cauline_rows)) {
+          c_abax <- if ("is_abaxial_pressed_leaf" %in% names(cauline_rows)) (!is.na(cauline_rows$is_abaxial_pressed_leaf) & as.logical(cauline_rows$is_abaxial_pressed_leaf)) else rep(FALSE, nrow(cauline_rows))
+          c_adax_rows <- if (any(!c_abax)) cauline_rows[!c_abax, , drop = FALSE] else cauline_rows
+          c_lq85 <- med_col(c_adax_rows, "blade_cie_l_q85_sheet_delta", 4L)
+          if (!is.finite(c_lq85)) c_lq85 <- med_col(cauline_rows, "blade_cie_l_q85_sheet_delta", 4L)
+          cauline_cie_l_q85_sheet_delta[i] <- c_lq85
+          b_lq85 <- if ("blade_cie_l_q85_sheet_delta" %in% names(specimen_df)) suppressWarnings(as.numeric(specimen_df$blade_cie_l_q85_sheet_delta[i])) else if (n_bas >= 1L) med_col(basal_rows, "blade_cie_l_q85_sheet_delta", 4L) else NA_real_
+          if (is.finite(c_lq85) && is.finite(b_lq85)) {
+            basal_to_cauline_wool_delta[i] <- round(c_lq85 - b_lq85, 4)
+          }
         }
 
         if (length(sym_names) >= 1L) {
@@ -335,6 +349,8 @@ compute_separate_cauline_otu_track <- function(efa_df, specimen_df, sym_names = 
   specimen_df$cauline_blade_length_mm <- as.numeric(cauline_blade_length_mm)
   specimen_df$basal_vs_cauline_length_ratio <- as.numeric(basal_vs_cauline_length_ratio)
   specimen_df$basal_vs_cauline_solidity_delta <- as.numeric(basal_vs_cauline_solidity_delta)
+  specimen_df$cauline_cie_l_q85_sheet_delta <- as.numeric(cauline_cie_l_q85_sheet_delta)
+  specimen_df$basal_to_cauline_wool_delta <- as.numeric(basal_to_cauline_wool_delta)
   specimen_df$heteroblasty_efa_distance <- as.numeric(heteroblasty_efa_distance)
   specimen_df$Cauline_PC1 <- as.numeric(Cauline_PC1)
   specimen_df$Cauline_PC2 <- as.numeric(Cauline_PC2)

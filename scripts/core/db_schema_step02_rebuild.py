@@ -39,6 +39,8 @@ _CANONICAL_VOUCHER_REPRO_COLS: Tuple[str, ...] = (
     "n_anthesis", "n_bud", "n_fruiting", "n_senescent", "voucher_phenological_state",
     "is_verified_anthesis", "reproductive_stage_confidence", "dominant_pappus_ratio",
     "corymb_head_count_est", "radiate_head_fraction",
+    "phyllary_tip_darkening_delta", "phyllary_tip_anthocyanin_delta",
+    "involucre_basal_cie_l_delta", "peduncle_cie_l_sheet_delta", "calyculus_flare_index",
 )
 
 def _table_needs_canonical_rebuild(
@@ -211,6 +213,11 @@ def _rebuild_tier_a_step02_tables_if_needed(
                 dominant_pappus_ratio REAL,
                 corymb_head_count_est INTEGER DEFAULT 0,
                 radiate_head_fraction REAL,
+                phyllary_tip_darkening_delta REAL,
+                phyllary_tip_anthocyanin_delta REAL,
+                involucre_basal_cie_l_delta REAL,
+                peduncle_cie_l_sheet_delta REAL,
+                calyculus_flare_index REAL,
                 PRIMARY KEY (catalogNumber, plant_individual_id),
                 FOREIGN KEY (catalogNumber, plant_individual_id)
                     REFERENCES plant_individuals(catalogNumber, plant_individual_id) ON DELETE CASCADE

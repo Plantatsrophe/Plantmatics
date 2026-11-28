@@ -24,6 +24,7 @@ from scripts.vision.lm3_inference_engines import (
     evaluate_leaf_damage_and_fold_qc,
     orient_and_score_leaf_lm3,
 )
+from scripts.vision.step02_capitulum_microchars import extract_single_capitulum_microchars
 from scripts.vision.step02_leaf_traits_utils import (
     extract_packera_leaf_margin_and_base_traits,
     measure_enclosed_interlobe_void_frac,
@@ -114,9 +115,11 @@ def _apply_blade_photometry_to_inst(
 
 
 def _refresh_cap_item_with_crown(
-    c_it: Dict[str, Any], crown_xy: Tuple[float, float], pixels_per_mm: Optional[float], is_calibrated_mm: bool, pheno_params: Dict[str, Any],
+    c_it: Dict[str, Any], crown_xy: Tuple[float, float], pixels_per_mm: Optional[float], is_calibrated_mm: bool,
+    pheno_params: Dict[str, Any], sheet_bgr: Optional[np.ndarray] = None,
+    paper_lab_ref: Optional[Tuple[float, float, float]] = None,
 ) -> None:
-    """Re-evaluate involucre metrics and phenology using crown-anchored peduncle direction."""
+    """Re-evaluate involucre metrics, micro-characters, and phenology using crown-anchored peduncle direction."""
     ped_dir = (c_it["center_xy"][0] - float(crown_xy[0]), c_it["center_xy"][1] - float(crown_xy[1]))
     m_ref = compute_capitulum_metrics(
         c_it["mask"], c_it["bbox"], pixels_per_mm=pixels_per_mm if is_calibrated_mm else None,
@@ -132,6 +135,12 @@ def _refresh_cap_item_with_crown(
             min_pappus_luminance=pheno_params["min_pappus_lum"], max_pappus_saturation=pheno_params["max_pappus_sat"],
             min_pappus_area_ratio=pheno_params["min_pappus_area"], min_floret_yellow_saturation=pheno_params["min_floret_sat"],
             min_floret_yellow_ratio=pheno_params["min_floret_rat"], class_id=int(c_it["class_id"]), peduncle_dir_xy=ped_dir,
+        )
+        c_it["microchars"] = extract_single_capitulum_microchars(
+            crop_bgr=c_bgr_r, sheet_bgr=sheet_bgr, bbox=c_it["bbox"], mask=c_it["mask"],
+            class_id=int(c_it["class_id"]), peduncle_dir_xy=ped_dir,
+            pixels_per_mm=pixels_per_mm if is_calibrated_mm else None, is_calibrated_mm=is_calibrated_mm,
+            paper_lab_ref=paper_lab_ref,
         )
 
 

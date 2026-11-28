@@ -83,12 +83,13 @@ fetch_step04_morphometrics_from_db <- function(
     "lamina_trace_length_mm", "basal_cordate_index", "base_angle_deg", "apex_angle_deg",
     "lamina_curvature", "margin_serration_index", "margin_tooth_acuteness",
     "terminal_lobe_area_frac", "blade_cie_l_q85_sheet_delta", "basal_zone_cie_l_delta",
-    "abaxial_leaf_fraction", "abaxial_cie_l_sheet_delta"
+    "abaxial_leaf_fraction", "abaxial_cie_l_sheet_delta",
+    "cauline_cie_l_q85_sheet_delta", "basal_to_cauline_wool_delta"
   )) {
     add_coalesce_col(cn_arch, c("om", "pi"))
   }
   add_coalesce_col("AR_inv", c("om", "vrp"))
-  for (cn_vrp in c("capitula_count", "involucre_height_px", "involucre_width_px", "involucre_height_mm", "involucre_width_mm", "corymb_head_count_est", "radiate_head_fraction", "anthesis_head_count", "fruiting_head_count")) {
+  for (cn_vrp in c("capitula_count", "involucre_height_px", "involucre_width_px", "involucre_height_mm", "involucre_width_mm", "corymb_head_count_est", "radiate_head_fraction", "anthesis_head_count", "fruiting_head_count", "phyllary_tip_darkening_delta", "phyllary_tip_anthocyanin_delta", "involucre_basal_cie_l_delta", "peduncle_cie_l_sheet_delta", "calyculus_flare_index")) {
     add_coalesce_col(cn_vrp, c("vrp", "pi", "om", "v"))
   }
 
@@ -195,6 +196,7 @@ fetch_step04_morphometrics_from_db <- function(
                 "blade_cie_l_sheet_delta", "blade_cie_l_q85_sheet_delta", "basal_zone_cie_l_delta",
                 "blade_cie_a_delta", "blade_cie_b_delta",
                 "is_abaxial_pressed_leaf", "abaxial_leaf_fraction", "abaxial_cie_l_sheet_delta",
+                "cauline_cie_l_q85_sheet_delta", "basal_to_cauline_wool_delta",
                 "blade_cie_a_browning_delta", "blade_cie_b_yellowing_delta",
                 "centroid_size", "log_centsize", "scale_source"
               ),

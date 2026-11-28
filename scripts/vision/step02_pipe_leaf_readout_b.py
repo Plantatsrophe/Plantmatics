@@ -46,6 +46,8 @@ def _partition_capitula_by_plant(
     pixels_per_mm: Optional[float],
     is_calibrated_mm: bool,
     pheno_params: Dict[str, Any],
+    sheet_bgr: Optional[np.ndarray] = None,
+    paper_lab_ref: Optional[Tuple[float, float, float]] = None,
 ) -> Tuple[Dict[int, List[Tuple[int, int, int, int]]], Dict[int, List[Dict[str, Any]]], Dict[str, Any], Dict[str, Any]]:
     """Assign capitula across `plant_individual_id`, refresh crown-aligned metrics, and update voucher summaries."""
     caps_by_pid_boxes: Dict[int, List[Tuple[int, int, int, int]]] = {pid: [] for pid in unique_leaf_pids}
@@ -56,7 +58,10 @@ def _partition_capitula_by_plant(
         cr_only = crowns_by_pid.get(only_pid) if isinstance(crowns_by_pid, dict) else None
         for c_it in raw_cap_items:
             if cr_only is not None:
-                refresh_cap_item_with_crown(c_it, cr_only, pixels_per_mm, is_calibrated_mm, pheno_params)
+                refresh_cap_item_with_crown(
+                    c_it, cr_only, pixels_per_mm, is_calibrated_mm, pheno_params,
+                    sheet_bgr=sheet_bgr, paper_lab_ref=paper_lab_ref,
+                )
             caps_by_pid_boxes.setdefault(only_pid, []).append(c_it["bbox"])
             cap_items_by_pid.setdefault(only_pid, []).append(c_it)
         repro_summary, voucher_extra_heads = summarize_repro_subset(
@@ -104,7 +109,10 @@ def _partition_capitula_by_plant(
             if assigned_pid is not None:
                 cr_ass = crowns_by_pid.get(assigned_pid) if isinstance(crowns_by_pid, dict) else None
                 if cr_ass is not None:
-                    refresh_cap_item_with_crown(c_it, cr_ass, pixels_per_mm, is_calibrated_mm, pheno_params)
+                    refresh_cap_item_with_crown(
+                        c_it, cr_ass, pixels_per_mm, is_calibrated_mm, pheno_params,
+                        sheet_bgr=sheet_bgr, paper_lab_ref=paper_lab_ref,
+                    )
                 caps_by_pid_boxes[assigned_pid].append(c_it["bbox"])
                 cap_items_by_pid[assigned_pid].append(c_it)
         repro_summary, voucher_extra_heads = summarize_repro_subset(
@@ -346,6 +354,7 @@ def process_voucher_impl(
     caps_by_pid_boxes, cap_items_by_pid, repro_summary, pheno_rec = _partition_capitula_by_plant(
         catalog_number, unique_leaf_pids, pose_inputs, repro_ctx["raw_cap_items"],
         crowns_by_pid, spec_mask_sheet, sheet_h, sheet_w, pixels_per_mm, is_calibrated_mm, pheno_params,
+        sheet_bgr=img_bgr, paper_lab_ref=repro_ctx.get("paper_lab_ref"),
     )
     cap_boxes_all = [b for b, _, _, _ in capitulum_detections]
     petiole_scape_res = approximate_petiole_and_scape_metrics(

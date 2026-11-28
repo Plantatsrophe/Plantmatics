@@ -312,6 +312,46 @@ class TestRoutingAndManifestSchema(unittest.TestCase):
             dets_uncached = detector.predict(np.zeros((100, 100, 3), dtype=np.uint8), catalog_number="VOUCHER1", use_cache=False)
             self.assertEqual(len(dets_uncached), 0)
 
+    def test_capitulum_and_peduncle_microchars_extraction(self) -> None:
+        """Verify black-tipped + woolly vs. green-tipped + glabrous lateral capitula separate cleanly."""
+        from scripts.vision.step02_capitulum_microchars import (
+            extract_single_capitulum_microchars,
+            summarize_capitulum_microchars,
+        )
+
+        rng = np.random.default_rng(42)
+        sheet_woolly = np.full((320, 240, 3), (235, 240, 242), dtype=np.uint8)
+        sheet_glab = sheet_woolly.copy()
+        # Lateral head bbox (60..170, 80..160): distal yellow corollas (60..85), green cup (85..170)
+        for sh, dark_tip, woolly in ((sheet_woolly, True, True), (sheet_glab, False, False)):
+            sh[62:86, 92:148] = (20, 195, 235)  # golden yellow florets
+            sh[86:168, 96:144] = (55, 115, 75)  # green herbaceous mid-cup keel
+            if dark_tip:
+                sh[86:104, 96:144] = (32, 24, 58)  # dark fuscous-purple phyllary apices
+            if woolly:
+                wool_patch = np.clip(218 + rng.normal(0.0, 14.0, size=(28, 48, 3)), 175, 248).astype(np.uint8)
+                sh[140:168, 96:144] = wool_patch
+                ped_wool = np.clip(215 + rng.normal(0.0, 15.0, size=(55, 18, 3)), 170, 248).astype(np.uint8)
+                sh[168:223, 111:129] = ped_wool
+            else:
+                sh[168:223, 111:129] = (50, 108, 70)  # glabrous green peduncle
+
+        bbox = (60, 80, 170, 160)
+        mc_w = extract_single_capitulum_microchars(
+            sheet_woolly[60:170, 80:160], sheet_woolly, bbox, class_id=4,
+            peduncle_dir_xy=(0.0, -1.0), pixels_per_mm=16.0, is_calibrated_mm=True,
+        )
+        mc_g = extract_single_capitulum_microchars(
+            sheet_glab[60:170, 80:160], sheet_glab, bbox, class_id=4,
+            peduncle_dir_xy=(0.0, -1.0), pixels_per_mm=16.0, is_calibrated_mm=True,
+        )
+        self.assertGreater(mc_w["phyllary_tip_darkening_delta"], mc_g["phyllary_tip_darkening_delta"] + 8.0)
+        self.assertGreater(mc_w["phyllary_tip_anthocyanin_delta"], mc_g["phyllary_tip_anthocyanin_delta"] + 5.0)
+        self.assertGreater(mc_w["involucre_basal_cie_l_delta"], mc_g["involucre_basal_cie_l_delta"] + 15.0)
+        self.assertGreater(mc_w["peduncle_cie_l_sheet_delta"], mc_g["peduncle_cie_l_sheet_delta"] + 15.0)
+        summ = summarize_capitulum_microchars([{"class_id": 4, "microchars": mc_w}, {"class_id": 2, "microchars": mc_g}])
+        self.assertAlmostEqual(summ["phyllary_tip_darkening_delta"], mc_w["phyllary_tip_darkening_delta"], places=3)
+
 
 if __name__ == "__main__":
     unittest.main()

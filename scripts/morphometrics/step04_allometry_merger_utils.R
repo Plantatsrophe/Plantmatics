@@ -220,6 +220,7 @@ merge_reproductive_traits_by_individual <- function(agg_df, repro_path) {
   }
   cand_r <- c("AR_inv", "radiate_head_fraction", "capitula_count", "corymb_head_count_est", "anthesis_head_count", "fruiting_head_count", "Flower_MANY", "Seed_Fruit_MANY",
               "log1p_capitulum_count", "involucre_height_px", "involucre_width_px", "involucre_height_mm", "involucre_width_mm",
+              "phyllary_tip_darkening_delta", "phyllary_tip_anthocyanin_delta", "involucre_basal_cie_l_delta", "peduncle_cie_l_sheet_delta", "calyculus_flare_index",
               "plant_height_mm", "plant_height_cm", "scape_to_basal_leaf_ratio", "is_bent_stem", "petiole_to_blade_ratio")
   r_val_cols <- intersect(names(repro_df), cand_r)
   r_val_cols <- r_val_cols[vapply(r_val_cols, function(cl) !(cl %in% names(agg_df)) || any(is.na(agg_df[[cl]])), logical(1))]

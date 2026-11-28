@@ -13,7 +13,15 @@ import numpy as np
 from scripts.vision.capitulum_phenology_classifier import classify_single_capitulum, classify_voucher_phenology
 from scripts.vision.leaf_geometry_utils import cluster_plant_individuals
 from scripts.vision.lm3_inference_engines import DetectedInstance, compute_capitulum_metrics
-from scripts.vision.step02_photometry_corymb_utils import estimate_corymb_cluster_head_count
+from scripts.vision.step02_capitulum_microchars import (
+    MICROCHAR_REPRO_KEYS,
+    extract_single_capitulum_microchars,
+    summarize_capitulum_microchars,
+)
+from scripts.vision.step02_photometry_corymb_utils import (
+    estimate_corymb_cluster_head_count,
+    estimate_sheet_paper_cie_l_ref_and_ab,
+)
 
 
 def summarize_repro_subset(
@@ -50,6 +58,7 @@ def summarize_repro_subset(
     else:
         mh_px = mw_px = mh_mm = mw_mm = m_ar = np.nan
 
+    mc_summary = summarize_capitulum_microchars(cap_items_sub)
     rec = {
         "catalogNumber": catalog_number, "plant_individual_id": int(pid_val),
         "capitula_count": int(c_cnt), "corymb_head_count_est": int(extra_cluster_heads),
@@ -61,6 +70,7 @@ def summarize_repro_subset(
         "AR_inv": round(m_ar, 4) if not np.isnan(m_ar) else np.nan,
         "plant_height_cm": np.nan, "scape_to_basal_leaf_ratio": np.nan,
         "is_bent_stem": False, "radiate_head_fraction": np.nan,
+        **mc_summary,
     }
     return rec, int(extra_cluster_heads)
 
@@ -88,6 +98,7 @@ def route_capitula_phenology(
     valid_capitula: List[Dict[str, Any]] = []
     head_pheno_results: List[Dict[str, Any]] = []
     raw_cap_items: List[Dict[str, Any]] = []
+    paper_lab_ref = estimate_sheet_paper_cie_l_ref_and_ab(img_bgr) if capitulum_detections else None
 
     for cap_idx, (bbox, mask, score, class_id) in enumerate(capitulum_detections, 1):
         ymin, xmin, ymax, xmax = [int(v) for v in bbox]
@@ -130,11 +141,18 @@ def route_capitula_phenology(
             metrics["class_id"] = int(class_id)
             valid_capitula.append(metrics)
 
+        mc_item = extract_single_capitulum_microchars(
+            crop_bgr=crop_bgr if crop_bgr.size > 0 else None, sheet_bgr=img_bgr, bbox=(y0, x0, y1, x1),
+            mask=local_cap_mask if local_cap_mask is not None else mask, class_id=int(class_id),
+            pixels_per_mm=pixels_per_mm if is_calibrated_mm else None, is_calibrated_mm=is_calibrated_mm,
+            paper_lab_ref=paper_lab_ref,
+        )
         raw_cap_items.append({
             "bbox": bbox, "center_xy": (0.5 * float(xmin + xmax), 0.5 * float(ymin + ymax)),
             "mask": local_cap_mask if local_cap_mask is not None else mask,
             "crop_bgr": crop_bgr if crop_bgr.size > 0 else None,
-            "score": float(score), "class_id": int(class_id), "metrics": metrics, "head_pheno": head_pheno_item,
+            "score": float(score), "class_id": int(class_id), "metrics": metrics,
+            "head_pheno": head_pheno_item, "microchars": mc_item,
         })
 
     repro_summary, voucher_extra_heads = summarize_repro_subset(
@@ -153,6 +171,7 @@ def route_capitula_phenology(
         "pheno_params": pheno_params, "valid_capitula": valid_capitula, "raw_cap_items": raw_cap_items,
         "repro_summary": repro_summary, "voucher_extra_heads": voucher_extra_heads,
         "pheno_rec": pheno_rec, "capitula_count": int(repro_summary["capitula_count"]),
+        "paper_lab_ref": paper_lab_ref, "microchar_keys": MICROCHAR_REPRO_KEYS,
     }
 
 

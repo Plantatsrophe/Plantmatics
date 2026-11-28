@@ -215,6 +215,11 @@ def _build_tier_a_schema_ddl() -> str:
         dominant_pappus_ratio REAL,
         corymb_head_count_est INTEGER DEFAULT 0,
         radiate_head_fraction REAL,
+        phyllary_tip_darkening_delta REAL,
+        phyllary_tip_anthocyanin_delta REAL,
+        involucre_basal_cie_l_delta REAL,
+        peduncle_cie_l_sheet_delta REAL,
+        calyculus_flare_index REAL,
         PRIMARY KEY (catalogNumber, plant_individual_id),
         FOREIGN KEY (catalogNumber, plant_individual_id)
             REFERENCES plant_individuals(catalogNumber, plant_individual_id) ON DELETE CASCADE

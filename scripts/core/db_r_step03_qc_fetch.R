@@ -230,7 +230,9 @@ evaluate_step03_lm3_efa_qc <- function(df, allow_multi_component_ect = FALSE) {
       c(
         "AR_inv", "capitula_count", "involucre_height_px", "involucre_width_px",
         "involucre_height_mm", "involucre_width_mm",
-        "corymb_head_count_est", "radiate_head_fraction"
+        "corymb_head_count_est", "radiate_head_fraction",
+        "phyllary_tip_darkening_delta", "phyllary_tip_anthocyanin_delta",
+        "involucre_basal_cie_l_delta", "peduncle_cie_l_sheet_delta", "calyculus_flare_index"
       ),
       sel_vrp,
       character(1L)

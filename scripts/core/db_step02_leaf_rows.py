@@ -207,6 +207,11 @@ def _build_step02_plant_and_repro_rows(
                 _to_float(pid_pheno.get("dominant_pappus_ratio")),
                 _to_int(corymb_est_raw, default=0) or 0,
                 _to_float(radiate_frac_raw),
+                _to_float(pid_repro.get("phyllary_tip_darkening_delta")),
+                _to_float(pid_repro.get("phyllary_tip_anthocyanin_delta")),
+                _to_float(pid_repro.get("involucre_basal_cie_l_delta")),
+                _to_float(pid_repro.get("peduncle_cie_l_sheet_delta")),
+                _to_float(pid_repro.get("calyculus_flare_index")),
             ))
     return plant_rows, repro_pheno_rows
 

@@ -110,6 +110,8 @@ def flush_pipeline_manifests(
         "catalogNumber", "plant_individual_id", "capitula_count", "corymb_head_count_est",
         "involucre_height_px", "involucre_width_px", "involucre_height_mm", "involucre_width_mm",
         "AR_inv", "plant_height_cm", "scape_to_basal_leaf_ratio", "is_bent_stem", "radiate_head_fraction",
+        "phyllary_tip_darkening_delta", "phyllary_tip_anthocyanin_delta",
+        "involucre_basal_cie_l_delta", "peduncle_cie_l_sheet_delta", "calyculus_flare_index",
     ]
     repro_df = pd.DataFrame(_flatten_pid_records(pipe.voucher_repro_records, pipe.voucher_repro_by_pid))
     if repro_df.empty:
@@ -121,7 +123,13 @@ def flush_pipeline_manifests(
             pd.to_numeric(repro_df["corymb_head_count_est"], errors="coerce").fillna(0).astype(int)
             if "corymb_head_count_est" in repro_df.columns else 0
         )
-        for col_f, def_v in (("plant_height_cm", np.nan), ("scape_to_basal_leaf_ratio", np.nan), ("is_bent_stem", False), ("radiate_head_fraction", np.nan)):
+        for col_f, def_v in (
+            ("plant_height_cm", np.nan), ("scape_to_basal_leaf_ratio", np.nan),
+            ("is_bent_stem", False), ("radiate_head_fraction", np.nan),
+            ("phyllary_tip_darkening_delta", np.nan), ("phyllary_tip_anthocyanin_delta", np.nan),
+            ("involucre_basal_cie_l_delta", np.nan), ("peduncle_cie_l_sheet_delta", np.nan),
+            ("calyculus_flare_index", np.nan),
+        ):
             if col_f not in repro_df.columns:
                 repro_df[col_f] = def_v
         repro_df = repro_df[[c for c in repro_cols if c in repro_df.columns]]

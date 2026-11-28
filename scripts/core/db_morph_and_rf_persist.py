@@ -116,6 +116,7 @@ _OTU_MORPH_FLOAT_COLS: Tuple[str, ...] = (
     "blade_width_mm", "solidity", "dissection_index", "q25_solidity", "dissected_leaf_fraction",
     "cauline_solidity_med", "cauline_dissection_index_med", "cauline_aspect_ratio_med",
     "cauline_blade_length_mm", "basal_vs_cauline_length_ratio", "basal_vs_cauline_solidity_delta",
+    "cauline_cie_l_q85_sheet_delta", "basal_to_cauline_wool_delta",
     "heteroblasty_efa_distance", "Cauline_PC1", "Cauline_PC2", "Cauline_PC3", "ECT_PC1", "ECT_PC2",
     "ECT_PC3", "Cauline_ECT_PC1", "Cauline_ECT_PC2", "ect_lobe_complexity",
     "cauline_ect_lobe_complexity", "heteroblasty_ect_distance", "aspect_ratio", "area_px",
